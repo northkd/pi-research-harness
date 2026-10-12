@@ -1,17 +1,7 @@
-# Image provenance
+# 图片来源与说明
 
-- `project-illustration.png`: generated conceptual cover using GPT Image 2.5,
-  1792×1024, standard quality. Prompt contained only public project concepts,
-  no private code, papers, session data or credentials. Not a product screenshot.
-- `dashboard-redacted.png`: actual deployed loopback dashboard, captured in a
-  fresh unauthenticated local browser context. Persistent opaque overlays hide
-  the entire sidebar, session header, conversation and model selector, including
-  live updates. Most of the UI is intentionally hidden for privacy. Browser DOM
-  only; no server/session mutation, send or undo action.
-- `undo-edit-redacted.png`: locator-only crop of the actual last-message undo/edit
-  button. The button was disabled during the ongoing turn; no click was made.
-  No surrounding conversation or account information is included. This is an
-  entry-point screenshot, not a demonstration of the edit/resend operation.
+- `project-illustration.png`：GPT Image 2.5 生成的中文概念封面，1792×1024，standard 质量。仅使用通用公开项目概念，不含私人代码、论文、会话或凭据。标题为「Pi 科研工作台」，各模块使用中文说明。图中明确标注「概念插画，非实际界面」。
+- `dashboard-redacted.png`：本机实际部署的 dashboard，使用新的无登录浏览器上下文采集。持续不透明遮罩覆盖侧栏、会话头部、聊天内容与模型选择，包括实时更新。遮罩说明及输入区的公开静态标签在截图 DOM 中转为中文；并非修改产品本身。为保护隐私，大部分界面刻意隐藏。没有发送消息、执行撤回或修改服务器/会话。
+- `undo-edit-redacted.png`：真实「撤销并编辑」按钮的局部截图。采集时模型正在运行，按钮呈禁用态；没有点击。图片不含周围聊天或账号信息，只展示入口，不作为编辑重发的完整操作演示。
 
-Screenshots are dated 2026-10-12. Capture files are visually reviewed before
-publication. No raw private conversation screenshot is included.
+图片日期：2026-10-12。上传前均目视检查；不包含未经脱敏的私人会话截图。中文更新只涉及图片与文档，不改变运行环境。

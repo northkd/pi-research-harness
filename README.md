@@ -4,7 +4,7 @@
 
 ![项目概念插画](docs/images/project-illustration.png)
 
-*上图由 GPT Image 生成，是概念插画，不是产品截图或科研结果。*
+*中文封面由 GPT Image 生成，是概念插画，不是产品截图或科研结果。*
 
 [![Offline contracts](https://github.com/northkd/pi-research-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/northkd/pi-research-harness/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
@@ -27,7 +27,7 @@
 
 ![实际dashboard，私人内容已脱敏](docs/images/dashboard-redacted.png)
 
-*来自本机真实运行的 dashboard。为保护隐私，侧栏、会话头部、聊天区域和模型选择被不透明遮罩完整遮住，因此这里只展示布局与输入区，不是完整功能演示。*
+*来自本机真实运行的 dashboard，截图遮罩说明与公开静态标签已中文化。为保护隐私，侧栏、会话头部、聊天区域和模型选择被不透明遮罩完整遮住，因此这里只展示布局与输入区，不是完整功能演示；没有修改实际产品或会话。*
 
 ### 发错消息：撤销并编辑
 

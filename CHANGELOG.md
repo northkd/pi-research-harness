@@ -1,5 +1,11 @@
 # Changelog
 
+## README 中文图片更新 — 2026-10-12
+
+- 概念封面替换为中文标题与模块说明，明确标注非实际界面。
+- 实际 dashboard 截图的隐私遮罩与公开静态说明中文化。
+- 仅更新图片和文档；`v0.1.0` 标签保留原始代码快照，不重写已发布历史。
+
 ## 0.1.0 — 2026-10-12
 
 - Preserve a sanitized, source-based snapshot of the usable Pi research environment.
