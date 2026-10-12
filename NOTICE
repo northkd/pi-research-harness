@@ -1,0 +1,19 @@
+Pi Research Harness
+Copyright 2026 northkd and contributors
+
+Original integration code, role configurations, launch scripts and documentation
+are distributed under Apache License 2.0.
+
+Dashboard patch files contain modifications and contextual source excerpts from
+pi-agent-dashboard, Copyright (c) 2026 Robert Csakany, licensed under MIT.
+The original license is preserved at vendor/licenses/pi-agent-dashboard.MIT.txt.
+Those upstream portions retain their MIT terms; this repository does not
+relicense third-party code or claim ownership of the dashboard.
+
+Pi, Feynman, pi-subagents, ARIS and other named tools are independent projects.
+Their names identify integrations, not endorsements. Third-party packages are
+installed separately under their original licenses.
+
+README screenshots show the actual deployed dashboard with private content
+redacted. Any generated conceptual artwork is explicitly labelled and is not
+product UI or scientific evidence.

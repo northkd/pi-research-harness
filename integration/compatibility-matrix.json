@@ -1,0 +1,852 @@
+{
+  "schema": "pi-research-fusion.compatibility.v1",
+  "catalogSource": "ARIS upstream tools/skill-groups.tsv (separately installed)",
+  "count": 84,
+  "entries": [
+    {
+      "name": "arxiv",
+      "group": "lit-search",
+      "requires": [],
+      "description": "arXiv 搜索/下载/入库",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "alphaxiv",
+      "group": "lit-search",
+      "requires": [],
+      "description": "单篇论文快速解读(AlphaXiv 摘要)",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "deepxiv",
+      "group": "lit-search",
+      "requires": [],
+      "description": "DeepXiv 渐进式论文阅读",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "semantic-scholar",
+      "group": "lit-search",
+      "requires": [],
+      "description": "正式发表论文检索(引用数/venue)",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "openalex",
+      "group": "lit-search",
+      "requires": [],
+      "description": "OpenAlex 引用图谱与机构元数据",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "exa-search",
+      "group": "lit-search",
+      "requires": [],
+      "description": "Exa AI 网页搜索+内容抽取",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "web-debug-search",
+      "group": "lit-search",
+      "requires": [],
+      "description": "多来源调试检索（GitHub/Stack Exchange/中文社区/General Web）与版本兼容性",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "gemini-search",
+      "group": "lit-search",
+      "requires": [],
+      "description": "Gemini 驱动的文献发现",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "research-lit",
+      "group": "lit-search",
+      "requires": [],
+      "description": "文献综述与相关工作分析",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "comm-lit-review",
+      "group": "lit-search",
+      "requires": [],
+      "description": "通信领域专用文献综述",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "idea-creator",
+      "group": "ideation",
+      "requires": [],
+      "description": "给定方向生成并排序研究 idea",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "idea-discovery",
+      "group": "ideation",
+      "requires": [
+        "idea-creator",
+        "novelty-check",
+        "research-lit",
+        "research-review",
+        "research-refine-pipeline",
+        "research-refine",
+        "render-html"
+      ],
+      "description": "W1:从方向到验证过的 idea 全流程",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "idea-discovery-robot",
+      "group": "ideation",
+      "requires": [
+        "idea-creator",
+        "novelty-check",
+        "research-lit",
+        "research-review"
+      ],
+      "description": "W1 机器人/具身智能特化版",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "novelty-check",
+      "group": "ideation",
+      "requires": [],
+      "description": "idea 查新(有没有人做过)",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "research-refine",
+      "group": "ideation",
+      "requires": [],
+      "description": "粗糙方向打磨成聚焦提案",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "research-refine-pipeline",
+      "group": "ideation",
+      "requires": [
+        "research-refine",
+        "experiment-plan"
+      ],
+      "description": "refine+实验计划一条龙",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "research-wiki",
+      "group": "ideation",
+      "requires": [],
+      "description": "跨生命周期研究知识库",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "wiki-enrich",
+      "group": "ideation",
+      "requires": [
+        "research-wiki"
+      ],
+      "description": "补全 wiki 论文页 TODO",
+      "route": "Pi Skill plus actual web/database tool adapter",
+      "status": "contract-ready; runtime dependency unverified",
+      "reason": "Uses only tools actually registered in the Pi session; URLs/provider/responseId must be preserved."
+    },
+    {
+      "name": "research-pipeline",
+      "group": "ideation",
+      "requires": [
+        "idea-discovery",
+        "experiment-bridge",
+        "auto-review-loop",
+        "render-html"
+      ],
+      "description": "端到端总 pipeline:找 idea→实验→论文",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "research-review",
+      "group": "review-loop",
+      "requires": [],
+      "description": "研究方案/结果批判性评审",
+      "route": "thin canonical wrapper",
+      "status": "contract-ready; not activated",
+      "reason": "Feynman internal evidence review remains separate from ARIS independent multi-round review."
+    },
+    {
+      "name": "auto-review-loop",
+      "group": "review-loop",
+      "requires": [
+        "result-to-claim",
+        "training-check",
+        "render-html"
+      ],
+      "description": "外部模型多轮 review→修复循环",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "auto-review-loop-llm",
+      "group": "review-loop",
+      "requires": [],
+      "description": "用任意 OpenAI 兼容 API 做 review",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "auto-review-loop-minimax",
+      "group": "review-loop",
+      "requires": [],
+      "description": "用 MiniMax API 做 review",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "kill-argument",
+      "group": "review-loop",
+      "requires": [
+        "render-html"
+      ],
+      "description": "对抗性双线程评审(最强拒稿论证)",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "formula-derivation",
+      "group": "theory",
+      "requires": [],
+      "description": "公式推导与理论线组织",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "proof-writer",
+      "group": "theory",
+      "requires": [],
+      "description": "撰写严格数学证明",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "proof-checker",
+      "group": "theory",
+      "requires": [
+        "render-html"
+      ],
+      "description": "证明缺口审查与修复",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "proof-orchestrator",
+      "group": "theory",
+      "requires": [],
+      "description": "本地优先的证明编排、人工 GPT Pro 交接与显式 DeepSeek 复审",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "experiment-plan",
+      "group": "experiments",
+      "requires": [],
+      "description": "claim 驱动的实验路线图",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "experiment-bridge",
+      "group": "experiments",
+      "requires": [
+        "run-experiment",
+        "experiment-queue",
+        "monitor-experiment",
+        "training-check",
+        "ablation-planner"
+      ],
+      "description": "W1.5:从实验计划到跑通初步结果",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "research-implement-feature",
+      "group": "experiments",
+      "requires": [],
+      "description": "从\"给我实现 X\"直接开建：先跑通脊柱再逐级加功能，全程申报假设",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "experiment-queue",
+      "group": "experiments",
+      "requires": [],
+      "description": "SSH 批量实验队列(OOM 重试)",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "SSH/queue backend is not activated"
+    },
+    {
+      "name": "run-experiment",
+      "group": "experiments",
+      "requires": [],
+      "description": "部署运行实验(本地/远程/云 GPU)",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "compute execution requires explicit local/SSH/cloud approval"
+    },
+    {
+      "name": "monitor-experiment",
+      "group": "experiments",
+      "requires": [],
+      "description": "监控实验进度收集结果",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "execution backend is not activated"
+    },
+    {
+      "name": "analyze-results",
+      "group": "experiments",
+      "requires": [],
+      "description": "结果统计分析与对比表",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "training-check",
+      "group": "experiments",
+      "requires": [],
+      "description": "训练健康度检查",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "system-profile",
+      "group": "experiments",
+      "requires": [],
+      "description": "GPU 环境画像(跨机器复用)",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "dse-loop",
+      "group": "experiments",
+      "requires": [],
+      "description": "设计空间探索自动调参循环",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "qzcli",
+      "group": "experiments",
+      "requires": [],
+      "description": "启智平台 qzcli 作业管理",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "qzcli platform is not part of this integration"
+    },
+    {
+      "name": "vast-gpu",
+      "group": "experiments",
+      "requires": [],
+      "description": "Vast.ai 租卡跑实验",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "Vast.ai access is not part of this integration"
+    },
+    {
+      "name": "serverless-modal",
+      "group": "experiments",
+      "requires": [],
+      "description": "Modal 无服务器 GPU",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "Modal access is not part of this integration"
+    },
+    {
+      "name": "experiment-audit",
+      "group": "experiments",
+      "requires": [],
+      "description": "实验诚实度审计(防假结果)",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "result-to-claim",
+      "group": "experiments",
+      "requires": [],
+      "description": "结果能支撑什么 claim 的裁决",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "ablation-planner",
+      "group": "experiments",
+      "requires": [],
+      "description": "消融实验规划",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-writing",
+      "group": "paper-core",
+      "requires": [
+        "paper-plan",
+        "paper-write",
+        "paper-compile",
+        "paper-figure",
+        "figure-spec",
+        "proof-checker",
+        "paper-claim-audit",
+        "citation-audit",
+        "auto-paper-improvement-loop",
+        "integrity-forensics",
+        "kill-argument"
+      ],
+      "description": "W3:从报告到投稿级 PDF 全流程",
+      "route": "thin canonical wrapper",
+      "status": "contract-ready; not activated",
+      "reason": "Feynman Markdown draft can precede ARIS plan/LaTeX/PDF/audits; outputs are not equivalent."
+    },
+    {
+      "name": "paper-plan",
+      "group": "paper-core",
+      "requires": [],
+      "description": "论文大纲生成",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-write",
+      "group": "paper-core",
+      "requires": [],
+      "description": "按大纲逐节写 LaTeX",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-compile",
+      "group": "paper-core",
+      "requires": [],
+      "description": "LaTeX 编译修错出 PDF",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-figure",
+      "group": "paper-core",
+      "requires": [],
+      "description": "从实验结果出论文图表",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "citation-audit",
+      "group": "paper-core",
+      "requires": [
+        "render-html"
+      ],
+      "description": "引用真实性/正确性核查",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "paper-claim-audit",
+      "group": "paper-core",
+      "requires": [
+        "render-html"
+      ],
+      "description": "论文数字与原始结果核对",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "integrity-forensics",
+      "group": "paper-core",
+      "requires": [],
+      "description": "投稿前诚信取证扫描",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "auto-paper-improvement-loop",
+      "group": "paper-core",
+      "requires": [
+        "proof-checker",
+        "paper-claim-audit",
+        "kill-argument"
+      ],
+      "description": "论文 review→润色→重编译循环",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "writing-systems-papers",
+      "group": "paper-core",
+      "requires": [],
+      "description": "系统方向论文写作要领",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "specification-writing",
+      "group": "paper-core",
+      "requires": [
+        "embodiment-description",
+        "figure-description"
+      ],
+      "description": "技术规格文档撰写",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "overleaf-sync",
+      "group": "paper-core",
+      "requires": [],
+      "description": "本地↔Overleaf 双向同步",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "render-html",
+      "group": "paper-core",
+      "requires": [],
+      "description": "MD/JSON 工件渲染成 HTML 报告",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-illustration",
+      "group": "paper-visuals",
+      "requires": [],
+      "description": "AI 生成论文插图(Gemini)",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-illustration-image2",
+      "group": "paper-visuals",
+      "requires": [],
+      "description": "AI 插图备选(Codex 原生画图)",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "figure-spec",
+      "group": "paper-visuals",
+      "requires": [],
+      "description": "确定性矢量架构/流程图(SVG)",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "mermaid-diagram",
+      "group": "paper-visuals",
+      "requires": [],
+      "description": "Mermaid 流程/时序/类图",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "pixel-art",
+      "group": "paper-visuals",
+      "requires": [],
+      "description": "像素画生成",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "image generation is outside this integration"
+    },
+    {
+      "name": "paper-poster",
+      "group": "paper-visuals",
+      "requires": [
+        "paper-poster-html"
+      ],
+      "description": "(已弃用)重定向到 poster-html",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-poster-html",
+      "group": "paper-visuals",
+      "requires": [],
+      "description": "学术海报生成(HTML 版)",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-slides",
+      "group": "paper-visuals",
+      "requires": [],
+      "description": "会议幻灯(beamer→PDF+PPTX)",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "paper-talk",
+      "group": "paper-visuals",
+      "requires": [
+        "paper-slides",
+        "slides-polish"
+      ],
+      "description": "演讲稿+幻灯一体",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "slides-polish",
+      "group": "paper-visuals",
+      "requires": [],
+      "description": "幻灯片打磨",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "rebuttal",
+      "group": "submission",
+      "requires": [
+        "render-html"
+      ],
+      "description": "W4:审稿意见解析与安全回复",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "resubmit-pipeline",
+      "group": "submission",
+      "requires": [
+        "auto-paper-improvement-loop",
+        "proof-checker",
+        "paper-claim-audit",
+        "citation-audit",
+        "kill-argument",
+        "paper-compile",
+        "integrity-forensics"
+      ],
+      "description": "被拒后重投全流程",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "grant-proposal",
+      "group": "submission",
+      "requires": [
+        "research-lit",
+        "novelty-check",
+        "research-review"
+      ],
+      "description": "基金申请书(NSFC/NSF/科研費等)",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "patent-pipeline",
+      "group": "patent",
+      "requires": [
+        "prior-art-search",
+        "patent-novelty-check",
+        "invention-structuring",
+        "claims-drafting",
+        "specification-writing",
+        "patent-review",
+        "jurisdiction-format"
+      ],
+      "description": "专利撰写全流程",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "invention-structuring",
+      "group": "patent",
+      "requires": [],
+      "description": "粗 idea 结构化成发明披露",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "claims-drafting",
+      "group": "patent",
+      "requires": [],
+      "description": "撰写权利要求书",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "embodiment-description",
+      "group": "patent",
+      "requires": [],
+      "description": "实施例详细描述",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "figure-description",
+      "group": "patent",
+      "requires": [],
+      "description": "专利附图说明",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "jurisdiction-format",
+      "group": "patent",
+      "requires": [],
+      "description": "CN/US/EP 申请格式编译",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "patent-review",
+      "group": "patent",
+      "requires": [],
+      "description": "专利申请质量审查",
+      "route": "native skill + explicit reviewer route",
+      "status": "blocked-or-provisional-without-qualified-backend",
+      "reason": "Do not substitute internal or same-model text for an independent reviewer."
+    },
+    {
+      "name": "prior-art-search",
+      "group": "patent",
+      "requires": [],
+      "description": "现有技术检索",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "patent-novelty-check",
+      "group": "patent",
+      "requires": [],
+      "description": "专利新颖性核查",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "meta-optimize",
+      "group": "meta-utils",
+      "requires": [],
+      "description": "skill 语料自优化提案",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "meta-apply",
+      "group": "meta-utils",
+      "requires": [
+        "meta-optimize"
+      ],
+      "description": "落地已批准的语料补丁",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "skill-corpus mutation is outside this integration"
+    },
+    {
+      "name": "feishu-notify",
+      "group": "meta-utils",
+      "requires": [],
+      "description": "飞书通知",
+      "route": "skill-loader/native tools",
+      "status": "blocked-until-dependency",
+      "reason": "notification backend is not part of this integration"
+    },
+    {
+      "name": "interview-cheatsheet",
+      "group": "meta-utils",
+      "requires": [],
+      "description": "ML/LLM 面试速查手册生成",
+      "route": "Pi Skill loader",
+      "status": "discoverable; runtime dependency unverified",
+      "reason": "No duplicate implementation is added here; follow the original ARIS skill contract."
+    },
+    {
+      "name": "material-research-pipeline",
+      "group": "materials",
+      "requires": [],
+      "description": "Materials research stages with dry-run and claim audit",
+      "route": "ARIS skill loader",
+      "status": "contract-ready; compute blocked",
+      "reason": "Literature/planning can be skill-driven; expensive compute remains dry-run/approval gated."
+    }
+  ]
+}

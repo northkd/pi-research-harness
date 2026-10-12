@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# agy-subagent — pi-subagents external-cli bridge for the Google Antigravity CLI (agy).
+#
+# Contract: the assembled prompt arrives on stdin; the final assistant text is written
+# to stdout. Nothing else is printed on stdout, so the child's output is exactly agy's
+# answer. Diagnostics go to stderr.
+#
+# Usage (from an agent frontmatter runner.args, or by hand):
+#   echo "prompt" | agy-subagent [--model <agy-model>] [--effort low|medium|high|xhigh|max]
+# Env fallbacks: AGY_BIN, AGY_MODEL, AGY_EFFORT, AGY_WORKDIR.
+
+set -euo pipefail
+
+AGY_BIN="${AGY_BIN:-$HOME/.local/bin/agy}"
+MODEL="${AGY_MODEL:-}"
+EFFORT="${AGY_EFFORT:-}"
+WORKDIR="${AGY_WORKDIR:-$PWD}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model)  MODEL="${2:-}"; shift 2 ;;
+    --effort) EFFORT="${2:-}"; shift 2 ;;
+    --workdir) WORKDIR="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+if [[ -z "$MODEL" ]]; then
+  printf 'Set AGY_MODEL to an authenticated model supported by your installed agy CLI.\n' >&2
+  exit 2
+fi
+args=(--model "$MODEL" --input-format stream-json --output-format stream-json --add-dir "$WORKDIR")
+[ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
+
+# stdin -> one NDJSON "user" event -> agy -> extract the final result text.
+# Pure pipe: avoids argv/env size limits, so arbitrarily large prompts work.
+python3 -c '
+import json, sys
+p = sys.stdin.read()
+sys.stdout.write(json.dumps({"event": "user",
+                             "message": {"role": "user",
+                                         "content": [{"type": "text", "text": p}]}},
+                            ensure_ascii=False) + "\n")
+' | "$AGY_BIN" "${args[@]}" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        o = json.loads(line)
+    except Exception:
+        continue
+    if o.get("event") == "result":
+        r = o.get("result", {}) or {}
+        st = r.get("status")
+        if st and st != "SUCCESS":
+            sys.stderr.write("agy status=%s error=%s\n" % (st, r.get("error")))
+            sys.exit(1)
+        response = r.get("response")
+        if not isinstance(response, str) or not response.strip():
+            sys.stderr.write("agy returned no final response\n")
+            sys.exit(1)
+        sys.stdout.write(response)
+        break
+else:
+    sys.stderr.write("agy stream ended without a result event\n")
+    sys.exit(1)
+'

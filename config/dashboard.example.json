@@ -1,0 +1,8 @@
+{
+  "bindHost": "127.0.0.1",
+  "port": 8000,
+  "piPort": 9999,
+  "tunnel": {
+    "enabled": false
+  }
+}

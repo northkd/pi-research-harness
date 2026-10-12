@@ -1,0 +1,20 @@
+# Optional user service. Replace /ABSOLUTE/PATH before installation.
+# Do NOT use this template to overwrite a running unrelated dashboard service.
+[Unit]
+Description=Pi Research Harness Dashboard
+
+[Service]
+Type=simple
+WorkingDirectory=/ABSOLUTE/PATH/pi-research-harness
+ExecStart=/ABSOLUTE/PATH/pi-research-harness/bin/pi-research-dashboard
+Environment=PI_DASHBOARD_HOST=127.0.0.1
+Environment=PI_DASHBOARD_PORT=8000
+Environment=PI_DASHBOARD_PI_PORT=9999
+Environment=PI_GATEWAY_TCP=0
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+
+[Install]
+WantedBy=default.target

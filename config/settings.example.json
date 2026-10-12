@@ -1,0 +1,75 @@
+{
+  "enableInstallTelemetry": false,
+  "defaultThinkingLevel": "max",
+  "compaction": {
+    "enabled": true
+  },
+  "packages": [
+    "npm:pi-subagents@0.76.1",
+    "npm:pi-background-tasks@2.6.9",
+    {
+      "source": "npm:@companion-ai/feynman@0.5.22",
+      "skills": [
+        "skills/**",
+        "!skills/paper-writing/SKILL.md",
+        "!skills/research-review/SKILL.md"
+      ]
+    },
+    "npm:pi-web-access@0.35.0",
+    {
+      "source": "npm:pi-scientific-skills@1.6.0",
+      "skills": [
+        "skills/exploratory-data-analysis/SKILL.md",
+        "skills/statistical-analysis/SKILL.md",
+        "skills/polars/SKILL.md",
+        "skills/scientific-visualization/SKILL.md",
+        "skills/matplotlib/SKILL.md",
+        "skills/experimental-design/SKILL.md",
+        "skills/scientific-writing/SKILL.md",
+        "skills/citation-management/SKILL.md",
+        "skills/paper-lookup/SKILL.md",
+        "skills/scientific-critical-thinking/SKILL.md"
+      ]
+    },
+    "npm:pi-mcp-adapter@5.0.0",
+    "npm:@oresk/pi-remote-tools@0.2.1",
+    "npm:@juicesharp/rpiv-advisor@2.12.0",
+    "npm:pi-docparser@4.0.0",
+    "npm:pi-memory@0.4.2",
+    {
+      "source": "npm:context-mode@1.0.169",
+      "skills": []
+    },
+    "npm:pi-lens@4.3.0",
+    "npm:pi-auto-model@0.8.4"
+  ],
+  "subagents": {
+    "defaultThinking": "max",
+    "agentOverrides": {
+      "claude-code": {
+        "thinking": false
+      },
+      "claude-code-writer": {
+        "thinking": false
+      },
+      "codex-exec": {
+        "thinking": false
+      },
+      "codex-exec-writer": {
+        "thinking": false
+      },
+      "cursor-agent": {
+        "thinking": false
+      },
+      "cursor-agent-writer": {
+        "thinking": false
+      },
+      "research-agy": {
+        "thinking": false
+      },
+      "research-agy-sci": {
+        "thinking": false
+      }
+    }
+  }
+}

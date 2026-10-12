@@ -1,0 +1,2655 @@
+--- a/packages/client/src/App.tsx
++++ b/packages/client/src/App.tsx
+@@ -30,7 +30,7 @@
+ // pluginize-flows-via-registry.
+ import { MarkdownPreviewView } from "./components/preview/MarkdownPreviewView.js";
+ import { PreviewOverlayView } from "./components/preview/PreviewOverlayView.js";
+-import { Toast, useToast } from "./components/primitives/Toast.js";
++import { Toast, type ToastVariant, useToast } from "./components/primitives/Toast.js";
+ import { ComposerSessionActions } from "./components/session/ComposerSessionActions.js";
+ import { MissingRequiredBanner } from "./components/session/MissingRequiredBanner.js";
+ import { QueuePanel } from "./components/session/QueuePanel.js";
+@@ -72,7 +72,7 @@
+ // SubagentPopoutPage no longer imported by the shell — it's registered via
+ // the subagents-plugin's `shell-overlay-route` claim and mounted through
+ // `<ShellOverlayRouteSlot>` below. See change: add-flow-agent-popout.
+-import { applyPromptTimeout, createInitialState, deriveBannerState, reduceEvent, resolveInteractiveRequest, type SessionState } from "./lib/chat/event-reducer.js";
++import { applyPromptTimeout, createInitialState, deriveBannerState, reduceEvent, resolveInteractiveRequest, type ChatImage, type SessionState } from "./lib/chat/event-reducer.js";
+ import { normalizeFollowUpEntries } from "./lib/chat/followup-entries.js";
+ import { nextBackfillRange } from "./lib/chat/history-gap.js";
+ import { refreshChat } from "./lib/chat/refresh-chat.js";
+@@ -327,6 +327,87 @@
+ // does not hand ChatView a fresh [] literal every render, which would defeat
+ // its React.memo. See change: reduce-chat-render-cpu-umbrella (Phase 4).
+ const EMPTY_STEERING: string[] = [];
++
++export interface UndoTarget {
++  messageId?: string;
++  entryId?: string;
++}
++
++function clearSessionUndoPending(
++  sessionId: string,
++  setSessionStates: React.Dispatch<React.SetStateAction<Map<string, SessionState>>>,
++) {
++  setSessionStates((prev) => {
++    const current = prev.get(sessionId);
++    if (!current?.undoPending) return prev;
++    const next = new Map(prev);
++    next.set(sessionId, { ...current, undoPending: undefined });
++    return next;
++  });
++}
++
++export function createUndoLastHandler({
++  selectedId,
++  sessionStatesRef,
++  selectedSessionIdRef,
++  setDraftForSelected,
++  setImagesForSelected,
++  handleSend,
++  setSessionStates,
++  showToast,
++}: {
++  selectedId: string | null | undefined;
++  sessionStatesRef: React.RefObject<Map<string, SessionState>>;
++  selectedSessionIdRef: React.RefObject<string | undefined>;
++  setDraftForSelected: (text: string) => void;
++  setImagesForSelected?: (images: ImageContent[]) => void;
++  handleSend: (cmd: string) => void;
++  setSessionStates: React.Dispatch<React.SetStateAction<Map<string, SessionState>>>;
++  showToast?: (msg: string, variant?: ToastVariant) => void;
++}) {
++  return (text: string, images?: ChatImage[], target?: UndoTarget): boolean => {
++    if (!selectedId) return false;
++    // Read the latest production state, not the list captured by a stale click.
++    const lastUserMessage = sessionStatesRef.current.get(selectedId)?.messages.findLast((message) => message.role === "user");
++    if (
++      selectedSessionIdRef.current !== selectedId ||
++      !target?.messageId ||
++      lastUserMessage?.id !== target.messageId ||
++      (target.entryId !== undefined && lastUserMessage.entryId !== target.entryId)
++    ) {
++      showToast?.("目标消息已不在当前分支或不是最后一条用户消息，请刷新后重试", "error");
++      return false;
++    }
++
++    setDraftForSelected(text);
++    const validImages: ImageContent[] = (images ?? [])
++      .filter((img) => typeof img.data === "string" && img.data.length > 0)
++      .map((img) => ({ type: "image", data: img.data, mimeType: img.mimeType }));
++    setImagesForSelected?.(validImages);
++    setSessionStates((prev) => {
++      const cur = prev.get(selectedId);
++      if (!cur) return prev;
++      const next = new Map(prev);
++      next.set(selectedId, {
++        ...cur,
++        undoPending: {
++          messageId: target.messageId!,
++          entryId: target.entryId,
++          requestedAt: Date.now(),
++        },
++      });
++      return next;
++    });
++    try {
++      handleSend("/undo-last");
++      return true;
++    } catch {
++      clearSessionUndoPending(selectedId, setSessionStates);
++      showToast?.("撤销失败，请刷新后重试", "error");
++      return false;
++    }
++  };
++}
+ 
+ export default function App() {
+   const { t, language } = useI18n();
+@@ -518,6 +599,13 @@
+   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
+   const sessionStatesRef = useRef(sessionStates);
+   sessionStatesRef.current = sessionStates;
++  const handleClearUndoPending = useCallback((sessionId: string) => {
++    clearSessionUndoPending(sessionId, setSessionStates);
++  }, []);
++  useEffect(() => {
++    // Clear the outgoing session even when ChatView is unmounted by a route change.
++    return () => { if (selectedId) handleClearUndoPending(selectedId); };
++  }, [selectedId, handleClearUndoPending]);
+   // Per-session dashboard-local `/view` preview rows. Lives separately from
+   // event-reducer state so the reducer never sees them. Merged with
+   // `state.messages` by timestamp when passing to ChatView.
+@@ -859,6 +947,21 @@
+     }).catch(logRejection("App.handleRefreshChat"));
+   }, [send, beginLoadingHistory, beginReplayInFlight]);
+ 
++  const needsHistoryReload = selectedId ? sessionStates.get(selectedId)?.needsHistoryReload : undefined;
++  useEffect(() => {
++    if (!selectedId || !needsHistoryReload) return;
++    // Consume the request before the asynchronous refresh so intervening events
++    // cannot trigger the same reload again. historyGap still hides undo controls.
++    setSessionStates((prev) => {
++      const current = prev.get(selectedId);
++      if (!current?.needsHistoryReload) return prev;
++      const next = new Map(prev);
++      next.set(selectedId, { ...current, needsHistoryReload: undefined });
++      return next;
++    });
++    handleRefreshChat(selectedId);
++  }, [selectedId, needsHistoryReload, handleRefreshChat]);
++
+   /**
+    * Request the gap slice adjacent to the head. Single-flight is enforced
+    * server-side too (a second concurrent request is refused with `in_flight`,
+@@ -1348,6 +1451,19 @@
+       if (selectedId) handleResumeSession(selectedId, "fork", entryId);
+     },
+     [selectedId, handleResumeSession],
++  );
++  const handleUndoLast = useCallback(
++    createUndoLastHandler({
++      selectedId,
++      sessionStatesRef,
++      selectedSessionIdRef,
++      setDraftForSelected,
++      setImagesForSelected,
++      handleSend,
++      setSessionStates,
++      showToast,
++    }),
++    [selectedId, setDraftForSelected, setImagesForSelected, handleSend, setSessionStates, showToast],
+   );
+   const handleCloseInlineTerminalForSelected = useCallback(
+     (terminalId: string) => {
+@@ -1931,7 +2047,7 @@
+             </div>
+           }>
+             <SessionAssetsProvider assets={selectedSession?.assets}>
+-            <ChatView ref={chatViewRef} sessionId={selectedId} state={selectedState} toolContext={toolContext} onRespondToUi={handleRespondToUi} onAbort={handleAbort} onForceKill={handleForceKill} onForkFromMessage={selectedId ? handleForkFromMessage : undefined} onCloseInlineTerminal={selectedId ? handleCloseInlineTerminalForSelected : undefined} pendingSteering={selectedSession?.pendingQueues?.steering ?? EMPTY_STEERING} loadingHistory={selectedId ? loadingHistory.get(selectedId) ?? false : false} replayInFlight={selectedId ? replayInFlight.get(selectedId) ?? false : false} historyGap={selectedId ? historyGaps.get(selectedId) : undefined} onLoadEarlier={selectedId ? handleLoadEarlier : undefined} historySpliceRev={historySpliceRev} onCollapseStreamingThinking={selectedId ? handleCollapseStreamingThinking : undefined} />
++            <ChatView ref={chatViewRef} sessionId={selectedId} state={selectedState} toolContext={toolContext} onRespondToUi={handleRespondToUi} onAbort={handleAbort} onForceKill={handleForceKill} onForkFromMessage={selectedId ? handleForkFromMessage : undefined} onUndoLast={selectedId ? handleUndoLast : undefined} onClearUndoPending={handleClearUndoPending} onCloseInlineTerminal={selectedId ? handleCloseInlineTerminalForSelected : undefined} pendingSteering={selectedSession?.pendingQueues?.steering ?? EMPTY_STEERING} loadingHistory={selectedId ? loadingHistory.get(selectedId) ?? false : false} replayInFlight={selectedId ? replayInFlight.get(selectedId) ?? false : false} historyGap={selectedId ? historyGaps.get(selectedId) : undefined} onLoadEarlier={selectedId ? handleLoadEarlier : undefined} historySpliceRev={historySpliceRev} onCollapseStreamingThinking={selectedId ? handleCollapseStreamingThinking : undefined} />
+             </SessionAssetsProvider>
+           </ErrorBoundary>
+           {/* Single-card error-lifecycle surface. Sticky above the command
+@@ -2464,6 +2580,7 @@
+   // Desktop: side-by-side layout
+   return apiProvider(
+     <div className="flex h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
++      <Toast messages={toastMessages} onDismiss={dismissToast} />
+       {firstLaunchModal}
+       {/* Concurrent worktree-init stack — fixed overlay, mounted in both shells
+           (mobile branch above) so desktop also surfaces it. See change:
+--- a/packages/client/src/components/chat/ChatView.tsx
++++ b/packages/client/src/components/chat/ChatView.tsx
+@@ -5,7 +5,7 @@
+   isNotifyRowVisible,
+   toolCallPrefKey,
+ } from "@blackbelt-technology/pi-dashboard-shared/display-prefs.js";
+-import { mdiAlertCircleOutline, mdiCheck, mdiChevronDown, mdiChevronUp, mdiClose, mdiContentCopy, mdiLoading, mdiSourceFork, mdiTextBox } from "@mdi/js";
++import { mdiAlertCircleOutline, mdiCheck, mdiChevronDown, mdiChevronUp, mdiClose, mdiContentCopy, mdiLoading, mdiSourceFork, mdiTextBox, mdiUndo } from "@mdi/js";
+ import { Icon } from "@mdi/react";
+ import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
+ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+@@ -21,7 +21,7 @@
+ // RetryBanner + ErrorBanner replaced by the unified SessionBanner mounted
+ // in App.tsx (sticky above the command input). See change:
+ // unify-status-banner-and-terminal-limit-stop.
+-import type { ChatImage, InteractiveUiRequest, SessionState } from "../../lib/chat/event-reducer.js";
++import type { ChatImage, ChatMessage, InteractiveUiRequest, SessionState } from "../../lib/chat/event-reducer.js";
+ import { type BurstItem, groupToolBursts, type ToolBurstGroup as ToolBurstGroupData } from "../../lib/chat/group-tool-bursts.js";
+ import type { ToolCallGroup } from "../../lib/chat/group-tool-calls.js";
+ import {
+@@ -72,6 +72,18 @@
+   onAbort?: () => void;
+   onForceKill?: () => void;
+   onForkFromMessage?: (entryId: string) => void;
++  /**
++   * Request undoing the last user message on the active branch via `/undo-last`.
++   * Callback receives the message's original text to repopulate the input draft,
++   * any image attachments to repopulate pending images, and target metadata.
++   */
++  onUndoLast?: (
++    text: string,
++    images?: ChatImage[],
++    target?: { messageId: string; entryId?: string }
++  ) => boolean | void;
++  /** Clear the owning session's production pending on timeout or abandonment. */
++  onClearUndoPending?: (sessionId: string) => void;
+   /**
+    * Close a live inline terminal card (sends close_inline_terminal). The
+    * parent binds the owning sessionId. See change: add-inline-terminal-card.
+@@ -273,7 +285,29 @@
+   );
+ }
+ 
+-function MessageBubble({ content, className, timestamp, entryId, onFork, context }: { content: string; className: string; timestamp?: number; entryId?: string; onFork?: (entryId: string) => void; context?: ToolContext }) {
++function MessageBubble({
++  content,
++  className,
++  timestamp,
++  entryId,
++  onFork,
++  context,
++  onUndoLast,
++  undoDisabled,
++  undoPending,
++  undoError,
++}: {
++  content: string;
++  className: string;
++  timestamp?: number;
++  entryId?: string;
++  onFork?: (entryId: string) => void;
++  context?: ToolContext;
++  onUndoLast?: () => void;
++  undoDisabled?: boolean;
++  undoPending?: boolean;
++  undoError?: string | null;
++}) {
+   const contentRef = useRef<HTMLDivElement>(null);
+ 
+   const getPlainText = useCallback(() => {
+@@ -282,20 +316,50 @@
+ 
+   return (
+     <div className={className}>
+-      <div ref={contentRef}>
+-        <MarkdownContent content={content} context={context} />
+-      </div>
+-      <div className="border-t border-[var(--border-secondary)] mt-2 pt-1.5 flex justify-end items-center gap-0.5 opacity-50 hover:opacity-100 transition-opacity">
++      {content ? (
++        <div ref={contentRef}>
++          <MarkdownContent content={content} context={context} />
++        </div>
++      ) : null}
++      <div className="border-t border-[var(--border-secondary)] mt-2 pt-1.5 flex justify-end items-center gap-0.5 opacity-50 hover:opacity-100 focus-within:opacity-100 transition-opacity">
+         {timestamp != null && (
+           <span className="text-[10px] text-[var(--text-tertiary)] mr-auto">{formatMessageTime(timestamp)}</span>
+         )}
+-        <CopyButton getText={() => content} icon={<Icon path={mdiContentCopy} size={0.6} />} title={i18nT("common.copyAsMarkdown", undefined, "Copy as Markdown")} />
+-        <CopyButton getText={getPlainText} icon={<Icon path={mdiTextBox} size={0.6} />} title={i18nT("common.copyAsPlainText", undefined, "Copy as plain text")} />
++        {undoError && (
++          <span role="alert" className="text-[11px] text-red-400 mr-1">{undoError}</span>
++        )}
++        {onUndoLast && (
++          <button
++            type="button"
++            onClick={() => {
++              if (!undoDisabled) onUndoLast();
++            }}
++            disabled={undoDisabled}
++            title={
++              undoPending
++                ? "正在撤销…"
++                : undoDisabled
++                ? "正在生成中，无法撤销"
++                : "撤销这条消息并从活动分支移除，原文回填输入框（原历史仍保留在会话文件中）"
++            }
++            aria-label="撤销并编辑"
++            className="p-0.5 px-1.5 rounded text-[11px] flex items-center gap-1 hover:bg-[var(--bg-secondary)] text-[var(--text-secondary)] disabled:opacity-40 disabled:cursor-not-allowed hover:disabled:bg-transparent focus-ring focus-visible:outline-none"
++          >
++            <Icon path={mdiUndo} size={0.5} />
++            <span>撤销并编辑</span>
++          </button>
++        )}
++        {content ? (
++          <>
++            <CopyButton getText={() => content} icon={<Icon path={mdiContentCopy} size={0.6} />} title={i18nT("common.copyAsMarkdown", undefined, "Copy as Markdown")} />
++            <CopyButton getText={getPlainText} icon={<Icon path={mdiTextBox} size={0.6} />} title={i18nT("common.copyAsPlainText", undefined, "Copy as plain text")} />
++          </>
++        ) : null}
+         {entryId && onFork && (
+           <button
+             onClick={() => onFork(entryId)}
+             title={i18nT("session.forkFromHere", undefined, "Fork from here")}
+-            className="p-0.5 rounded hover:bg-[var(--bg-secondary)] text-[var(--text-secondary)]"
++            className="p-0.5 rounded hover:bg-[var(--bg-secondary)] text-[var(--text-secondary)] focus-ring focus-visible:outline-none"
+           >
+             <Icon path={mdiSourceFork} size={0.6} />
+           </button>
+@@ -347,7 +411,7 @@
+   scrollToTurn: (turnIndex: number) => void;
+ }
+ 
+-const ChatViewInner = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, state, toolContext: suppliedToolContext, onRespondToUi, onAbort, onForceKill, onForkFromMessage, onCloseInlineTerminal, pendingSteering, loadingHistory, replayInFlight, historyGap, onLoadEarlier, historySpliceRev, onCollapseStreamingThinking }, ref) {
++const ChatViewInner = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, state, toolContext: suppliedToolContext, onRespondToUi, onAbort, onForceKill, onForkFromMessage, onUndoLast, onClearUndoPending, onCloseInlineTerminal, pendingSteering, loadingHistory, replayInFlight, historyGap, onLoadEarlier, historySpliceRev, onCollapseStreamingThinking }, ref) {
+   // `ToolContext` is a published surface (re-exported from `chat-embed`), so an
+   // external embedder builds one by hand and would carry no `fileLink` —
+   // silently losing file-mention linkification with no type error. Merge a
+@@ -819,6 +883,92 @@
+       : state.messages.filter((m) => m.role !== "toolResult" || !isDebugTool(m.toolName ?? ""));
+     return base.filter((m) => !m.retriedFrom);
+   }, [state.messages, showDebugTools]);
++  const [undoPendingTarget, setUndoPendingTarget] = useState<{
++    sessionId?: string;
++    messageId: string;
++    entryId?: string;
++  } | null>(null);
++  const [undoError, setUndoError] = useState<string | null>(null);
++
++  // Clear pending target / error on session switch
++  useEffect(() => {
++    setUndoPendingTarget(null);
++    setUndoError(null);
++  }, [sessionId]);
++  useEffect(() => {
++    return () => { if (sessionId) onClearUndoPending?.(sessionId); };
++  }, [sessionId, onClearUndoPending]);
++
++  // When state.messages changes, if the pending target message is no longer in the list,
++  // it has successfully left the active branch -> clear pending state.
++  useEffect(() => {
++    if (!undoPendingTarget || undoPendingTarget.sessionId !== sessionId) return;
++    const targetId = undoPendingTarget.messageId;
++    const targetEntryId = undoPendingTarget.entryId;
++    const stillInList = state.messages.some(
++      (m) => m.id === targetId || (targetEntryId && m.entryId === targetEntryId)
++    );
++    if (!stillInList) {
++      if (sessionId) onClearUndoPending?.(sessionId);
++      setUndoPendingTarget(null);
++      setUndoError(null);
++    }
++  }, [state.messages, undoPendingTarget, sessionId, onClearUndoPending]);
++
++  // Timeout fallback: if no session_tree response is observed within 5s,
++  // clear pending state to prevent buttons from being permanently disabled,
++  // and display a failure hint.
++  useEffect(() => {
++    if (!undoPendingTarget || undoPendingTarget.sessionId !== sessionId) return;
++    const timer = setTimeout(() => {
++      if (sessionId) onClearUndoPending?.(sessionId);
++      setUndoPendingTarget(null);
++      setUndoError("撤销操作超时，未收到分支更新");
++    }, 5000);
++    return () => clearTimeout(timer);
++  }, [undoPendingTarget, sessionId, onClearUndoPending]);
++
++  const isUndoPending = Boolean(
++    (undoPendingTarget && (!undoPendingTarget.sessionId || undoPendingTarget.sessionId === sessionId)) ||
++    state.undoPending
++  );
++
++  const lastUserMessageId = useMemo(() => {
++    if (state.historyGap || state.needsHistoryReload) {
++      return null;
++    }
++    for (let i = state.messages.length - 1; i >= 0; i--) {
++      const m = state.messages[i];
++      if (m && m.role === "user" && !m.retriedFrom) {
++        return m.id;
++      }
++    }
++    return null;
++  }, [state.messages, state.historyGap, state.needsHistoryReload]);
++  const isSessionStreaming = Boolean(
++    state.isStreaming ||
++    state.status === "streaming" ||
++    state.streamingText ||
++    state.streamingThinking ||
++    (pendingSteering && pendingSteering.length > 0)
++  );
++
++  const handleUndoClick = useCallback(
++    (msg: ChatMessage) => {
++      if (isSessionStreaming || isUndoPending || !onUndoLast) return;
++      setUndoError(null);
++      try {
++        // A rejected stale target or failed send must not start local pending.
++        if (onUndoLast(msg.content, msg.images, { messageId: msg.id, entryId: msg.entryId }) === false) return;
++        setUndoPendingTarget({ sessionId, messageId: msg.id, entryId: msg.entryId });
++      } catch {
++        if (sessionId) onClearUndoPending?.(sessionId);
++        setUndoPendingTarget(null);
++        setUndoError("撤销失败，请刷新后重试");
++      }
++    },
++    [isSessionStreaming, isUndoPending, onUndoLast, sessionId, onClearUndoPending]
++  );
+   const retriedErrorIds = useMemo(() => findRetriedErrorIds(filteredMessages), [filteredMessages]);
+   const hiddenToolResultIds = useMemo(() => findActiveInteractiveToolResultIds(filteredMessages), [filteredMessages]);
+   // toolCallIds owned by live `interactiveUi` messages still in the list. The
+@@ -1656,6 +1806,28 @@
+                     entryId={msg.entryId}
+                     onFork={onForkFromMessage}
+                   />
++                  {msg.id === lastUserMessageId && onUndoLast && (
++                    <div className="mt-1 flex justify-end items-center gap-1">
++                      {undoError && <span role="alert" className="text-[11px] text-red-400 mr-1">{undoError}</span>}
++                      <button
++                        type="button"
++                        onClick={() => handleUndoClick(msg)}
++                        disabled={isSessionStreaming || isUndoPending}
++                        title={
++                          isUndoPending
++                            ? "正在撤销…"
++                            : isSessionStreaming
++                            ? "正在生成中，无法撤销"
++                            : "撤销这条消息并从活动分支移除，原文回填输入框（原历史仍保留在会话文件中）"
++                        }
++                        aria-label="撤销并编辑"
++                        className="p-0.5 px-1.5 rounded text-[11px] flex items-center gap-1 hover:bg-[var(--bg-secondary)] text-[var(--text-secondary)] disabled:opacity-40 disabled:cursor-not-allowed hover:disabled:bg-transparent focus-ring focus-visible:outline-none"
++                      >
++                        <Icon path={mdiUndo} size={0.5} />
++                        <span>撤销并编辑</span>
++                      </button>
++                    </div>
++                  )}
+                 </div>
+               </div>
+               </React.Fragment>
+@@ -1670,15 +1842,17 @@
+                 {msg.images && msg.images.length > 0 && (
+                   <ImageAttachments images={msg.images} sessionId={sessionId} onImageLoad={(e) => requestRowMeasure(e.currentTarget)} />
+                 )}
+-                {msg.content && (
+-                  <MessageBubble
+-                    content={msg.content}
+-                    className=""
+-                    timestamp={msg.timestamp}
+-                    entryId={msg.entryId}
+-                    onFork={onForkFromMessage}
+-                  />
+-                )}
++                <MessageBubble
++                  content={msg.content || ""}
++                  className=""
++                  timestamp={msg.timestamp}
++                  entryId={msg.entryId}
++                  onFork={onForkFromMessage}
++                  onUndoLast={msg.id === lastUserMessageId && onUndoLast ? () => handleUndoClick(msg) : undefined}
++                  undoDisabled={isSessionStreaming || isUndoPending}
++                  undoPending={isUndoPending}
++                  undoError={msg.id === lastUserMessageId ? undoError : null}
++                />
+               </div>
+             </div>
+             </React.Fragment>
+@@ -2102,7 +2276,7 @@
+ // re-render the full transcript. Prerequisite for honest Phase 3 batching
+ // measurement — un-memoized renders otherwise mask the gains.
+ // See change: reduce-chat-render-cpu-umbrella (Phase 4).
+-// Props are stabilized at the call site (App.tsx): the 4 previously-unstable
+-// props (onForkFromMessage, onCloseInlineTerminal, onCollapseStreamingThinking,
++// Props are stabilized at the call site (App.tsx): the previously-unstable
++// props (onForkFromMessage, onUndoLast, onCloseInlineTerminal, onCollapseStreamingThinking,
+ // pendingSteering) are now referentially stable via useCallback / EMPTY const.
+ export const ChatView = React.memo(ChatViewInner);
+--- a/packages/client/src/components/session/SessionHeader.tsx
++++ b/packages/client/src/components/session/SessionHeader.tsx
+@@ -375,7 +375,7 @@
+ 
+   // Desktop: full header
+   return (
+-    <div className="px-4 py-2 border-b border-[var(--border-primary)] flex items-center gap-4 text-sm">
++    <div className="min-w-0 px-4 py-2 border-b border-[var(--border-primary)] flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+       {showBack && onBack && (
+         <button
+           onClick={onBack}
+@@ -394,10 +394,10 @@
+           className="font-medium"
+         />
+       ) : (
+-        <span className="font-medium flex items-center gap-1">
++        <span className="min-w-0 max-w-52 shrink-0 font-medium flex items-center gap-1">
+           <span
+             onDoubleClick={() => canRename && setIsRenaming(true)}
+-            className={canRename ? "cursor-pointer" : ""}
++            className={`truncate ${canRename ? "cursor-pointer" : ""}`}
+           >
+             {getSessionDisplayName(session)}
+           </span>
+--- a/packages/client/src/components/settings/ModelSelector.tsx
++++ b/packages/client/src/components/settings/ModelSelector.tsx
+@@ -359,7 +359,10 @@
+   const [selectedIndex, setSelectedIndex] = useState(0);
+   const [pendingModel, setPendingModel] = useState<string | null>(null);
+   // Persistent per-browser view state (restored from localStorage on mount).
+-  const [providerFilter, setProviderFilter] = useState<string>(() => readLS(PROVIDER_FILTER_KEY));
++  const [providerFilter, setProviderFilter] = useState<string>(() => {
++    const saved = readLS(PROVIDER_FILTER_KEY);
++    return saved === "anthropic" ? "" : saved;
++  });
+   const [favOnly, setFavOnly] = useState<boolean>(() => readLS(FAV_ONLY_KEY) === "1");
+   const containerRef = useRef<HTMLDivElement>(null);
+   const inputRef = useRef<HTMLInputElement>(null);
+@@ -408,8 +411,15 @@
+   const awaitingRefresh = useOpenTriggeredRefresh(open, models, onRefresh);
+ 
+   const uniqueProviders = useMemo(
+-    () => (hasModels ? [...new Set(models!.map((m) => m.provider))].sort() : []),
+-    [hasModels, models],
++    () => {
++      if (!hasModels) return [];
++      const providers = [...new Set(models!.map((m) => m.provider))].filter(p => p !== "anthropic").sort();
++      const activeProvider = current?.includes("/") ? current.slice(0, current.indexOf("/")) : undefined;
++      const index = activeProvider ? providers.indexOf(activeProvider) : -1;
++      if (index > 0) providers.unshift(...providers.splice(index, 1));
++      return providers;
++    },
++    [hasModels, models, current],
+   );
+ 
+   // Models passing provider + text + favs-only filters.
+@@ -417,7 +427,7 @@
+     if (!hasModels) return [] as ModelInfo[];
+     const tokens = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+     return models!.filter((m) => {
+-      if (providerFilter && m.provider !== providerFilter) return false;
++      if (m.provider === "anthropic" || (providerFilter && m.provider !== providerFilter)) return false;
+       if (favOnly && !favSet.has(labelOf(m))) return false;
+       const full = labelOf(m).toLowerCase();
+       return tokens.length === 0 || tokens.every((t) => full.includes(t));
+--- a/packages/client/src/components/split/LayoutModeSwitch.tsx
++++ b/packages/client/src/components/split/LayoutModeSwitch.tsx
+@@ -78,7 +78,7 @@
+       role="radiogroup"
+       aria-label={i18nT("layout.switchLabel", undefined, "Editor layout")}
+       data-testid="layout-mode-switch"
+-      className="inline-flex items-center rounded border border-[var(--border-secondary)] overflow-hidden mr-1"
++      className="inline-flex shrink-0 items-center whitespace-nowrap rounded border border-[var(--border-secondary)] overflow-hidden mr-1"
+     >
+       {segments.map((seg, i) => {
+         const checked = seg.mode === active;
+@@ -97,7 +97,7 @@
+             onClick={() => ctx.setMode(seg.mode)}
+             onKeyDown={(e) => onKeyDown(e, i)}
+             title={seg.label}
+-            className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 transition-colors ${
++            className={`inline-flex shrink-0 items-center gap-0.5 text-[10px] px-1.5 py-0.5 transition-colors ${
+               checked
+                 ? "text-blue-400 bg-blue-500/10"
+                 : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+--- a/packages/client/src/components/split/SessionSplitView.tsx
++++ b/packages/client/src/components/split/SessionSplitView.tsx
+@@ -15,6 +15,7 @@
+ import { useCanvasTier } from "../../hooks/useCanvasTier.js";
+ import { EditorPane } from "../editor-pane/EditorPane.js";
+ import { SplitWorkspace } from "./SplitWorkspace.js";
++import { SubagentsView } from "./SubagentsView.js";
+ import { useSplitWorkspace } from "./SplitWorkspaceContext.js";
+ 
+ export function SessionSplitView({ chat }: { chat: React.ReactNode }) {
+@@ -27,10 +28,12 @@
+       mode={split.mode}
+       ratio={split.ratio}
+       orientation={split.orientation}
++      rightPane={split.rightPane}
+       onRatioChange={(ratio) => updateSplit({ ratio })}
+       onModeChange={(mode) => updateSplit({ mode })}
+       chat={chat}
+       editor={<EditorPane />}
++      subagents={<SubagentsView />}
+       replaceChat={tier === "tablet" && split.mode !== "closed"}
+     />
+   );
+--- a/packages/client/src/components/split/SplitWorkspace.tsx
++++ b/packages/client/src/components/split/SplitWorkspace.tsx
+@@ -25,21 +25,25 @@
+ import { useRef } from "react";
+ import { t as i18nT } from "../../lib/i18n/i18n.js";
+ import { PopoverBoundaryProvider } from "../../lib/state/PopoverBoundaryContext.js";
+-import type { SplitMode, SplitOrientation } from "../../lib/layout/split-state.js";
++import type { RightPane, SplitMode, SplitOrientation } from "../../lib/layout/split-state.js";
+ import { useSplitRatio } from "../../lib/layout/useSplitRatio.js";
+ import { SplitDivider } from "./SplitDivider.js";
+ import { RestoreTab } from "./RestoreTab.js";
++import { RightPaneSwitch } from "./RightPaneSwitch.js";
++import { useOptionalSplitWorkspace } from "./SplitWorkspaceContext.js";
+ 
+ interface SplitWorkspaceProps {
+   mode: SplitMode;
+   /** Chat pane fraction of the split (0..1); editor gets the remainder. */
+   ratio: number;
+   orientation: SplitOrientation;
++  rightPane?: RightPane;
+   onRatioChange: (ratio: number) => void;
+   /** Set the layout mode (restore tabs only re-open; collapse is header-driven). */
+   onModeChange: (mode: SplitMode) => void;
+   chat: React.ReactNode;
+   editor: React.ReactNode;
++  subagents?: React.ReactNode;
+   /**
+    * Tablet replace-chat mode (auto-canvas Decision 1): on the tablet tier the
+    * editor takes the full width and the chat pane is NOT mounted (no
+@@ -52,10 +56,12 @@
+   mode,
+   ratio,
+   orientation,
++  rightPane,
+   onRatioChange,
+   onModeChange,
+   chat,
+   editor,
++  subagents,
+   replaceChat = false,
+ }: SplitWorkspaceProps) {
+   const containerRef = useRef<HTMLDivElement>(null);
+@@ -66,6 +72,9 @@
+   const chatPaneRef = useRef<HTMLDivElement>(null);
+   const applyRatio = useSplitRatio(containerRef, orientation, onRatioChange);
+ 
++  const ctx = useOptionalSplitWorkspace();
++  const activeRightPane: RightPane = rightPane ?? ctx?.split.rightPane ?? "editor";
++
+   const isClosed = mode === "closed";
+   const isSplit = mode === "split";
+   const isFull = mode === "full";
+@@ -78,7 +87,21 @@
+         data-testid="split-editor-pane"
+         className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+       >
+-        {editor}
++        <div className="flex h-8 shrink-0 items-center justify-between border-b border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-3 text-xs text-[var(--text-secondary)]">
++          <span className="font-medium text-[var(--text-primary)]">
++            {activeRightPane === "subagents" ? "Subagents" : "编辑器"}
++          </span>
++          <RightPaneSwitch />
++        </div>
++        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
++          {activeRightPane === "subagents" ? (
++            <div data-testid="subagents-workspace" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
++              {subagents}
++            </div>
++          ) : (
++            editor
++          )}
++        </div>
+       </div>
+     );
+   }
+@@ -123,16 +146,29 @@
+         />
+       )}
+ 
+-      {/* Editor pane — mounted in `split` and `full`, unmounted in `closed`.
+-          Its EDITOR caption lives inside EditorPane's own header row. */}
++      {/* Right pane (Editor / Subagents) — mounted in `split` and `full`, unmounted in `closed`. */}
+       {!isClosed && (
+         <div
+-          key="editor"
++          key="right-pane"
+           data-testid="split-editor-pane"
+           className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+           style={isSplit ? { flexGrow: 1 - ratio, flexShrink: 1, flexBasis: 0 } : { flex: "1 1 0" }}
+         >
+-          {editor}
++          <div className="flex h-8 shrink-0 items-center justify-between border-b border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-3 text-xs text-[var(--text-secondary)]">
++            <span className="font-medium text-[var(--text-primary)]">
++              {activeRightPane === "subagents" ? "Subagents" : "编辑器"}
++            </span>
++            <RightPaneSwitch />
++          </div>
++          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
++            {activeRightPane === "subagents" ? (
++              <div data-testid="subagents-workspace" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
++                {subagents}
++              </div>
++            ) : (
++              editor
++            )}
++          </div>
+         </div>
+       )}
+ 
+--- a/packages/client/src/components/split/SplitWorkspaceContext.tsx
++++ b/packages/client/src/components/split/SplitWorkspaceContext.tsx
+@@ -26,7 +26,7 @@
+   type EditorPaneState,
+   useEditorPaneState,
+ } from "../../lib/layout/editor-pane-state.js";
+-import { type SplitMode, type SplitOrientation, type SplitState, useSplitState } from "../../lib/layout/split-state.js";
++import { type RightPane, type SplitMode, type SplitOrientation, type SplitState, useSplitState } from "../../lib/layout/split-state.js";
+ import { saveTreeVisible } from "../../lib/util/tree-visible.js";
+ import { type TerminalPaneTabs, useTerminalPaneTabs } from "../../lib/layout/use-terminal-pane-tabs.js";
+ 
+@@ -42,6 +42,8 @@
+   updateSplit: (patch: Partial<SplitState>) => void;
+   /** Set the content-area layout mode (header segmented switch). */
+   setMode: (mode: SplitMode) => void;
++  /** Set which view is active in the right pane: editor or subagents. */
++  setRightPane: (pane: RightPane) => void;
+   paneState: EditorPaneState;
+   dispatch: React.Dispatch<EditorPaneAction>;
+   /** Reveal the split ONLY from `closed`; keep the current mode (`split`/`full`)
+@@ -235,6 +237,7 @@
+   }, [sessionId, ensureRevealed]);
+ 
+   const setMode = useCallback((mode: SplitMode) => updateSplit({ mode }), [updateSplit]);
++  const setRightPane = useCallback((pane: RightPane) => updateSplit({ rightPane: pane }), [updateSplit]);
+   const consumePendingScroll = useCallback(() => setPendingScroll(null), []);
+ 
+   const noopFilenameSearch = useCallback((_q: string, _r: boolean) => {}, []);
+@@ -270,6 +273,7 @@
+       split,
+       updateSplit,
+       setMode,
++      setRightPane,
+       paneState,
+       dispatch,
+       ensureRevealed,
+@@ -287,7 +291,7 @@
+       clearChanged,
+       terminal,
+     }),
+-    [sessionId, cwd, split, updateSplit, setMode, paneState, dispatch, ensureRevealed, openInSplit, openLiveTarget, openUrlTarget, openDiffTab, openChanges, changesRevealSignal, pendingScroll, consumePendingScroll, fileResults, filenameSearch, changedFiles, clearChanged, terminal],
++    [sessionId, cwd, split, updateSplit, setMode, setRightPane, paneState, dispatch, ensureRevealed, openInSplit, openLiveTarget, openUrlTarget, openDiffTab, openChanges, changesRevealSignal, pendingScroll, consumePendingScroll, fileResults, filenameSearch, changedFiles, clearChanged, terminal],
+   );
+ 
+   return <SplitWorkspaceContext.Provider value={value}>{children}</SplitWorkspaceContext.Provider>;
+--- a/packages/client/src/lib/chat/event-reducer.ts
++++ b/packages/client/src/lib/chat/event-reducer.ts
+@@ -71,6 +71,8 @@
+   toolDetails?: Record<string, unknown>;
+   /** Session entry ID (for fork-from-message) */
+   entryId?: string;
++  /** Parent entry ID in session tree */
++  parentId?: string;
+   /**
+    * Bridge-stamped nonce that ties this ChatMessage to a later
+    * entry_persisted event. Set on user message_start (where entryId is
+@@ -405,6 +407,22 @@
+    * See change: fix-streaming-text-vs-interactive-ui-order.
+    */
+   streamingTextFlushed?: boolean;
++  /**
++   * Set when a session_tree event references a newLeafId not present in messages[].
++   * Indicates the client's local transcript is missing the target branch, so it
++   * cannot be safely truncated without reloading history.
++   */
++  historyGap?: boolean;
++  needsHistoryReload?: boolean;
++  /**
++   * Target of an in-flight undo request on this session.
++   * Stamped before sending /undo-last; cleared when session_tree is applied.
++   */
++  undoPending?: {
++    messageId: string;
++    entryId?: string;
++    requestedAt: number;
++  };
+ }
+ 
+ /**
+@@ -1605,6 +1623,7 @@
+             // via a later entry_persisted event keyed on `nonce`.
+             // See change: fix-per-message-fork.
+             entryId: data.entryId as string | undefined,
++            parentId: (data.parentId as string | undefined) ?? (msg?.parentId as string | undefined),
+             nonce: data.nonce as string | undefined,
+             // Stamp the mid-stream delivery mode captured from the preceding
+             // interactive `input` event, then clear the correlation slot.
+@@ -2454,16 +2473,54 @@
+       // per-message Fork button. See change: fix-per-message-fork.
+       const targetNonce = data.nonce as string | undefined;
+       const persistedEntryId = data.entryId as string | undefined;
++      const persistedParentId = data.parentId as string | undefined;
+       if (targetNonce && persistedEntryId) {
+         let mutated = false;
+         const updated = next.messages.map((m) => {
+           if (!m.entryId && m.nonce === targetNonce) {
+             mutated = true;
+-            return { ...m, entryId: persistedEntryId };
++            return {
++              ...m,
++              entryId: persistedEntryId,
++              ...(persistedParentId ? { parentId: persistedParentId } : {}),
++            };
+           }
+           return m;
+         });
+         if (mutated) next.messages = updated;
++      }
++      break;
++    }
++
++    case "session_tree": {
++      // Pi emits session_tree { newLeafId: string | null, oldLeafId: string | null, ... }
++      // when navigating to a different point in the session tree (e.g. after /undo-last,
++      // /tree branch switch, fork, etc.).
++      const newLeafId = (data.newLeafId as string | null | undefined) ?? null;
++
++      // UI rows are not session-tree parents. Apply the authoritative leaf;
++      // ChatView confirms undo completion when the target leaves messages[].
++      next.undoPending = undefined;
++
++      if (newLeafId === null) {
++        // Navigated to session root: clear message list
++        next.messages = [];
++        next.historyGap = undefined;
++        next.needsHistoryReload = undefined;
++      } else {
++        const idx = next.messages.findIndex(
++          (m) => m.entryId === newLeafId || m.id === newLeafId
++        );
++        if (idx !== -1) {
++          // Truncate list: keep up to and including newLeafId, drop all subsequent messages
++          next.messages = next.messages.slice(0, idx + 1);
++          next.historyGap = undefined;
++          next.needsHistoryReload = undefined;
++        } else {
++          // newLeafId is not in local messages: do NOT guess, enter history-gap / reload path
++          next.historyGap = true;
++          next.needsHistoryReload = true;
++        }
+       }
+       break;
+     }
+@@ -2478,7 +2535,8 @@
+       // shows up as an expandable JSON block in the chat. See change:
+       // pluginize-flows-via-registry.
+       const isFlow = event.eventType.startsWith("flow_");
+-      if (!isFlow) {
++      const isNativeSubagents = event.eventType.startsWith("native_subagents_");
++      if (!isFlow && !isNativeSubagents) {
+         next.messages = [...next.messages, {
+           id: `raw-${event.eventType}-${event.timestamp}-${next.messages.length}`,
+           role: "rawEvent" as const,
+--- a/packages/client/src/lib/layout/split-state.ts
++++ b/packages/client/src/lib/layout/split-state.ts
+@@ -27,6 +27,7 @@
+  *   - `full`   — editor only (chat collapsed to a leading-edge peek).
+  */
+ export type SplitMode = "closed" | "split" | "full";
++export type RightPane = "editor" | "subagents";
+ 
+ export interface SplitState {
+   /** Which of the three content-area layouts is active. */
+@@ -35,11 +36,14 @@
+   ratio: number;
+   /** `h` = side-by-side (desktop), `v` = stacked (mobile). */
+   orientation: SplitOrientation;
++  /** Which view is active in the right pane: editor or subagents. */
++  rightPane: RightPane;
+ }
+ 
+-export const DEFAULT_SPLIT_STATE: SplitState = { mode: "closed", ratio: 0.5, orientation: "h" };
++export const DEFAULT_SPLIT_STATE: SplitState = { mode: "closed", ratio: 0.5, orientation: "h", rightPane: "editor" };
+ 
+ const isMode = (v: unknown): v is SplitMode => v === "closed" || v === "split" || v === "full";
++const isRightPane = (v: unknown): v is RightPane => v === "editor" || v === "subagents";
+ 
+ /** Clamp a divider ratio into `[RATIO_MIN, RATIO_MAX]`; NaN → default ratio. */
+ export function clampRatio(ratio: number): number {
+@@ -55,10 +59,12 @@
+  * Migrate a raw persisted blob to a well-formed `SplitState`, or `null` when
+  * corrupt. Accepts both the new `mode` shape and the legacy `open` boolean, with
+  * an explicit **precedence** so a blob carrying both fields cannot corrupt:
+- *   1. `mode` in the enum → use it (mode wins over any legacy `open`).
+- *   2. else `typeof open === "boolean"` → `open ? "split" : "closed"`.
+- *   3. else → corrupt (`null`).
++ *   1. `mode === "subagents"` legacy value → `{ mode: "split", rightPane: "subagents" }`.
++ *   2. `mode` in the enum → use it (mode wins over any legacy `open`).
++ *   3. else `typeof open === "boolean"` → `open ? "split" : "closed"`.
++ *   4. else → corrupt (`null`).
+  * `ratio` is clamped (an out-of-clamp legacy ratio like `1.2` is clamped, not rejected).
++ * `rightPane` defaults to `"editor"` if missing or invalid.
+  */
+ function migrateState(v: unknown): SplitState | null {
+   if (!v || typeof v !== "object") return null;
+@@ -66,10 +72,24 @@
+   if (typeof s.ratio !== "number" || !Number.isFinite(s.ratio)) return null;
+   if (s.orientation !== "h" && s.orientation !== "v") return null;
+   let mode: SplitMode;
+-  if (isMode(s.mode)) mode = s.mode;
+-  else if (typeof s.open === "boolean") mode = s.open ? "split" : "closed";
+-  else return null;
+-  return { mode, ratio: clampRatio(s.ratio), orientation: s.orientation };
++  let rightPane: RightPane = "editor";
++  if (s.mode === "subagents") {
++    mode = "split";
++    rightPane = "subagents";
++  } else if (isMode(s.mode)) {
++    mode = s.mode;
++    if (isRightPane(s.rightPane)) {
++      rightPane = s.rightPane;
++    }
++  } else if (typeof s.open === "boolean") {
++    mode = s.open ? "split" : "closed";
++    if (isRightPane(s.rightPane)) {
++      rightPane = s.rightPane;
++    }
++  } else {
++    return null;
++  }
++  return { mode, ratio: clampRatio(s.ratio), orientation: s.orientation, rightPane };
+ }
+ 
+ /** Read persisted state for a session; default (closed) on absence/corruption. */
+--- /dev/null
++++ b/packages/client/src/components/split/NativeExecutionRecords.tsx
+@@ -0,0 +1,28 @@
++import { useSessionEvents } from '@blackbelt-technology/dashboard-plugin-runtime/context';
++import { nativeReceipts } from './native-receipts.js';
++
++const focus = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--text-secondary)]';
++
++/** Existing parent-session receipts only; no invented child transcript or filesystem reads. */
++export function NativeExecutionRecords({sessionId, taskId}: {sessionId: string; taskId?: string}) {
++  const events = useSessionEvents(sessionId);
++  const records = nativeReceipts(events, taskId);
++  return <details className="min-w-0 rounded-lg border border-[var(--border-secondary)] px-3">
++    <summary className={`cursor-pointer rounded py-2.5 text-[13px] font-medium ${focus}`}>{taskId ? '任务回执' : '执行回执'} <span className="ml-1 text-[11px] font-normal tabular-nums text-[var(--text-secondary)]">{records.length}</span></summary>
++    <p className="mb-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">工具回执片段 · 启动回执不等于任务完成 · 最多 30 条</p>
++    {!records.length && <p className="pb-3 text-xs text-[var(--text-secondary)]" title="仅显示可明确归属的记录">暂无回执。</p>}
++    {records.map((event, index) => {
++      const content = JSON.stringify(event.data.result ?? event.data, null, 2) ?? '';
++      return <details key={`${String(event.data.toolCallId)}:${index}`} className="min-w-0 border-t border-[var(--border-secondary)]">
++        <summary className={`cursor-pointer rounded py-1.5 text-xs hover:bg-[var(--bg-secondary)] ${focus}`}>
++          <span className="inline-flex max-w-[calc(100%-20px)] items-center gap-2 align-middle">
++            <time className="shrink-0 text-[11px] tabular-nums text-[var(--text-secondary)]">{new Date(event.timestamp).toLocaleTimeString()}</time>
++            <span className={`shrink-0 rounded border border-[var(--border-secondary)] px-1.5 text-[11px] ${event.data.isError ? 'border-l-2 border-l-red-500' : ''}`}>{event.data.isError ? '工具错误' : '工具回执'}</span>
++            <span className="min-w-0 truncate font-mono text-[11px] text-[var(--text-secondary)]" title={String(event.data.toolCallId ?? index)}>{String(event.data.toolCallId ?? index)}</span>
++          </span>
++        </summary>
++        <pre tabIndex={0} aria-label="回执内容" className={`my-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-secondary)] p-3 font-mono text-[11px] leading-relaxed ${focus}`}>{content.slice(0, 32000)}{content.length > 32000 ? '\n[展示已截断]' : ''}</pre>
++      </details>;
++    })}
++  </details>;
++}
+--- /dev/null
++++ b/packages/client/src/components/split/NativeSubagents.tsx
+@@ -0,0 +1,1233 @@
++import { useSessionEvents } from '@blackbelt-technology/dashboard-plugin-runtime/context';
++import { useEffect, useMemo, useState } from 'react';
++import { NativeExecutionRecords } from './NativeExecutionRecords.js';
++import { NativeTaskDetail } from './NativeTaskDetail.js';
++import {
++  buildFlowGroups,
++  dispatcherOf,
++  flattenTasks,
++  hierarchyRole,
++  hierarchyRoleLabel,
++  modelShortName,
++  nodeKindLabel,
++  parseNativeNodes,
++  progressSegments,
++  type HierarchyRole,
++  type TaskRow,
++} from './native-task-model.js';
++
++export { parseNativeNodes } from './native-task-model.js';
++
++const labels: Record<string, string> = {
++  running: '运行中',
++  queued: '排队',
++  complete: '已完成',
++  failed: '失败',
++  paused: '暂停',
++  stopped: '已停止',
++  partial: '部分完成',
++  rejected: '已拒绝',
++  unknown: '未知',
++};
++
++const focus = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--text-secondary)]';
++
++const dot = (state: string) =>
++  state === 'running'
++    ? 'bg-blue-500'
++    : state === 'queued'
++    ? 'bg-amber-500'
++    : state === 'complete'
++    ? 'bg-emerald-500'
++    : state === 'failed'
++    ? 'bg-red-500'
++    : 'bg-[var(--text-secondary)]';
++
++const ring = (state: string) =>
++  state === 'running'
++    ? 'border-blue-500/60'
++    : state === 'failed'
++    ? 'border-red-500/70'
++    : state === 'complete'
++    ? 'border-emerald-500/50'
++    : 'border-[var(--border-secondary)]';
++
++const edgeColor = (state: string) =>
++  state === 'failed'
++    ? 'stroke-red-500/70'
++    : state === 'complete'
++    ? 'stroke-emerald-500/60'
++    : state === 'running'
++    ? 'stroke-blue-500/70'
++    : 'stroke-[var(--border-secondary)]';
++
++function StatusBadge({state}: {state: string}) {
++  return (
++    <span
++      className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[11px] font-medium"
++      title={labels[state] || state}
++    >
++      <span
++        aria-hidden="true"
++        className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot(state)} ${
++          state === 'running' ? 'motion-safe:animate-pulse motion-reduce:animate-none' : ''
++        }`}
++      />
++      <span className="truncate">{labels[state] || state}</span>
++    </span>
++  );
++}
++
++function RoleBadge({role}: {role: HierarchyRole}) {
++  const label = hierarchyRoleLabel(role);
++  const color =
++    role === 'child'
++      ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
++      : role === 'grandchild'
++      ? 'border-purple-500/40 bg-purple-500/10 text-purple-400'
++      : role === 'workflow'
++      ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
++      : role === 'main'
++      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
++      : 'border-[var(--border-secondary)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]';
++
++  return (
++    <span
++      className={`inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${color}`}
++      title={label}
++    >
++      <span className="truncate">{label}</span>
++    </span>
++  );
++}
++
++function depthBorderColor(node: {kind?: string}, depth: number): string {
++  if (node.kind === 'step' || node.kind === 'host-step') {
++    return 'border-l-2 border-l-[var(--border-secondary)]';
++  }
++  if (node.kind === 'workflow') {
++    return 'border-l-2 border-l-amber-500';
++  }
++  if (depth <= 1) {
++    return 'border-l-2 border-l-blue-500';
++  }
++  if (depth === 2) {
++    return 'border-l-2 border-l-purple-500';
++  }
++  return 'border-l-2 border-l-cyan-500';
++}
++
++function ModelChip({model, active}: {model?: string; active?: boolean}) {
++  const short = modelShortName(model);
++  if (!short || !model) return null;
++  return (
++    <span
++      className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] ${
++        active
++          ? 'border-blue-500/60 bg-blue-500/10 text-blue-500'
++          : 'border-[var(--border-secondary)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
++      }`}
++      title={model}
++    >
++      {short}
++    </span>
++  );
++}
++
++function SegmentedProgress({rows}: {rows: TaskRow[]}) {
++  const {segments, total, done, percent} = progressSegments(rows);
++  if (!total) return null;
++  return (
++    <div className="min-w-0" aria-label="任务完成进度">
++      <div className="mb-1 flex items-baseline justify-between gap-3 text-[11px]">
++        <span className="font-medium text-[var(--text-secondary)]">完成进度</span>
++        <span className="tabular-nums font-semibold">{done}/{total} · {percent}%</span>
++      </div>
++      <div
++        className="flex h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-secondary)]"
++        role="img"
++        aria-label={segments.filter(s => s.count > 0).map(s => `${s.label} ${s.count}`).join('，')}
++      >
++        {segments
++          .filter(segment => segment.count > 0)
++          .map(segment => (
++            <span
++              key={segment.key}
++              className={`h-full ${segment.className}`}
++              style={{width: `${(segment.count / total) * 100}%`}}
++              title={`${segment.label} ${segment.count}`}
++            />
++          ))}
++      </div>
++      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
++        {segments
++          .filter(segment => segment.count > 0)
++          .map(segment => (
++            <span
++              key={segment.key}
++              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]"
++            >
++              <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${segment.className}`} />
++              <span>{segment.label}</span>
++              <span className="tabular-nums font-semibold text-[var(--text-primary)]">{segment.count}</span>
++            </span>
++          ))}
++      </div>
++    </div>
++  );
++}
++
++function isDuplicateStep(row: TaskRow, allRows: TaskRow[], now?: number): boolean {
++  if (row.node.kind !== 'step') return false;
++  if (!row.parent) return false;
++  const parentRow = allRows.find(r => r.key === row.parent);
++  if (!parentRow || parentRow.node.kind !== 'subagent') return false;
++
++  const rowLabel = row.node.label || row.node.id;
++  const parentLabel = parentRow.node.label || parentRow.node.id;
++  if (rowLabel !== parentLabel) return false;
++
++  const rowDesc = (row.node.description || '').trim();
++  const parentDesc = (parentRow.node.description || '').trim();
++  if (rowDesc !== parentDesc) return false;
++
++  const getDur = (n: typeof row.node) =>
++    n.startedAt !== undefined
++      ? Math.max(0, Math.round(((n.endedAt ?? now ?? Date.now()) - n.startedAt) / 1000))
++      : undefined;
++  const rowDur = getDur(row.node);
++  const parentDur = getDur(parentRow.node);
++  return rowDur === parentDur;
++}
++
++function getAncestorAtDepth(
++  row: TaskRow,
++  depth: number,
++  byKey: Map<string, TaskRow>,
++): TaskRow | undefined {
++  let curr: TaskRow | undefined = row;
++  while (curr) {
++    if (curr.depth === depth) return curr;
++    curr = curr.parent ? byKey.get(curr.parent) : undefined;
++  }
++  return undefined;
++}
++
++function isDescendantOf(
++  candidate: TaskRow,
++  ancestorKey: string,
++  byKey: Map<string, TaskRow>,
++): boolean {
++  let curr: TaskRow | undefined = candidate;
++  const seen = new Set<string>();
++  while (curr?.parent && !seen.has(curr.parent)) {
++    seen.add(curr.parent);
++    if (curr.parent === ancestorKey) return true;
++    curr = byKey.get(curr.parent);
++  }
++  return false;
++}
++
++/** Execution-order spine.
++ *
++ * pi-subagents records no dependency edges, so these curves encode ORDER ONLY.
++ * The header states that explicitly; do not relabel it as a DAG. */
++function FlowGraph({
++  rows,
++  selectedKey,
++  pinnedKey,
++  now,
++  onSelect,
++  onPin,
++  onCancelPin,
++}: {
++  rows: TaskRow[];
++  selectedKey?: string;
++  pinnedKey?: string;
++  now?: number;
++  onSelect: (key: string) => void;
++  onPin: (key?: string) => void;
++  onCancelPin: () => void;
++}) {
++  const [hoveredKey, setHoveredKey] = useState<string>();
++  const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
++  const rowsByKey = useMemo(() => new Map(rows.map(r => [r.key, r])), [rows]);
++  const groups = useMemo(() => buildFlowGroups(rows), [rows]);
++  const allFlowRows = useMemo(() => groups.flatMap(g => g.rows), [groups]);
++
++
++  const activeKey = pinnedKey ?? hoveredKey ?? selectedKey;
++  const activeIndex = activeKey ? allFlowRows.findIndex(r => r.key === activeKey) : -1;
++  const upstreamKey = activeIndex > 0 ? allFlowRows[activeIndex - 1]?.key : undefined;
++  const downstreamKey =
++    activeIndex >= 0 && activeIndex < allFlowRows.length - 1 ? allFlowRows[activeIndex + 1]?.key : undefined;
++
++  const emphasized = useMemo(() => {
++    const set = new Set<string>();
++    if (activeKey) set.add(activeKey);
++    if (upstreamKey) set.add(upstreamKey);
++    if (downstreamKey) set.add(downstreamKey);
++    return set;
++  }, [activeKey, upstreamKey, downstreamKey]);
++
++  useEffect(() => {
++    const onKey = (event: KeyboardEvent) => {
++      if (event.key === 'Escape') {
++        setHoveredKey(undefined);
++        onCancelPin();
++      }
++    };
++    window.addEventListener('keydown', onKey);
++    return () => window.removeEventListener('keydown', onKey);
++  }, [onCancelPin]);
++
++  return (
++    <div className="min-w-0" onMouseLeave={() => setHoveredKey(undefined)}>
++      <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
++        <p className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)]">
++          <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
++            <path d="M2 2v5a3 3 0 0 0 3 3h5" />
++            <path d="m8 8 2 2-2 2" />
++          </svg>
++          <span>执行顺序，非依赖关系（pi-subagents 不记录依赖边）</span>
++        </p>
++        {pinnedKey && (
++          <button
++            type="button"
++            onClick={onCancelPin}
++            className={`rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] ${focus}`}
++          >
++            已固定高亮 · 按 Esc 取消
++          </button>
++        )}
++      </div>
++      <div className="space-y-4">
++        {/* Root node: 主会话（主 Agent） */}
++        <section className="min-w-0" aria-label="主会话根节点">
++          <div className="relative pb-2" style={{paddingLeft: 24}}>
++            <span
++              aria-hidden="true"
++              className="absolute left-[11px] top-3.5 h-2 w-2 -translate-x-1/2 rounded-full bg-emerald-500 ring-2 ring-emerald-500/30"
++            />
++            {groups.length > 0 && (
++              <svg
++                aria-hidden="true"
++                className="pointer-events-none absolute left-[11px] top-6 opacity-60"
++                width="12"
++                height="28"
++                viewBox="0 0 12 28"
++                preserveAspectRatio="none"
++              >
++                <path
++                  d="M6 0 C8 10, 4 18, 6 28"
++                  fill="none"
++                  strokeWidth="1.5"
++                  className="stroke-emerald-500/60"
++                  vectorEffect="non-scaling-stroke"
++                />
++              </svg>
++            )}
++            <div className="flex w-full min-w-0 items-center justify-between rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-3 py-2 text-[13px] font-medium text-[var(--text-primary)]">
++              <div className="flex items-center gap-2">
++                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
++                <span>主会话（主 Agent）</span>
++              </div>
++              <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-400">
++                主会话
++              </span>
++            </div>
++          </div>
++        </section>
++        {groups.map(group => (
++          <section key={group.key} className="min-w-0">
++            <div className="mb-2 flex items-center gap-2">
++              <span className="text-[11px] font-semibold text-[var(--text-secondary)]">{group.title}</span>
++              {group.fromPhase && (
++                <span className="rounded border border-[var(--border-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)]">
++                  阶段
++                </span>
++              )}
++              <span className="h-px flex-1 bg-[var(--border-secondary)]" aria-hidden="true" />
++            </div>
++            <ol className="min-w-0 space-y-0" role="list" aria-label={`执行流 ${group.title} 节点`}>
++              {group.rows.map((row, index) => {
++                const isEmphasized = activeKey ? emphasized.has(row.key) : true;
++                const isSelected = selectedKey === row.key;
++                const isPinned = pinnedKey === row.key;
++                const isCurrent = activeKey === row.key;
++                const isUpstream = row.key === upstreamKey;
++                const isDownstream = row.key === downstreamKey;
++
++                const nextRow = group.rows[index + 1];
++                const parentRow = row.parent ? rowsByKey.get(row.parent) : undefined;
++                const isParentEdgeEmphasized =
++                  !activeKey || (Boolean(parentRow && emphasized.has(parentRow.key)) && emphasized.has(row.key));
++                const isChildEdgeEmphasized =
++                  !activeKey || (emphasized.has(row.key) && Boolean(nextRow && emphasized.has(nextRow.key)));
++
++                const duration =
++                  row.node.startedAt !== undefined
++                    ? Math.max(0, Math.round(((row.node.endedAt ?? now ?? Date.now()) - row.node.startedAt) / 1000))
++                    : undefined;
++                const isDuplicate = isDuplicateStep(row, rows, now);
++                const isStepExpanded =
++                  expandedSteps[row.key] !== undefined
++                    ? expandedSteps[row.key]
++                    : selectedKey === row.key;
++                const indent = 24 + row.depth * 16;
++                const dotX = 11 + row.depth * 16;
++                const hasNextChild = Boolean(nextRow && nextRow.parent === row.key);
++                const hasNextSibling = Boolean(nextRow && nextRow.parent === row.parent);
++
++                return (
++                  <li key={row.key} className="relative min-w-0 pb-3 last:pb-0" style={{paddingLeft: indent}}>
++                    <svg
++                      aria-hidden="true"
++                      className="pointer-events-none absolute inset-0 h-full w-full"
++                    >
++                      {Array.from({length: row.depth}, (_, d) => {
++                        const lineX = 11 + d * 16;
++                        const isDirectParent = d === row.depth - 1;
++                        const ancestorAtD = getAncestorAtDepth(row, d, rowsByKey);
++                        const hasSubsequent = ancestorAtD
++                          ? group.rows.slice(index + 1).some(r => isDescendantOf(r, ancestorAtD.key, rowsByKey))
++                          : false;
++                        return (
++                          <g key={d}>
++                            <line
++                              x1={lineX}
++                              y1={0}
++                              x2={lineX}
++                              y2={hasSubsequent ? '100%' : 16}
++                              strokeWidth="1.5"
++                              className="stroke-[var(--border-secondary)] opacity-60"
++                              vectorEffect="non-scaling-stroke"
++                            />
++                            {isDirectParent && (
++                              <path
++                                d={`M ${lineX} 0 V 16 H ${dotX}`}
++                                fill="none"
++                                strokeWidth={isParentEdgeEmphasized && activeKey ? '2' : '1.5'}
++                                className={
++                                  isParentEdgeEmphasized && activeKey
++                                    ? edgeColor(row.node.state)
++                                    : 'stroke-[var(--border-secondary)]'
++                                }
++                                vectorEffect="non-scaling-stroke"
++                              />
++                            )}
++                          </g>
++                        );
++                      })}
++                      {hasNextChild && (
++                        <line
++                          x1={dotX}
++                          y1={16}
++                          x2={dotX}
++                          y2="100%"
++                          strokeWidth={isChildEdgeEmphasized && activeKey ? '2' : '1.5'}
++                          className={edgeColor(row.node.state)}
++                          vectorEffect="non-scaling-stroke"
++                        />
++                      )}
++                      {hasNextSibling && (
++                        <line
++                          x1={dotX}
++                          y1={24}
++                          x2={dotX}
++                          y2="100%"
++                          strokeWidth="1"
++                          strokeDasharray="2 2"
++                          className="stroke-[var(--border-secondary)] opacity-40"
++                          vectorEffect="non-scaling-stroke"
++                        />
++                      )}
++                      {index === 0 && row.depth === 0 && (
++                        <line
++                          x1={dotX}
++                          y1={0}
++                          x2={dotX}
++                          y2={16}
++                          strokeWidth="1.5"
++                          className="stroke-emerald-500/60"
++                          vectorEffect="non-scaling-stroke"
++                        />
++                      )}
++                    </svg>
++                    <span
++                      aria-hidden="true"
++                      className={`absolute top-4 h-1.5 w-1.5 -translate-x-1/2 rounded-full transition-all ${
++                        isCurrent
++                          ? 'bg-blue-500 ring-2 ring-blue-500/50 scale-125'
++                          : isUpstream || isDownstream
++                          ? 'bg-[var(--text-primary)] ring-1 ring-[var(--text-secondary)]'
++                          : 'bg-[var(--border-secondary)]'
++                      } ${!isEmphasized ? 'opacity-35' : 'opacity-100'}`}
++                      style={{left: dotX}}
++                    />
++                    {isDuplicate && !isStepExpanded ? (
++                      <div className="flex items-center gap-2">
++                        <button
++                          type="button"
++                          tabIndex={0}
++                          aria-expanded={false}
++                          aria-label={`展开执行步骤：${row.node.label || row.node.id}`}
++                          onClick={() => setExpandedSteps(prev => ({...prev, [row.key]: true}))}
++                          className={`inline-flex items-center gap-1.5 rounded-md border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors ${focus}`}
++                        >
++                          <svg
++                            aria-hidden="true"
++                            width="12"
++                            height="12"
++                            viewBox="0 0 12 12"
++                            fill="none"
++                            stroke="currentColor"
++                            strokeWidth="1.5"
++                            className="shrink-0 transition-transform motion-safe:duration-150"
++                          >
++                            <path d="m4 2 4 4-4 4" />
++                          </svg>
++                          <span>1 个执行步骤</span>
++                          <span className="text-[10px] text-[var(--text-secondary)] opacity-75">
++                            （与父代理相同，已折叠）
++                          </span>
++                          <span className="ml-1 text-[10px] font-medium text-blue-400">点击展开</span>
++                        </button>
++                      </div>
++                    ) : (
++                      <>
++                        {isDuplicate && isStepExpanded && (
++                          <div className="mb-1.5 flex items-center gap-1.5">
++                            <button
++                              type="button"
++                              tabIndex={0}
++                              aria-expanded={true}
++                              aria-label={`收起执行步骤：${row.node.label || row.node.id}`}
++                              onClick={() => setExpandedSteps(prev => ({...prev, [row.key]: false}))}
++                              className={`inline-flex items-center gap-1 rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors ${focus}`}
++                            >
++                              <svg
++                                aria-hidden="true"
++                                width="10"
++                                height="10"
++                                viewBox="0 0 10 10"
++                                fill="none"
++                                stroke="currentColor"
++                                strokeWidth="1.5"
++                                className="shrink-0 rotate-90 transition-transform motion-safe:duration-150"
++                              >
++                                <path d="m3 2 3 3-3 3" />
++                              </svg>
++                              <span>1 个执行步骤 · 收起</span>
++                            </button>
++                          </div>
++                        )}
++                        <button
++                          type="button"
++                          tabIndex={0}
++                          aria-pressed={isSelected}
++                          aria-label={`任务节点 ${row.node.label || row.node.id}，状态 ${labels[row.node.state] || row.node.state}`}
++                          onMouseEnter={() => setHoveredKey(row.key)}
++                          onFocus={() => setHoveredKey(row.key)}
++                          onBlur={() => setHoveredKey(undefined)}
++                          onClick={() => {
++                            if (pinnedKey === row.key) {
++                              onPin(undefined);
++                            } else {
++                              onPin(row.key);
++                              onSelect(row.key);
++                            }
++                          }}
++                          className={`group flex w-full min-w-0 flex-col gap-1.5 rounded-lg border px-3 py-2 text-left transition-all ${focus} ${ring(
++                            row.node.state
++                          )} ${isSelected ? 'bg-[var(--bg-secondary)]' : ''} ${
++                            depthBorderColor(row.node, row.depth)
++                          } ${
++                            isPinned
++                              ? 'ring-2 ring-[var(--text-secondary)]'
++                              : isCurrent
++                              ? 'ring-1 ring-[var(--text-secondary)]'
++                              : ''
++                          } ${!isEmphasized ? 'opacity-40' : 'opacity-100'}`}
++                        >
++                          <div className="flex min-w-0 items-center gap-2">
++                            <span
++                              aria-hidden="true"
++                              className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot(row.node.state)} ${
++                                row.node.state === 'running' ? 'motion-safe:animate-pulse motion-reduce:animate-none' : ''
++                              }`}
++                            />
++                            <span
++                              className="min-w-0 flex-1 truncate text-[13px] font-medium"
++                              title={`${row.node.sessionName || row.node.description || row.node.label || row.node.id} · ${
++                                dispatcherOf(rows, row)
++                                  ? `由 ${dispatcherOf(rows, row)!.node.label || dispatcherOf(rows, row)!.node.id} 派发`
++                                  : '主 Agent 直接派发'
++                              }`}
++                            >
++                              {row.node.label || row.node.id}
++                            </span>
++                            {isCurrent && (
++                              <span className="shrink-0 rounded bg-blue-500/10 px-1 py-0.5 text-[9px] font-medium text-blue-500">
++                                {isPinned ? '已固定' : '当前'}
++                              </span>
++                            )}
++                            {isUpstream && (
++                              <span className="shrink-0 rounded bg-[var(--bg-secondary)] px-1 py-0.5 text-[9px] text-[var(--text-secondary)]">
++                                前序
++                              </span>
++                            )}
++                            {isDownstream && (
++                              <span className="shrink-0 rounded bg-[var(--bg-secondary)] px-1 py-0.5 text-[9px] text-[var(--text-secondary)]">
++                                后续
++                              </span>
++                            )}
++                            <RoleBadge role={hierarchyRole(row.node, row.depth)} />
++                            <ModelChip model={row.node.model} active={row.node.state === 'running'} />
++                            <span className="shrink-0 text-[10px] text-[var(--text-secondary)]">
++                              {labels[row.node.state] || row.node.state}
++                            </span>
++                            {row.node.order !== undefined && (
++                              <span className="shrink-0 tabular-nums text-[10px] text-[var(--text-secondary)]">
++                                #{row.node.order}
++                              </span>
++                            )}
++                          </div>
++                          {(() => {
++                            const disp = dispatcherOf(rows, row);
++                            const dispText = disp ? `由 ${disp.node.label || disp.node.id} 派发` : '主 Agent 直接派发';
++                            return (
++                              <div className="text-[10px] text-[var(--text-secondary)]">
++                                {dispText}
++                              </div>
++                            );
++                          })()}
++                          {row.node.description && (
++                            <p
++                              className="min-w-0 truncate text-[11px] text-[var(--text-secondary)]"
++                              title={row.node.description}
++                            >
++                              {row.node.description}
++                            </p>
++                          )}
++                          {row.node.sessionName && row.node.sessionName !== row.node.description && (
++                            <p
++                              className="min-w-0 truncate text-[10px] text-[var(--text-secondary)] opacity-80"
++                              title={`会话标题：${row.node.sessionName}`}
++                            >
++                              {row.node.sessionName}
++                            </p>
++                          )}
++                          {(row.node.activity?.currentTool ||
++                            row.node.tokens?.total !== undefined ||
++                            duration !== undefined) && (
++                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-[var(--text-secondary)]">
++                              {row.node.activity?.currentTool && (
++                                <span className="truncate">工具 {row.node.activity.currentTool}</span>
++                              )}
++                              {row.node.tokens?.total !== undefined && (
++                                <span className="tabular-nums">token {row.node.tokens.total.toLocaleString()}</span>
++                              )}
++                              {duration !== undefined && (
++                                <span className="tabular-nums">耗时 {duration}s</span>
++                              )}
++                            </div>
++                          )}
++                        </button>
++                      </>
++                    )}
++                  </li>
++                );
++              })}
++            </ol>
++          </section>
++        ))}
++      </div>
++    </div>
++  );
++}
++
++export function NativeSubagents({sessionId}: {sessionId: string}) {
++  const events = useSessionEvents(sessionId);
++  const latest = [...events].reverse().find(event => event.eventType === 'native_subagents_snapshot');
++  const [clock, setClock] = useState(Date.now());
++  const [selectedKey, select] = useState<string>();
++  const [pinnedKey, pin] = useState<string>();
++  const [mode, setMode] = useState<'tree' | 'list' | 'flow'>('tree');
++  const [tab, setTab] = useState<'overview' | 'usage'>('overview');
++  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
++
++  useEffect(() => {
++    select(undefined);
++    pin(undefined);
++    setExpanded({});
++  }, [sessionId]);
++
++  // Freshness clock. The observer pushes on subagent events (2s poll floor),
++  // so a shorter staleness window is meaningful.
++  useEffect(() => {
++    const timer = setInterval(() => {
++      if (!document.hidden) setClock(Date.now());
++    }, 2000);
++    return () => clearInterval(timer);
++  }, []);
++
++  const snapshot = latest?.data.snapshot as
++    | {runs?: unknown; generatedAt?: number; omitted?: unknown}
++    | undefined;
++  const rows = useMemo(() => flattenTasks(parseNativeNodes(snapshot?.runs)), [snapshot]);
++
++  // Model keys embed sibling indexes, so they drift whenever a snapshot inserts a sibling
++  // and selection/collapse would silently jump to another node. Remap to stable
++  // ancestor-id paths (falling back to the model key when a path collides) in the UI
++  // layer only; the model file stays untouched.
++  const stableRows = useMemo(() => {
++    const byKey = new Map(rows.map(row => [row.key, row]));
++    const pathOf = (row: TaskRow): string => {
++      const parts: string[] = [];
++      const seen = new Set<string>();
++      for (
++        let cursor: TaskRow | undefined = row;
++        cursor && !seen.has(cursor.key);
++        cursor = cursor.parent ? byKey.get(cursor.parent) : undefined
++      ) {
++        seen.add(cursor.key);
++        parts.unshift(cursor.node.id);
++      }
++      return JSON.stringify(parts);
++    };
++    const finalKey = new Map<string, string>();
++    const paths = new Map(rows.map(row => [row.key, pathOf(row)]));
++    const counts = new Map<string, number>();
++    for (const path of paths.values()) counts.set(path, (counts.get(path) ?? 0) + 1);
++    for (const row of rows) {
++      const path = paths.get(row.key)!;
++      // Ambiguous identity must not share the stable-key namespace.
++      finalKey.set(row.key, counts.get(path) === 1 ? `stable:${path}` : `ambiguous:${row.key}`);
++    }
++    return rows.map(row => ({
++      ...row,
++      key: finalKey.get(row.key) ?? row.key,
++      parent: row.parent ? finalKey.get(row.parent) : undefined,
++    }));
++  }, [rows]);
++
++  const counts = taskCountsAll(stableRows);
++  const workflowCount = rows.filter(row => row.node.kind === 'workflow').length;
++  const omitted = snapshot?.omitted as
++    | {runs?: number; children?: number; byteLimitExceeded?: boolean}
++    | undefined;
++  const hasOmissions =
++    (omitted?.runs ?? 0) > 0 || (omitted?.children ?? 0) > 0 || omitted?.byteLimitExceeded === true;
++
++  const selected = stableRows.find(row => row.key === selectedKey);
++  useEffect(() => {
++    if (selectedKey?.startsWith('ambiguous:')) select(undefined);
++  }, [snapshot, selectedKey]);
++
++  const parent = selected && stableRows.find(row => row.key === selected.parent);
++  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
++  const runAddress = (row?: TaskRow) =>
++    row && ['subagent', 'workflow'].includes(row.node.kind ?? '') && uuid.test(row.node.id)
++      ? `native-detail:${row.node.id}`
++      : undefined;
++  const detailAddress =
++    runAddress(selected) ?? (selected?.node.kind === 'step' ? runAddress(parent) : undefined);
++
++  const stale = !latest || clock - latest.timestamp > 20000;
++  const freshness = !latest
++    ? '等待状态适配器'
++    : !latest.data.available
++    ? '执行器状态不可用'
++    : stale
++    ? '快照已过期'
++    : '实时同步中';
++
++  // The clock only marks freshness; durations remain anchored to the executor snapshot.
++  const now = typeof snapshot?.generatedAt === 'number' ? snapshot.generatedAt : latest?.timestamp;
++
++  const hidden = new Set<string>();
++  const visibleRows = stableRows.filter(row => {
++    const isHidden = !!row.parent && hidden.has(row.parent);
++    if (isHidden || !(expanded[row.key] ?? row.depth < 1)) hidden.add(row.key);
++    return mode === 'list' || !isHidden;
++  });
++
++  // Phase / order context for the detail pane. Explicitly labelled as an
++  // execution-order inference, because no dependency data exists.
++  const phaseContext = useMemo(() => {
++    if (!selected) return undefined;
++    const phaseName = selected.node.phase?.trim();
++    const samePhase = stableRows
++      .filter(row => {
++        if (phaseName) return row.node.phase?.trim() === phaseName;
++        return row.parent === selected.parent;
++      })
++      .sort((a, b) => {
++        const lo = a.node.order;
++        const ro = b.node.order;
++        if (lo !== undefined && ro !== undefined && lo !== ro) return lo - ro;
++        return 0;
++      });
++    const idx = samePhase.findIndex(row => row.key === selected.key);
++    const priorNodes = idx > 0 ? samePhase.slice(0, idx) : [];
++    const subsequentNodes = idx >= 0 ? samePhase.slice(idx + 1) : [];
++    const priorNode = priorNodes.length > 0 ? priorNodes[priorNodes.length - 1] : undefined;
++    return {
++      order: selected.node.order,
++      position: idx >= 0 ? idx + 1 : undefined,
++      totalInPhase: samePhase.length,
++      priorNode,
++      subsequentCount: subsequentNodes.length,
++      subsequentNode: subsequentNodes[0],
++      phaseName: phaseName || '当前阶段',
++    };
++  }, [stableRows, selected]);
++
++  return (
++    <div className="min-w-0 space-y-3 text-[var(--text-primary)]">
++      {!!rows.length && latest?.data.available === true && (
++        <div className="min-w-0 space-y-3 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-3 py-2.5">
++          <SegmentedProgress rows={stableRows} />
++          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--text-secondary)]">
++            <span>
++              节点 {counts.total} · 含 {workflowCount} 个工作流
++            </span>
++            <span className="inline-flex items-center gap-1.5">
++              <span
++                aria-hidden="true"
++                className={`h-1.5 w-1.5 rounded-full ${latest && stale ? 'bg-amber-500' : 'bg-emerald-500'}`}
++              />
++              {freshness}
++            </span>
++            {latest && <span className="tabular-nums">{new Date(latest.timestamp).toLocaleTimeString()}</span>}
++            <span className="ml-auto">当前会话 · 只读</span>
++          </div>
++        </div>
++      )}
++
++      <div
++        className={`grid min-w-0 grid-cols-1 gap-3 ${
++          selected ? 'xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]' : ''
++        }`}
++      >
++        <section className="min-w-0 overflow-hidden rounded-lg border border-[var(--border-secondary)]">
++          <header className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-3 py-1.5">
++            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
++              <h3 className="text-[13px] font-semibold">任务关系</h3>
++              <span className="text-[11px] text-[var(--text-secondary)]">执行顺序 · 非依赖</span>
++            </div>
++            <div className="flex gap-1" aria-label="任务显示方式">
++              {(['tree', 'list', 'flow'] as const).map(value => (
++                <button
++                  type="button"
++                  key={value}
++                  aria-pressed={mode === value}
++                  onClick={() => setMode(value)}
++                  className={`rounded border px-2 py-1 text-[11px] ${focus} ${
++                    mode === value
++                      ? 'border-[var(--text-secondary)] bg-[var(--bg-secondary)] font-medium'
++                      : 'border-transparent text-[var(--text-secondary)] hover:border-[var(--border-secondary)]'
++                  }`}
++                >
++                  {value === 'tree' ? '层级' : value === 'list' ? '列表' : '执行流'}
++                </button>
++              ))}
++            </div>
++          </header>
++          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--border-secondary)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
++            <span
++              aria-hidden="true"
++              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
++                latest && stale ? 'bg-amber-500' : latest ? 'bg-emerald-500' : 'bg-[var(--text-secondary)]'
++              }`}
++            />
++            <span>{freshness}</span>
++            {latest && <span className="tabular-nums">· {new Date(latest.timestamp).toLocaleTimeString()}</span>}
++            <span className="ml-auto">当前会话 · 只读</span>
++          </div>
++          <div className="max-h-[520px] overflow-y-auto p-3">
++            {!rows.length ? (
++              <div className="flex h-44 flex-col items-center justify-center text-center text-[var(--text-secondary)]">
++                <svg
++                  aria-hidden="true"
++                  width="36"
++                  height="36"
++                  viewBox="0 0 36 36"
++                  fill="none"
++                  stroke="currentColor"
++                  strokeWidth="1.5"
++                  className="mb-3 opacity-60"
++                >
++                  <rect x="13" y="3" width="10" height="8" rx="2" />
++                  <path d="M18 11v8M7 25v-6h22v6" />
++                  <rect x="2" y="25" width="10" height="8" rx="2" />
++                  <rect x="24" y="25" width="10" height="8" rx="2" />
++                </svg>
++                <p className="text-[13px] font-medium">
++                  {latest?.data.available ? '当前没有任务节点' : '尚无执行器任务数据'}
++                </p>
++                <p className="mt-2 text-xs">
++                  {latest?.data.available ? '新任务将显示在这里。' : '状态适配器提供快照后显示任务树。'}
++                </p>
++              </div>
++            ) : mode === 'flow' ? (
++              <FlowGraph
++                rows={stableRows}
++                selectedKey={selectedKey}
++                pinnedKey={pinnedKey}
++                now={now}
++                onSelect={key => select(key)}
++                onPin={key => pin(key)}
++                onCancelPin={() => pin(undefined)}
++              />
++            ) : (
++              <div>
++                {!!rows.length && mode === 'tree' && (
++                  <div className="mb-1 flex h-7 items-center gap-2 text-[12px] font-medium">
++                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--text-secondary)]" />
++                    主会话（主 Agent）
++                  </div>
++                )}
++                {visibleRows.map(row => {
++                  const isExpanded = expanded[row.key] ?? row.depth < 1;
++                  return (
++                    <div
++                      key={row.key}
++                      className="relative min-w-0 py-0.5"
++                      style={{paddingLeft: mode === 'tree' ? (row.depth + 1) * 16 : 0}}
++                    >
++                      {mode === 'tree' && (
++                        <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0">
++                          {Array.from({length: row.depth + 1}, (_, level) => (
++                            <span
++                              key={level}
++                              className="absolute inset-y-0 border-l border-[var(--border-secondary)]"
++                              style={{left: level * 16 + 4}}
++                            />
++                          ))}
++                          <span
++                            className="absolute top-1/2 w-3 border-t border-[var(--border-secondary)]"
++                            style={{left: row.depth * 16 + 4}}
++                          />
++                        </span>
++                      )}
++                      <div
++                        className={`flex h-9 min-w-0 items-center rounded-md border ${
++                          selected?.key === row.key
++                            ? 'border-[var(--text-secondary)] bg-[var(--bg-secondary)]'
++                            : 'border-[var(--border-secondary)] hover:bg-[var(--bg-secondary)]'
++                        } ${depthBorderColor(row.node, row.depth)} ${
++                          row.depth >= 3 && row.depth % 2 ? 'bg-[var(--bg-secondary)]' : ''
++                        }`}
++                      >
++                        {mode === 'tree' &&
++                          (row.node.children.length ? (
++                            <button
++                              type="button"
++                              aria-label={`${isExpanded ? '收起' : '展开'} ${
++                                row.node.label || row.node.id
++                              } 的子任务`}
++                              aria-expanded={isExpanded}
++                              onClick={() =>
++                                setExpanded(previous => ({...previous, [row.key]: !isExpanded}))
++                              }
++                              className={`ml-1 flex h-7 w-6 shrink-0 items-center justify-center rounded text-[var(--text-secondary)] ${focus}`}
++                            >
++                              <svg
++                                aria-hidden="true"
++                                width="12"
++                                height="12"
++                                viewBox="0 0 12 12"
++                                fill="none"
++                                stroke="currentColor"
++                                strokeWidth="1.5"
++                                className={isExpanded ? 'rotate-90' : ''}
++                              >
++                                <path d="m4 2 4 4-4 4" />
++                              </svg>
++                            </button>
++                          ) : (
++                            <span className="w-7 shrink-0" />
++                          ))}
++                        <button
++                          type="button"
++                          onClick={() => select(row.key)}
++                          aria-pressed={selected?.key === row.key}
++                          className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded px-2 text-left ${focus}`}
++                        >
++                          <span
++                            className="min-w-0 flex-1 truncate text-[13px] font-medium"
++                            title={`${row.node.sessionName || row.node.description || row.node.label || row.node.id} · ${
++                              dispatcherOf(stableRows, row)
++                                ? `由 ${dispatcherOf(stableRows, row)!.node.label || dispatcherOf(stableRows, row)!.node.id} 派发`
++                                : '主 Agent 直接派发'
++                            }`}
++                          >
++                            {row.node.label || row.node.id}
++                          </span>
++                          <ModelChip model={row.node.model} active={row.node.state === 'running'} />
++                          {(row.node.modelThinking || row.node.activity?.currentTool) && (
++                            <span
++                              className="hidden max-w-[32%] truncate text-[11px] text-[var(--text-secondary)] sm:block"
++                              title={[row.node.modelThinking, row.node.activity?.currentTool]
++                                .filter(Boolean)
++                                .join(' · ')}
++                            >
++                              {[row.node.modelThinking, row.node.activity?.currentTool].filter(Boolean).join(' · ')}
++                            </span>
++                          )}
++                          {(() => {
++                            const disp = dispatcherOf(stableRows, row);
++                            const dispLabel = disp ? `由 ${disp.node.label || disp.node.id} 派发` : '主 Agent 直接派发';
++                            return (
++                              <span
++                                className="hidden lg:inline truncate text-[10px] text-[var(--text-secondary)]"
++                                title={dispLabel}
++                              >
++                                {dispLabel}
++                              </span>
++                            );
++                          })()}
++                          <span className="shrink-0">
++                            <RoleBadge role={hierarchyRole(row.node, row.depth)} />
++                          </span>
++                          <span className="max-w-[40%] shrink-0">
++                            <StatusBadge state={row.node.state} />
++                          </span>
++                        </button>
++                      </div>
++                    </div>
++                  );
++                })}
++              </div>
++            )}
++          </div>
++        </section>
++
++        {selected && (
++          <aside
++            className="min-w-0 overflow-hidden rounded-lg border border-[var(--border-secondary)]"
++            aria-label="任务详情"
++          >
++            <header className="flex min-h-9 items-center justify-between gap-2 border-b border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-3 py-1.5">
++              <h3 className="truncate text-[13px] font-semibold" title={selected.node.label || selected.node.id}>
++                {selected.node.label || selected.node.id}
++              </h3>
++              <button
++                type="button"
++                aria-label="关闭任务详情"
++                onClick={() => {
++                  select(undefined);
++                  pin(undefined);
++                }}
++                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--text-secondary)] ${focus}`}
++              >
++                <svg
++                  aria-hidden="true"
++                  width="14"
++                  height="14"
++                  viewBox="0 0 14 14"
++                  fill="none"
++                  stroke="currentColor"
++                  strokeWidth="1.5"
++                >
++                  <path d="m3 3 8 8M11 3l-8 8" />
++                </svg>
++              </button>
++            </header>
++            <div className="max-h-[520px] space-y-3 overflow-y-auto p-3">
++              <div className="flex flex-wrap items-center gap-2">
++                <RoleBadge role={hierarchyRole(selected.node, selected.depth)} />
++                <StatusBadge state={selected.node.state} />
++                {selected.node.model && (
++                  <ModelChip model={selected.node.model} active={selected.node.state === 'running'} />
++                )}
++                {stale && <span className="text-[11px] text-[var(--text-secondary)]">快照已过期</span>}
++              </div>
++              {selected.node.state === 'failed' && (
++                <p className="border-l-2 border-red-500 bg-[var(--bg-secondary)] px-2 py-1.5 text-xs">
++                  任务执行失败
++                </p>
++              )}
++              <div className="flex gap-1" aria-label="详情内容">
++                {(['overview', 'usage'] as const).map(value => (
++                  <button
++                    type="button"
++                    key={value}
++                    aria-pressed={tab === value}
++                    onClick={() => setTab(value)}
++                    className={`rounded border px-2 py-1 text-xs ${focus} ${
++                      tab === value
++                        ? 'border-[var(--border-secondary)] bg-[var(--bg-secondary)] font-medium'
++                        : 'border-transparent text-[var(--text-secondary)]'
++                    }`}
++                  >
++                    {value === 'overview' ? '概览' : '用量'}
++                  </button>
++                ))}
++              </div>
++              {tab === 'overview' ? (
++                <dl className="grid grid-cols-[84px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px] [&_dt]:pt-0.5 [&_dt]:text-[11px] [&_dt]:text-[var(--text-secondary)] [&_dd]:min-w-0 [&_dd]:break-words">
++                  <dt>节点类型</dt>
++                  <dd>{nodeKindLabel(selected.node.kind)}</dd>
++                  <dt>派发者</dt>
++                  <dd>
++                    {(() => {
++                      const dispatcher = dispatcherOf(stableRows, selected);
++                      return dispatcher ? (
++                        <button
++                          type="button"
++                          onClick={() => select(dispatcher.key)}
++                          className={`max-w-full rounded text-left underline decoration-[var(--border-secondary)] underline-offset-2 ${focus}`}
++                        >
++                          由 {dispatcher.node.label || dispatcher.node.id} 派发
++                        </button>
++                      ) : (
++                        '主 Agent 直接派发'
++                      );
++                    })()}
++                  </dd>
++                  <dt>负责人</dt>
++                  <dd>{selected.node.label || selected.node.id}</dd>
++                  <dt>节点标识</dt>
++                  <dd className="break-all font-mono text-[11px]">{selected.node.id}</dd>
++                  <dt>父节点</dt>
++                  <dd>
++                    {parent ? (
++                      <button
++                        type="button"
++                        onClick={() => select(parent.key)}
++                        className={`max-w-full rounded text-left underline decoration-[var(--border-secondary)] underline-offset-2 ${focus}`}
++                      >
++                        {parent.node.label || parent.node.id}
++                      </button>
++                    ) : (
++                      '当前主会话'
++                    )}
++                  </dd>
++                  <dt>会话标题</dt>
++                  <dd className="min-w-0 break-words text-[12px]">
++                    {selected.node.sessionName || '未提供（子会话未生成标题）'}
++                  </dd>
++                  <dt>工作说明</dt>
++                  <dd>{selected.node.description || selected.node.label || '未提供'}</dd>
++                  <dt>模型</dt>
++                  <dd className="font-mono text-[11px]">
++                    {selected.node.model || selected.node.modelThinking || '未提供'}
++                  </dd>
++                  <dt>当前工具</dt>
++                  <dd>{selected.node.activity?.currentTool || '未提供'}</dd>
++                  <dt>耗时（快照）</dt>
++                  <dd className="tabular-nums">
++                    {selected.node.startedAt !== undefined && now !== undefined
++                      ? `${Math.max(0, ((selected.node.endedAt ?? now) - selected.node.startedAt) / 1000).toFixed(0)} 秒`
++                      : '未提供'}
++                  </dd>
++                  <dt>前置参考</dt>
++                  <dd className="text-[11px]">
++                    {selected.node.order !== undefined && (
++                      <span className="font-mono text-[var(--text-primary)]">
++                        执行序号 #{selected.node.order} ·{' '}
++                      </span>
++                    )}
++                    {phaseContext?.priorNode ? (
++                      <span className="text-[var(--text-primary)]">
++                        {phaseContext.priorNode.node.label || phaseContext.priorNode.node.id}
++                      </span>
++                    ) : (
++                      <span className="text-[var(--text-secondary)]">无同阶段前序节点</span>
++                    )}
++                    <div className="mt-0.5 text-[10px] text-[var(--text-secondary)]">
++                      参考：按执行顺序推断，非真实依赖
++                    </div>
++                  </dd>
++                  <dt>下游解锁</dt>
++                  <dd className="text-[11px]">
++                    <span className="text-[var(--text-primary)]">
++                      {phaseContext ? `${phaseContext.subsequentCount} 个同阶段后续节点` : '0 个后续节点'}
++                    </span>
++                    {phaseContext?.subsequentNode && (
++                      <span className="text-[var(--text-secondary)]">
++                        （后续：{phaseContext.subsequentNode.node.label || phaseContext.subsequentNode.node.id}）
++                      </span>
++                    )}
++                    <div className="mt-0.5 text-[10px] text-[var(--text-secondary)]">
++                      参考：按执行顺序推断，非真实依赖
++                    </div>
++                  </dd>
++                  {selected.node.phase && (
++                    <>
++                      <dt>阶段</dt>
++                      <dd>{selected.node.phase}</dd>
++                    </>
++                  )}
++                  {selected.node.tokens && selected.node.tokens.total !== undefined && (
++                    <>
++                      <dt>Token 用量</dt>
++                      <dd className="tabular-nums text-[11px]">
++                        输入 {selected.node.tokens.input?.toLocaleString() ?? '-'} · 输出{' '}
++                        {selected.node.tokens.output?.toLocaleString() ?? '-'}
++                        {selected.node.tokens.cacheRead !== undefined
++                          ? ` · 缓存读 ${selected.node.tokens.cacheRead.toLocaleString()}`
++                          : ''}
++                        <br />
++                        总计 {selected.node.tokens.total.toLocaleString()}
++                      </dd>
++                    </>
++                  )}
++                  {selected.node.cost && selected.node.cost.usd !== undefined && (
++                    <>
++                      <dt>成本</dt>
++                      <dd className="tabular-nums text-[11px]">
++                        输入 {selected.node.cost.inputTokens?.toLocaleString() ?? '-'} · 输出{' '}
++                        {selected.node.cost.outputTokens?.toLocaleString() ?? '-'}
++                        <br />
++                        总计 ${selected.node.cost.usd.toFixed(6)}
++                      </dd>
++                    </>
++                  )}
++                </dl>
++              ) : (
++                <p className="text-xs text-[var(--text-secondary)]">
++                  {selected.node.tokens?.total !== undefined ? (
++                    <>
++                      Token 总计 {selected.node.tokens.total.toLocaleString()}
++                      {selected.node.cost?.usd !== undefined ? ` · 成本 $${selected.node.cost.usd.toFixed(6)}` : ''}
++                    </>
++                  ) : (
++                    '该快照未提供用量数据。'
++                  )}
++                </p>
++              )}
++              <NativeTaskDetail
++                key={sessionId + selected.key}
++                sessionId={sessionId}
++                address={detailAddress}
++              />
++              <NativeExecutionRecords sessionId={sessionId} taskId={selected.node.id} />
++            </div>
++          </aside>
++        )}
++      </div>
++
++      {hasOmissions && (
++        <p className="text-xs text-[var(--text-secondary)]">
++          部分数据未展示：{omitted?.runs ?? 0} 个运行、{omitted?.children ?? 0} 个子节点
++          {omitted?.byteLimitExceeded ? ' · 达到快照大小上限' : ''}
++        </p>
++      )}
++      <NativeExecutionRecords sessionId={sessionId} />
++    </div>
++  );
++}
++
++/** Whole-list counts (containers included) for the header line. */
++function taskCountsAll(rows: TaskRow[]) {
++  let total = 0;
++  for (const row of rows) {
++    total++;
++    void row;
++  }
++  return { total };
++}
+--- /dev/null
++++ b/packages/client/src/components/split/NativeTaskDetail.tsx
+@@ -0,0 +1,31 @@
++import {usePluginSend,useSessionEvents} from '@blackbelt-technology/dashboard-plugin-runtime/context';
++import {useEffect,useState} from 'react';
++/** Explicit on-demand fetch; no background transcript polling. */
++export function NativeTaskDetail({sessionId,address}:{sessionId:string;address?:string}) {
++ const send=usePluginSend();const events=useSessionEvents(sessionId);
++ const [request,setRequest]=useState<{id:string;address:string}>();
++ const [error,setError]=useState('');
++ const current=request?.address===address?request:undefined;
++ const response=current?[...events].reverse().find(e=>e.eventType==='native_subagent_detail'&&e.data.requestId===current.id&&e.data.address===address)?.data:undefined;
++ const text=response?.ok===true?String(response.text??''):'';
++ const facts={agent:/Agent:\s*([^\n\r]+)/.exec(text)?.[1],state:/State:\s*([^\n\r]+)/.exec(text)?.[1],mode:/Mode:\s*([^\n\r]+)/.exec(text)?.[1]};
++ const workSummary=text.split(/\n|\r/).find(line=>/^Step:\s*\d+/.test(line))?.replace(/^Step:\s*\d+\s*\((.*?)\)/,'$1');
++ useEffect(()=>{
++  if(!current || response)return;
++  const timer=setTimeout(()=>setError('未收到回复，请确认详情适配器已启用后重试'),20000);
++  return ()=>clearTimeout(timer);
++ },[current?.id,response]);
++ const load=()=>{
++  if(!address)return;
++  const id=crypto.randomUUID();setRequest({id,address});setError('');
++  Promise.resolve(send({type:'subagent_resync_request',sessionId,agentId:address,requestId:id,reason:'open'})).catch(()=>setError('请求发送失败'));
++ };
++ return <section className="space-y-2 border-t border-[var(--border-secondary)] pt-3" aria-label="执行器记录">
++  <div className="flex items-center justify-between gap-2"><h4 className="text-xs font-medium">执行器记录</h4><button type="button" disabled={!address || (!!current && !response && !error)} onClick={load} className="rounded border border-[var(--border-secondary)] px-2 py-1 text-xs disabled:opacity-50 focus-visible:outline">{current?'重新加载':'加载记录'}</button></div>
++  {!address&&<p className="text-xs text-[var(--text-secondary)]">该步骤尚无可验证的运行 ID，不能猜测对应日志。</p>}
++  <p className="text-[11px] text-[var(--text-secondary)]">只读查询；结果会进入当前 Dashboard 会话事件。</p>
++  {error&&!response&&<p role="alert" className="text-xs">{error}</p>}
++  {current&&!response&&!error&&<p role="status" className="text-xs text-[var(--text-secondary)]">等待执行器回复；若 20 秒后仍无响应，请确认详情适配器已启用。</p>}
++  {response&&<><p className="text-[11px] text-[var(--text-secondary)]">{response.ok===true?'最多 200 行执行记录，不保证完整历史':String(response.error??'无法加载')}</p>{response.ok===true&&<pre tabIndex={0} aria-label="当前节点执行器记录" className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-secondary)] p-2 text-[11px]">{String(response.text??'暂无记录')}{response.truncated?'\n[展示已截断]':''}</pre>}</>}
++ </section>;
++}
+--- /dev/null
++++ b/packages/client/src/components/split/RightPaneSwitch.tsx
+@@ -0,0 +1,106 @@
++/**
++ * Right pane switcher: a segmented control that toggles the right pane
++ * between the file editor and the Subagents view.
++ *
++ * Conforms to the WAI-ARIA APG radio-group pattern:
++ * `role="radiogroup"` with two `role="radio"` `aria-checked` segments, roving
++ * `tabindex`, Arrow/Home/End navigation, and Enter/Space selection.
++ */
++
++import { mdiFileDocumentOutline, mdiRobotOutline } from "@mdi/js";
++import { Icon } from "@mdi/react";
++import type React from "react";
++import { useRef } from "react";
++import type { RightPane } from "../../lib/layout/split-state.js";
++import { useOptionalSplitWorkspace } from "./SplitWorkspaceContext.js";
++
++interface Segment {
++  pane: RightPane;
++  icon: string;
++  label: string;
++}
++
++export function RightPaneSwitch() {
++  const ctx = useOptionalSplitWorkspace();
++  const refs = useRef<Array<HTMLButtonElement | null>>([]);
++  if (!ctx) return null;
++
++  const segments: Segment[] = [
++    { pane: "editor", icon: mdiFileDocumentOutline, label: "编辑器" },
++    { pane: "subagents", icon: mdiRobotOutline, label: "Subagents" },
++  ];
++  const active = ctx.split.rightPane;
++  const activeIndex = segments.findIndex((s) => s.pane === active);
++
++  const focusSegment = (index: number) => {
++    const clamped = (index + segments.length) % segments.length;
++    ctx.setRightPane(segments[clamped].pane);
++    refs.current[clamped]?.focus();
++  };
++
++  const onKeyDown = (e: React.KeyboardEvent, index: number) => {
++    switch (e.key) {
++      case "ArrowRight":
++      case "ArrowDown":
++        e.preventDefault();
++        focusSegment(index + 1);
++        break;
++      case "ArrowLeft":
++      case "ArrowUp":
++        e.preventDefault();
++        focusSegment(index - 1);
++        break;
++      case "Home":
++        e.preventDefault();
++        focusSegment(0);
++        break;
++      case "End":
++        e.preventDefault();
++        focusSegment(segments.length - 1);
++        break;
++      case " ":
++      case "Enter":
++        e.preventDefault();
++        ctx.setRightPane(segments[index].pane);
++        break;
++    }
++  };
++
++  return (
++    <div
++      role="radiogroup"
++      aria-label="右窗格视图"
++      data-testid="right-pane-switch"
++      className="inline-flex shrink-0 items-center whitespace-nowrap rounded border border-[var(--border-secondary)] overflow-hidden"
++    >
++      {segments.map((seg, i) => {
++        const checked = seg.pane === active;
++        return (
++          <button
++            key={seg.pane}
++            ref={(el) => {
++              refs.current[i] = el;
++            }}
++            type="button"
++            role="radio"
++            aria-checked={checked}
++            aria-label={seg.label}
++            tabIndex={i === (activeIndex < 0 ? 0 : activeIndex) ? 0 : -1}
++            data-testid={`right-pane-${seg.pane}`}
++            onClick={() => ctx.setRightPane(seg.pane)}
++            onKeyDown={(e) => onKeyDown(e, i)}
++            title={seg.label}
++            className={`inline-flex shrink-0 items-center gap-0.5 text-[10px] px-1.5 py-0.5 transition-colors ${
++              checked
++                ? "text-blue-400 bg-blue-500/10"
++                : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
++            }`}
++          >
++            <Icon path={seg.icon} size={0.4} className="inline" />
++            {seg.label}
++          </button>
++        );
++      })}
++    </div>
++  );
++}
+--- /dev/null
++++ b/packages/client/src/components/split/SubagentsView.tsx
+@@ -0,0 +1,30 @@
++import { useSessionSubagents, useShellConnectionStatus } from '@blackbelt-technology/dashboard-plugin-runtime/context';
++import type { SubagentState } from '@blackbelt-technology/pi-dashboard-subagents-plugin/client';
++import { SubagentDetailView } from '@blackbelt-technology/pi-dashboard-subagents-plugin/client';
++import { useSplitWorkspace } from './SplitWorkspaceContext.js';
++import { NativeSubagents } from './NativeSubagents.js';
++
++/** Read-only projection. Never equate a connected socket with fresh agent data. */
++export function SubagentsView() {
++  const { sessionId } = useSplitWorkspace();
++  const records = useSessionSubagents(sessionId);
++  const connection = useShellConnectionStatus();
++  const agents = [...new Map([...records.values()].map(value => [value.id, value as SubagentState])).values()];
++  return <section className="min-w-0 space-y-3 p-4 text-[var(--text-primary)]" aria-label="Subagents">
++    <header className="flex min-h-9 flex-wrap items-center justify-between gap-2">
++      <h2 className="text-sm font-semibold tracking-tight">Subagents</h2>
++      <span className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)]"><span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${connection === 'connected' ? 'bg-[var(--text-secondary)]' : 'bg-amber-500'}`} />只读 · {connection === 'connected' ? 'Dashboard 已连接' : '连接不可用 · 以下为已有快照'}</span>
++    </header>
++    <NativeSubagents sessionId={sessionId} />
++    {!!agents.length && <h3 className="text-[13px] font-semibold">Dashboard 子任务记录</h3>}
++    {agents.map(agent => <details key={agent.id} className="min-w-0 rounded-lg border border-[var(--border-secondary)]">
++      <summary className="cursor-pointer rounded-lg px-3 py-2 text-[13px] hover:bg-[var(--bg-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--text-secondary)]">
++        <strong className="break-words font-medium">{agent.displayName || agent.type || 'Subagent'}</strong><span className="ml-2 inline-block max-w-full break-words rounded-full border border-[var(--border-secondary)] px-2 py-0.5 text-[11px]">{agent.status}</span>
++        <span className="ml-2 break-words text-[11px] text-[var(--text-secondary)]">{agent.modelName || '模型未提供'} · {agent.durationMs === undefined ? '耗时未提供' : `${(agent.durationMs / 1000).toFixed(1)}s`}</span>
++        <div className="mt-1 break-words text-[11px] text-[var(--text-secondary)]">{agent.description || agent.id}</div>
++        {agent.activity && <div className="mt-1 break-words text-xs text-[var(--text-secondary)]">{agent.activity}</div>}
++      </summary>
++      <div className="min-w-0 overflow-x-auto border-t border-[var(--border-secondary)] p-3"><SubagentDetailView session={{subagents: new Map([[agent.id, agent]])}} agentId={agent.id} sessionId={sessionId} mode="inline" /></div>
++    </details>)}
++  </section>;
++}
+--- /dev/null
++++ b/packages/client/src/components/split/native-receipts.ts
+@@ -0,0 +1,18 @@
++import type { DashboardEvent } from '@blackbelt-technology/pi-dashboard-shared/types.js';
++/** Exact root identity only. Nested identity does not authorize showing siblings' output. */
++export function receiptMatchesTask(value: unknown, taskId: string): boolean {
++  if (!taskId || !value || typeof value !== 'object') return false;
++  const details = (value as Record<string, unknown>).details;
++  if (!details || typeof details !== 'object') return false;
++  const record = details as Record<string, unknown>;
++  return ['runId','asyncId','id'].some(key => typeof record[key] === 'string' && record[key] === taskId);
++}
++export function nativeReceipts(events: readonly DashboardEvent[], taskId?: string): DashboardEvent[] {
++  const calls = new Set<string>();
++  for (const event of events) {
++    if (event.eventType === 'tool_execution_start' && event.data.toolName === 'subagent' && typeof event.data.toolCallId === 'string') calls.add(event.data.toolCallId);
++  }
++  return events.filter(event => event.eventType === 'tool_execution_end'
++    && (event.data.toolName === 'subagent' || calls.has(String(event.data.toolCallId)))
++    && (!taskId || receiptMatchesTask(event.data.result, taskId))).slice(-30);
++}
+--- /dev/null
++++ b/packages/client/src/components/split/native-task-model.ts
+@@ -0,0 +1,270 @@
++export interface TaskNode {
++  id: string; label: string; state: string; description?: string; kind?: string;
++  startedAt?: number; endedAt?: number; modelThinking?: string; model?: string;
++  /** Child session title ("<agent>: <task excerpt>"), same mechanism as a main session. */
++  sessionName?: string;
++  /** Execution-order index from the snapshot. Order, NOT a dependency edge. */
++  order?: number;
++  /** Optional workflow phase grouping name. */
++  phase?: string;
++  tokens?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
++  cost?: { inputTokens?: number; outputTokens?: number; usd?: number };
++  activity?: { currentTool?: string; turnCount?: number; toolCount?: number };
++  children: TaskNode[];
++}
++const text = (value: unknown) => typeof value === 'string' ? value.slice(0, 500) : '';
++const time = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
++const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
++/** Global node budget, not exponential per-level allocation. */
++export function parseNativeNodes(value: unknown): TaskNode[] {
++  let remaining = 200;
++  function walk(input: unknown, depth: number): TaskNode[] {
++    if (!Array.isArray(input) || depth > 5) return [];
++    const out: TaskNode[] = [];
++    for (const item of input.slice(0, 40)) {
++      if (!remaining) break;
++      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id || item.id.length > 500) continue;
++      remaining--;
++      out.push({ id: item.id, kind: text(item.kind), label: item.kind === 'workflow' ? '工作流' : text(item.label), state: text(item.state) || 'unknown',
++        description: text(item.description) || text(item.goal) || undefined,
++        startedAt: time(item.startedAt), endedAt: time(item.endedAt), modelThinking: text(item.modelThinking),
++        model: text(item.model) || undefined,
++        order: count(item.order), phase: text(item.phase) || undefined,
++        sessionName: text(item.sessionName) || undefined,
++        tokens: item.tokens && typeof item.tokens === 'object' ? {
++          input: count(item.tokens.input), output: count(item.tokens.output),
++          cacheRead: count(item.tokens.cacheRead), cacheWrite: count(item.tokens.cacheWrite),
++          total: count(item.tokens.total)
++        } : undefined,
++        cost: item.cost && typeof item.cost === 'object' ? {
++          inputTokens: count(item.cost.inputTokens),
++          outputTokens: count(item.cost.outputTokens),
++          usd: typeof item.cost.usd === 'number' && Number.isFinite(item.cost.usd) ? item.cost.usd : undefined
++        } : undefined,
++        activity: {
++          currentTool: text(item.activity?.currentTool),
++          turnCount: count(item.activity?.turnCount),
++          toolCount: count(item.activity?.toolCount)
++        }, children: walk(item.children, depth + 1) });
++    }
++    // The producer may project a nested run both under its owning step and
++    // directly under that step's parent run. Only collapse identical copies;
++    // conflicting snapshots stay visible rather than discarding evidence.
++    const stepRuns = new Map<string, TaskNode[]>();
++    for (const step of out.filter(node => node.kind === 'step')) {
++      for (const child of step.children) {
++        if (child.kind !== 'subagent' && child.kind !== 'workflow') continue;
++        const key = `${child.kind}:${child.id}`;
++        stepRuns.set(key, [...(stepRuns.get(key) ?? []), child]);
++      }
++    }
++    return out.filter(node => {
++      if (node.kind !== 'subagent' && node.kind !== 'workflow') return true;
++      const matches = stepRuns.get(`${node.kind}:${node.id}`);
++      return !(matches?.length === 1 && JSON.stringify(matches[0]) === JSON.stringify(node));
++    });
++  }
++  return walk(value, 0);
++}
++export function nodeKindLabel(kind?: string): string {
++  return kind === 'workflow' ? '工作流' : kind === 'subagent' ? '子代理运行' : kind === 'step' ? '执行步骤' : kind === 'host-step' ? '宿主步骤' : '节点';
++}
++/** Short display form of a `provider/id` model ref; full ref belongs in a title. */
++export function modelShortName(model?: string): string | undefined {
++  if (!model) return undefined;
++  const id = model.split('/').pop() ?? model;
++  return id.length > 22 ? `${id.slice(0, 21)}…` : id;
++}
++export interface TaskRow { key: string; parent?: string; depth: number; node: TaskNode }
++export function flattenTasks(nodes: TaskNode[]): TaskRow[] {
++  const out: TaskRow[] = [];
++  function walk(items: TaskNode[], parent: string | undefined, depth: number) {
++    items.forEach((node, index) => {
++      const key = `${parent ?? 'root'}/${index}:${node.id}`;
++      out.push({key, parent, depth, node}); walk(node.children, key, depth + 1);
++    });
++  }
++  walk(nodes, undefined, 0); return out;
++}
++export function taskCounts(rows: TaskRow[]) {
++  const result = {running: 0, queued: 0, complete: 0, failed: 0, other: 0};
++  for (const {node} of rows) {
++    if (node.state === 'running') result.running++;
++    else if (node.state === 'queued') result.queued++;
++    else if (node.state === 'complete') result.complete++;
++    else if (node.state === 'failed') result.failed++;
++    else result.other++;
++  }
++  return result;
++}
++const STATE_RANK: Record<string, number> = { running: 0, queued: 1, failed: 2, partial: 3, paused: 4, stopped: 5, rejected: 6, complete: 7, unknown: 8 };
++export function stateRank(state: string): number {
++  return STATE_RANK[state] ?? 9;
++}
++export interface ProgressSegment { key: string; label: string; count: number; className: string }
++/** Container (workflow) rows are grouping labels, not executables, so they are
++ * excluded from the completion ratio. */
++export function progressSegments(rows: TaskRow[]): { segments: ProgressSegment[]; total: number; done: number; percent: number } {
++  const countable = rows.filter(row => row.node.kind !== 'workflow');
++  const use = countable.length ? countable : rows;
++  const counts = taskCounts(use);
++  const segments: ProgressSegment[] = [
++    { key: 'complete', label: '已完成', count: counts.complete, className: 'bg-emerald-500' },
++    { key: 'running', label: '运行中', count: counts.running, className: 'bg-blue-500' },
++    { key: 'failed', label: '失败', count: counts.failed, className: 'bg-red-500' },
++    { key: 'queued', label: '排队', count: counts.queued, className: 'bg-amber-500' },
++    { key: 'other', label: '其他', count: counts.other, className: 'bg-[var(--text-secondary)]' },
++  ];
++  const total = use.length;
++  const done = counts.complete;
++  return { segments, total, done, percent: total ? Math.round((done / total) * 100) : 0 };
++}
++export type HierarchyRole = 'main' | 'child' | 'grandchild' | 'step' | 'workflow';
++
++export function hierarchyRole(node: TaskNode, depth: number): HierarchyRole {
++  if (node.kind === 'workflow') return 'workflow';
++  if (node.kind === 'step' || node.kind === 'host-step') return 'step';
++  if (node.kind === 'main') return 'main';
++  if (depth <= 1) return 'child';
++  return 'grandchild';
++}
++
++export function hierarchyRoleLabel(role: HierarchyRole): string {
++  switch (role) {
++    case 'main':
++      return '主代理';
++    case 'child':
++      return '子代理';
++    case 'grandchild':
++      return '孙代理';
++    case 'step':
++      return '执行步骤';
++    case 'workflow':
++      return '工作流';
++  }
++}
++
++/**
++ * Returns the nearest ancestor in the parent chain that is a subagent or workflow.
++ * Root nodes (no ancestor) return undefined.
++ */
++export function dispatcherOf(rows: TaskRow[], row: TaskRow): TaskRow | undefined {
++  const byKey = new Map(rows.map(r => [r.key, r]));
++  let currentKey = row.parent;
++  const seen = new Set<string>();
++  while (currentKey && !seen.has(currentKey)) {
++    seen.add(currentKey);
++    const parentRow = byKey.get(currentKey);
++    if (!parentRow) break;
++    if (parentRow.node.kind === 'subagent' || parentRow.node.kind === 'workflow') {
++      return parentRow;
++    }
++    currentKey = parentRow.parent;
++  }
++  return undefined;
++}
++
++export interface FlowGroup { key: string; title: string; rows: TaskRow[]; fromPhase: boolean }
++/** Build the execution-order spine for the flow view.
++ *
++ * IMPORTANT: pi-subagents does not record dependency edges (there is no
++ * `dependsOn` field anywhere in its status/snapshot schema). The only real
++ * ordering facts available are `order` and `phase`. The flow view therefore
++ * draws execution ORDER, never a dependency graph, and the UI must say so. */
++export function buildFlowGroups(rows: TaskRow[]): FlowGroup[] {
++  const use = rows.filter(row => row.node.kind !== 'workflow');
++  const items = use.length ? use : rows;
++  const byKey = new Map(rows.map(r => [r.key, r]));
++
++  function rootAncestorOf(row: TaskRow): TaskRow {
++    let current = row;
++    const seen = new Set<string>();
++    while (current.parent && !seen.has(current.parent)) {
++      seen.add(current.parent);
++      const parentRow = byKey.get(current.parent);
++      if (!parentRow) break;
++      current = parentRow;
++    }
++    return current;
++  }
++
++  function rootPhaseOf(root: TaskRow): string | undefined {
++    if (root.node.phase?.trim()) return root.node.phase.trim();
++    let currentKey = root.parent;
++    const seen = new Set<string>();
++    while (currentKey && !seen.has(currentKey)) {
++      seen.add(currentKey);
++      const parentRow = byKey.get(currentKey);
++      if (!parentRow) break;
++      if (parentRow.node.phase?.trim()) return parentRow.node.phase.trim();
++      currentKey = parentRow.parent;
++    }
++    return undefined;
++  }
++
++  function compareSiblings(left: TaskRow, right: TaskRow): number {
++    const lo = left.node.order, ro = right.node.order;
++    if (lo !== undefined && ro !== undefined && lo !== ro) return lo - ro;
++    if (lo !== undefined && ro === undefined) return -1;
++    if (lo === undefined && ro !== undefined) return 1;
++    return stateRank(left.node.state) - stateRank(right.node.state);
++  }
++
++  const groups = new Map<string, FlowGroup>();
++  items.forEach((row) => {
++    const root = rootAncestorOf(row);
++    const disp = dispatcherOf(rows, root);
++    const dispName = disp ? (disp.node.label || disp.node.id) : '主 Agent';
++    const phase = rootPhaseOf(root);
++    const title = phase ? `由 ${dispName} 派发 · 阶段 ${phase}` : `由 ${dispName} 派发`;
++    const dispKey = disp ? disp.key : '__main__';
++    const groupKey = `${dispKey}\u0000${phase ?? ''}`;
++    const existing = groups.get(groupKey);
++    const entry = existing ?? { key: groupKey, title, rows: [] as TaskRow[], fromPhase: !!phase };
++    entry.rows.push({ ...row });
++    if (!existing) groups.set(groupKey, entry);
++  });
++
++  // Keep filtered containers in the traversal so each full subtree stays
++  // together. Only emitted rows, not ancestry or sibling order, are filtered.
++  const childrenMap = new Map<string, TaskRow[]>();
++  for (const row of rows) {
++    if (row.parent && byKey.has(row.parent)) {
++      const children = childrenMap.get(row.parent) ?? [];
++      children.push(row);
++      childrenMap.set(row.parent, children);
++    }
++  }
++  for (const children of childrenMap.values()) {
++    children.sort(compareSiblings);
++  }
++
++  for (const group of groups.values()) {
++    const groupKeySet = new Set(group.rows.map(r => r.key));
++    const roots = new Map<string, TaskRow>();
++    for (const row of group.rows) {
++      const root = rootAncestorOf(row);
++      roots.set(root.key, root);
++    }
++
++    const ordered: TaskRow[] = [];
++    function dfs(row: TaskRow) {
++      if (groupKeySet.has(row.key)) ordered.push({ ...row });
++      const children = childrenMap.get(row.key);
++      if (children) {
++        for (const child of children) {
++          dfs(child);
++        }
++      }
++    }
++
++    for (const root of [...roots.values()].sort(compareSiblings)) {
++      dfs(root);
++    }
++
++    group.rows = ordered;
++  }
++
++  return [...groups.values()];
++}
++

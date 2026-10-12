@@ -1,0 +1,49 @@
+{
+  "schema": "pi-research-harness.snapshot.v1",
+  "version": "0.1.0",
+  "date": "2026-10-12",
+  "upstream": {
+    "url": "https://github.com/BlackBeltTechnology/pi-agent-dashboard.git",
+    "commit": "04985091706cb77d5e2f73bbf8b906966e9d97c7",
+    "packageVersion": "0.8.0",
+    "license": "MIT"
+  },
+  "piVersion": "1.0.0",
+  "frontendHashes": {
+    "packages/client/src/App.tsx": "86106b4f85fa9fcbeffd0c6ef7bea4ce12f1557bfeccafad6d4a1a25be6b66fc",
+    "packages/client/src/components/chat/ChatView.tsx": "aec59e4dd408ee0b7a8c41be47f0ab1d3a04961bea1d9f79d294e7e90db6e7ef",
+    "packages/client/src/components/session/SessionHeader.tsx": "1723124bf50875f9add9ce8ef0dc6dccd87ce64c36f7f6a676df031a2babc813",
+    "packages/client/src/components/settings/ModelSelector.tsx": "0e2af953968106c266c267be189da28a616f9f0ca1ec7e31eba6f36769d53762",
+    "packages/client/src/components/split/LayoutModeSwitch.tsx": "7789cd01732dfbd5778cb2389f4fc324c25b14a3625daef55d00e732174ad553",
+    "packages/client/src/components/split/SessionSplitView.tsx": "e814f37c3361f147f44abc4585af1b68c2049d511a7d7c9494069f6d0f58bf48",
+    "packages/client/src/components/split/SplitWorkspace.tsx": "4c62cad788acdac2f12efb1cd62d04fff583c1522728b601d9f6eaba1e12173b",
+    "packages/client/src/components/split/SplitWorkspaceContext.tsx": "e2d00d86c4e7aef77d98a61e1b85f1213959e0665e40b8c425e7c4f8bcbc3beb",
+    "packages/client/src/lib/chat/event-reducer.ts": "09b5c7423a604b6779cab43a6bd51dd2a292018b07a97b9053bdea33a0f0b7df",
+    "packages/client/src/lib/layout/split-state.ts": "292f0cb1bc1d04c9e7a8903f052c09e1e54c9ec1651921a037cde42f41ed8e8f",
+    "packages/client/src/components/split/NativeExecutionRecords.tsx": "3df75e64f93e65a4ca4d6c3fd3ba93e29eba6131e9d7e1de0ee32919d7eb559b",
+    "packages/client/src/components/split/NativeSubagents.tsx": "4eb8146e2f4f8ebeb2400b98202db7ea1fd053fe17e6e23cfa8296c35952d031",
+    "packages/client/src/components/split/NativeTaskDetail.tsx": "4a309560bd69a518b106793fb781744cd7451930bf5aebf04b1ccd61878e12d0",
+    "packages/client/src/components/split/RightPaneSwitch.tsx": "5a1c7f37933c94a79b7cbdb6953b93907308da0ffb3d500fe84df9db48c65f71",
+    "packages/client/src/components/split/SubagentsView.tsx": "e40b1e18a5fbfd74480234d3d2a18b8abca063fd546e3f4f426ce7a392ffba93",
+    "packages/client/src/components/split/native-receipts.ts": "d62e43408296acc1dcc5242a64ad642ef25793edec22da7fa1baa54f7f800f22",
+    "packages/client/src/components/split/native-task-model.ts": "989bad77c01b067192d7439bba31f8fb6419c6ff83886468f1df54cd577b1659"
+  },
+  "bridgeHashes": {
+    "packages/extension/src/bridge.ts": "5ec2f2d9250818e6a16b4a74ae8e413e488e70c0fa4d6b8a2c2ea9721b9dfe06",
+    "packages/extension/src/native-subagent-observer.ts": "a338a304feafd9f13155c2a99a517363150523cb228c16ebdbdc4639d12f8b0c",
+    "packages/extension/src/native-subagent-detail.ts": "10d59b3d8af62d1666b563185843ae0ff7b9430c50dc1db180e9583a5018a860"
+  },
+  "liveMainAssetSHA256": "8275ddee088e902beabe9006a89023d74e73a0f3ea688d937f6bd43f2fe62399",
+  "excluded": [
+    "B1/R4 paused history-replay backend candidate",
+    "credentials and real provider configuration",
+    "session/research records",
+    "installed node_modules and compiled dist"
+  ],
+  "limitations": [
+    "Portable installer is separately validated offline; the captured environment is Linux",
+    "Current-page final-message undo tested; arbitrary history editing not promised",
+    "Backend refresh/reconnect history repair is intentionally not included",
+    "Built asset hash is the deployment reference; rebuilds can differ by dependency/runtime platform"
+  ]
+}

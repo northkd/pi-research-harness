@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "pi-dashboard": {
+      "url": "http://127.0.0.1:8000/mcp"
+    },
+    "research-browser": {
+      "command": "node",
+      "args": [
+        "/ABSOLUTE/PATH/pi-research-harness/.runtime/browser-mcp/node_modules/chrome-devtools-mcp/build/src/index.js",
+        "--browserUrl=http://127.0.0.1:9222"
+      ]
+    }
+  }
+}

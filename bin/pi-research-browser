@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+PROFILE="${PI_RESEARCH_BROWSER_PROFILE:-$HOME/.local/share/pi-research-harness/browser-profile}"
+CHROME="${PI_RESEARCH_CHROME:-google-chrome}"
+mkdir -p "$PROFILE"
+chmod 700 "$PROFILE"
+exec "$CHROME" --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+  --user-data-dir="$PROFILE" --disable-dev-shm-usage --no-first-run --no-default-browser-check \
+  "${1:-https://chatgpt.com/}"

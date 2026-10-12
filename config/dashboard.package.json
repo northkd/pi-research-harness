@@ -1,0 +1,13 @@
+{
+  "dependencies": {
+    "@blackbelt-technology/pi-agent-dashboard": "0.8.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0"
+  },
+  "overrides": {
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0"
+  }
+}

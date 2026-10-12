@@ -1,0 +1,34 @@
+{
+  "name": "pi-research-harness",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Portable Pi research environment, evidence workflows and deployed dashboard customizations",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/northkd/pi-research-harness.git"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "pi": {
+    "extensions": [
+      "./integration/index.mjs",
+      "./extensions/undo-last.ts"
+    ],
+    "skills": [
+      "./integration/skills",
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "test": "node --test integration/test/*.test.mjs tests/*.test.mjs",
+    "check:release": "python3 scripts/check-release.py",
+    "check:syntax": "bash scripts/check-syntax.sh"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

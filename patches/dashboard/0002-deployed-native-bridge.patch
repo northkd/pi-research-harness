@@ -1,0 +1,187 @@
+--- a/packages/extension/src/bridge.ts
++++ b/packages/extension/src/bridge.ts
+@@ -166,6 +166,9 @@
+   return (process as any)[BRIDGE_KEY];
+ }
+ 
++import { observeNativeSubagents } from "./native-subagent-observer.js";
++import { createNativeDetailReader } from "./native-subagent-detail.js";
++
+ export default function (pi: ExtensionAPI) {
+   try {
+     // Activate provider management before bridge init so providers are
+@@ -245,6 +248,8 @@
+ 
+   /** Try to apply the default model from config. Returns the model string if not found (pending), null if applied or no default. */
+   function applyDefaultModel(): string | null {
++    // Child model belongs to its launcher; also guards deferred provider retries.
++    if (process.env.PI_SUBAGENT_CHILD === "1") return null;
+     const freshConfig = loadConfig();
+     if (!freshConfig.defaultModel || !cachedModelRegistry) return null;
+     const slashIdx = freshConfig.defaultModel.indexOf("/");
+@@ -1240,6 +1245,7 @@
+         // agentSessionId (from a deep-link route); resync() resolves both.
+         // See change: resolve-subagent-inspector-by-session-id (D3/D4).
+         const requestedId = (msg as { agentId?: unknown }).agentId;
++        if (nativeDetails.request(requestedId, (msg as {requestId?: unknown}).requestId)) return;
+         if (typeof requestedId === "string" && requestedId.length > 0) {
+           // The reply is NEVER stripped: it IS the pull model's answer and
+           // carries the full timeline for a RUNNING agent — exactly the shape a
+@@ -2536,6 +2542,12 @@
+   // event was silently dropped (automation runs then hung until the max-age
+   // reaper). The gating + subagent-buffer semantics live in `forwardBusEvent`.
+   // See change: fix-automation-run-lifecycle.
++  const nativeSession = () => sessionReady && isActive() && connection.isConnected && process.env.PI_SUBAGENT_CHILD !== "1" ? sessionId : undefined;
++  const nativeDetails = createNativeDetailReader(pi.events, nativeSession,
++    data => sendEventForward("native_subagent_detail", data));
++  const disposeNativeSubagents = observeNativeSubagents(pi.events, nativeSession,
++    data => { nativeDetails.update(data.snapshot); sendEventForward("native_subagents_snapshot", data); });
++
+   const disposeEventBusForwarding = registerEventBusForwarding(
+     pi.events,
+     {
+@@ -3482,6 +3494,8 @@
+     // Release our EventBus subscriptions. Nothing to "restore": the bridge no
+     // longer replaces any host function. See change: fix-automation-run-lifecycle.
+     disposeEventBusForwarding();
++    disposeNativeSubagents();
++    nativeDetails.dispose();
+     connection.disconnect();
+   };
+ 
+--- /dev/null
++++ b/packages/extension/src/native-subagent-observer.ts
+@@ -0,0 +1,73 @@
++/** Read-only native pi-subagents RPC observer. No spawn/control or filesystem access. */
++const REALTIME_EVENTS = [
++  'subagent:child-status',
++  'subagent:async-started',
++  'subagent:async-complete',
++  'subagent:control-event',
++  'subagent:process-terminal',
++];
++/** Coalesce bursts: a fan-out can emit many child-status lines in one tick. */
++const REALTIME_DEBOUNCE_MS = 150;
++/** Safety-net poll, kept as the floor the reference project also uses. */
++const POLL_INTERVAL_MS = 2000;
++/** Freshness marker: a snapshot older than this is shown as stale by the UI. */
++const STALE_AFTER_MS = 20000;
++export function observeNativeSubagents(events: {
++  on: (name: string, cb: (data: any) => void) => (() => void) | void;
++  emit: (name: string, data: unknown) => void;
++}, session: () => string | undefined, publish: (data: Record<string, unknown>) => void) {
++  let disposed = false;
++  let pending = false;
++  let release: (() => void) | undefined;
++  let timeout: ReturnType<typeof setTimeout> | undefined;
++  let debounce: ReturnType<typeof setTimeout> | undefined;
++  let lastSignature = '';
++  let lastPublished = 0;
++  const tick = () => {
++    const owner = session();
++    if (disposed || pending || !owner) return;
++    pending = true;
++    const requestId = crypto.randomUUID();
++    const done = () => { pending = false; release?.(); release = undefined; clearTimeout(timeout); };
++    const deliver = (data: Record<string, unknown>) => {
++      if (disposed || session() !== owner) return;
++      // Ignore timestamps when deduplicating; retain a heartbeat so the UI can
++      // distinguish "no change" from "adapter stopped answering".
++      const signature = owner + JSON.stringify(data, (key, value) => /^(generatedAt|receivedAt|updatedAt)$/.test(key) ? undefined : value);
++      if (signature === lastSignature && Date.now() - lastPublished < STALE_AFTER_MS) return;
++      lastSignature = signature;
++      lastPublished = Date.now();
++      publish({ ...data, receivedAt: lastPublished });
++    };
++    const off = events.on(`subagents:rpc:v1:reply:${requestId}`, reply => {
++      done();
++      deliver({ available: reply?.success === true,
++        snapshot: reply?.success ? reply.data?.asyncSnapshot : undefined,
++        fleet: reply?.success ? reply.data?.fleet : undefined });
++    });
++    release = typeof off === 'function' ? off : undefined;
++    timeout = setTimeout(() => { done(); deliver({ available: false }); }, 4000);
++    try { events.emit('subagents:rpc:v1:request', { version: 1, requestId, method: 'status', params: {} }); }
++    catch { done(); deliver({ available: false }); }
++  };
++  // Event-driven path: any real subagent activity schedules an immediate refresh.
++  const schedule = () => {
++    if (disposed || debounce) return;
++    debounce = setTimeout(() => { debounce = undefined; tick(); }, REALTIME_DEBOUNCE_MS);
++  };
++  const unsubscribes = REALTIME_EVENTS.map(name => {
++    try { return events.on(name, () => schedule()); }
++    catch { return undefined; }
++  });
++  const interval = setInterval(tick, POLL_INTERVAL_MS);
++  interval.unref?.();
++  tick();
++  return () => {
++    disposed = true;
++    clearInterval(interval);
++    clearTimeout(timeout);
++    if (debounce) clearTimeout(debounce);
++    release?.();
++    for (const off of unsubscribes) if (typeof off === 'function') off();
++  };
++}
+--- /dev/null
++++ b/packages/extension/src/native-subagent-detail.ts
+@@ -0,0 +1,57 @@
++type Bus = {on(name: string, cb: (value: any) => void): (() => void) | void; emit(name: string, value: unknown): void};
++const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
++/** Internal detail address. Never accepts paths or arbitrary executor parameters. */
++export function parseNativeDetailAddress(value: unknown): {id: string; index?: number} | undefined {
++  if (typeof value !== 'string') return;
++  const match = /^native-detail:([^:]+)(?::(\d{1,2}))?$/.exec(value);
++  if (!match || !UUID.test(match[1])) return;
++  return {id: match[1], ...(match[2] === undefined ? {} : {index: Number(match[2])})};
++}
++export function nativeDetailTargets(snapshot: any): Set<string> {
++  const targets = new Set<string>(); let budget = 300;
++  function walk(nodes: any, owner?: string, depth = 0) {
++    if (!Array.isArray(nodes) || depth > 6) return;
++    for (const node of nodes.slice(0,40)) {
++      if (--budget < 0) return;
++      if (!node || typeof node !== 'object') continue;
++      const run = ['subagent','workflow'].includes(node.kind) && typeof node.id === 'string' && UUID.test(node.id) ? node.id : undefined;
++      if (run) targets.add(`native-detail:${run}`);
++      const step = node.kind === 'step' && typeof node.id === 'string' ? /^step:(\d{1,2})$/.exec(node.id) : null;
++      if (step && owner) targets.add(`native-detail:${owner}:${Number(step[1])}`);
++      walk(node.children,run ?? owner,depth+1);
++    }
++  }
++  walk(snapshot?.runs); return targets;
++}
++/** Two concurrent read-only requests; replies are current-session and request scoped. */
++export function createNativeDetailReader(bus: Bus, session: () => string | undefined,
++  publish: (data: Record<string,unknown>) => void) {
++  let owner: string | undefined; let targets = new Set<string>();
++  const pending = new Map<string,()=>void>();
++  return {
++    update(snapshot: unknown) { owner=session(); targets=nativeDetailTargets(snapshot); },
++    request(address: unknown, requestId: unknown) {
++      if (typeof address !== 'string' || !address.startsWith('native-detail:')) return false;
++      const current=session();
++      if (!current || typeof requestId !== 'string' || !UUID.test(requestId)) return true;
++      const reply = (data: Record<string,unknown>) => {if(session()===current) publish({address,requestId,__resyncRequestId:requestId,...data});};
++      const target=parseNativeDetailAddress(address);
++      if (!target || owner!==current || !targets.has(address)) {reply({ok:false,error:'该节点不在当前会话可查询快照内'});return true;}
++      if (pending.has(requestId)) return true;
++      if (pending.size>=2) {reply({ok:false,error:'详情查询繁忙，请稍后重试'});return true;}
++      const rpcId=crypto.randomUUID(); let timer: ReturnType<typeof setTimeout>;
++      const off=bus.on(`subagents:rpc:v1:reply:${rpcId}`,value=>{
++        cleanup();
++        if (value?.success!==true) {reply({ok:false,error:'执行器未能提供此节点的记录'});return;}
++        const text=typeof value.data?.text==='string'?value.data.text:'';
++        reply({ok:true,text:text.slice(0,60000),truncated:text.length>60000,receivedAt:Date.now(),scope:'执行器返回的最多 200 行记录，不保证完整历史'});
++      });
++      function cleanup(){clearTimeout(timer);if(typeof off==='function')off();pending.delete(requestId as string);}
++      timer=setTimeout(()=>{cleanup();reply({ok:false,error:'详情查询超时'});},15000);
++      pending.set(requestId,cleanup);
++      try {bus.emit('subagents:rpc:v1:request',{version:1,requestId:rpcId,method:'status',params:{...target,view:'transcript',lines:200}});} catch {cleanup();reply({ok:false,error:'详情查询发送失败'});}
++      return true;
++    },
++    dispose(){for(const cleanup of pending.values())cleanup();pending.clear();targets.clear();owner=undefined;}
++  };
++}
