@@ -20,7 +20,7 @@ export function makeMcp(repo, _agentDir, options = {}) {
   if (options.dashboard) mcpServers['pi-dashboard'] = {url:'http://127.0.0.1:8000/mcp'};
   if (options.browser) mcpServers['research-browser'] = {
     command:process.execPath,
-    args:[path.join(repo,'.runtime/browser-mcp/node_modules/chrome-devtools-mcp/build/src/index.js'),'--browserUrl=http://127.0.0.1:9222'],
+    args:[path.join(repo,'.runtime/browser-mcp/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js'),'--browserUrl=http://127.0.0.1:9222','--no-usage-statistics','--no-performance-crux'],
   };
   return {mcpServers};
 }

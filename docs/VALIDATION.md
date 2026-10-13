@@ -10,6 +10,16 @@
 - 两个dashboard补丁在固定上游源码上`git apply --check`及应用通过，**20个发布文件hash匹配**。
 - `install.sh --dry-run`与`prepare-dashboard.sh --dry-run`通过；不访问模型、不安装依赖、不启动/restart/reload运行环境。
 
+## 2026-10-13 迁移复核
+
+- 从已发布 main 全新 clone，原有离线测试28/28、语法、白名单和dry-run通过。
+- 隔离HOME/agent/cache实际执行旧安装脚本：Pi1.0.0可运行，但13个固定npm扩展未安装。虽然命令退出0，此项**不能算完整安装PASS**。
+- 发布版修正固定包首次安装和浏览器MCP入口；修正后离线测试**32/32通过**。其中4个新增安装测试使用模拟npm过程，检查退出0但缺包不能通过、固定版本与过滤保护、check-only不安装。
+- 浏览器固定版本实际bin入口的MCP initialize响应通过，旧库入口无响应。
+- 本轮重新在固定上游源码应用两个补丁，20文件hash匹配。
+- 修正后13包实际安装未重跑：收尾资源低于2GiB可用内存门槛。没有真实新机、认证模型或完整dashboard重建验收。
+- 详细迁移差异与必要步骤见 [MIGRATION.md](MIGRATION.md)。
+
 ## 当前可用环境的来源证据
 
 已部署最小dashboard前端的定向测试25通过、2跳过；前端production TypeScript检查通过（不含testonly源文件）；实际Vite构建及预压缩通过。运行环境health/index/JS资源SHA核验通过。

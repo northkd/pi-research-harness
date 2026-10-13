@@ -41,7 +41,13 @@ test('dry-run has no filesystem side effects and optional MCP endpoints stay loo
   const result=await configure(repositoryRoot,agent,{dashboard:true,browser:true,image:true,dryRun:true});
   assert.equal(result.settings.extensions.at(-1),path.join(repositoryRoot,'extensions/image-generation.ts'));
   assert.equal(result.mcp.mcpServers['pi-dashboard'].url,'http://127.0.0.1:8000/mcp');
-  assert.ok(result.mcp.mcpServers['research-browser'].args.includes('--browserUrl=http://127.0.0.1:9222'));
+  const browserArgs=result.mcp.mcpServers['research-browser'].args;
+  assert.equal(browserArgs[0],path.join(repositoryRoot,'.runtime/browser-mcp/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js'));
+  assert.ok(browserArgs.includes('--browserUrl=http://127.0.0.1:9222'));
+  assert.ok(browserArgs.includes('--no-usage-statistics'));
+  assert.ok(browserArgs.includes('--no-performance-crux'));
+  const example=JSON.parse(await fs.readFile(path.join(repositoryRoot,'config/mcp.example.json'),'utf8'));
+  assert.ok(example.mcpServers['research-browser'].args[0].endsWith('/build/src/bin/chrome-devtools-mcp.js'));
   await assert.rejects(fs.stat(agent),{code:'ENOENT'});
  }finally{await fs.rm(temp,{recursive:true,force:true});}
 });
