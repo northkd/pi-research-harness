@@ -4,7 +4,7 @@
 
 ## 1. 克隆与检查
 
-仓库目前为私有。获得访问权限后：
+仓库现为公开，可直接克隆：
 
 ```bash
 git clone https://github.com/northkd/pi-research-harness.git
