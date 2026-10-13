@@ -1,0 +1,29 @@
+{
+  "schema": "pi-research-source-coverage.v1",
+  "date": "2026-10-13",
+  "scope": "User-approved non-sensitive current software snapshot; not private machine state",
+  "covered": {
+    "dashboardSourceHashes": 29,
+    "dashboardPatchFiles": 3,
+    "subagentsDeployedSourcePatch": "0.76.1 nested-route identity with before/after SHA256",
+    "routingModules": 2,
+    "publicDependencyLocks": ["pi", "extensions", "browser"],
+    "pinnedNpmExtensionRoots": 13,
+    "portablePluginBridges": ["automation", "flows", "goal", "flows-anthropic-bridge"],
+    "knowledgeBaseServerAndProjectTemplate": true,
+    "serviceAndLoopbackProxyTemplates": true,
+    "compactionAndNonAccountThinkingSettings": true,
+    "externalSkillSources": 88,
+    "externalSkillInventory": 108,
+    "perFileLicenseAndSha256Manifest": "config/skill-provenance.json"
+  },
+  "remaining": {
+    "skillsWithoutEstablishedSourceOrLicense": 20,
+    "credentialsBrowserStatePrivateSessionsPapersAndResults": "intentionally excluded; secure out-of-band migration only",
+    "modelAccountMappingAndRealRoutingHistory": "local configuration, not publication content",
+    "systemToolsAndAuthorizedRemoteResources": "install/configure locally; templates and requirements included",
+    "trueSecondDeviceOrCrossOsAndAuthenticatedWorkflows": "not tested",
+    "dashboardFreshFullBuildAndDeployment": "not performed by this source export task"
+  },
+  "doesNotAutomaticallyInvokeModelsJobsIndexingOrServices": true
+}

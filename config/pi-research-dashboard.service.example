@@ -11,6 +11,8 @@ Environment=PI_DASHBOARD_HOST=127.0.0.1
 Environment=PI_DASHBOARD_PORT=8000
 Environment=PI_DASHBOARD_PI_PORT=9999
 Environment=PI_GATEWAY_TCP=0
+Environment=PI_RESEARCH_AGENT_DIR=/ABSOLUTE/PATH/isolated-research-agent
+KillMode=control-group
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

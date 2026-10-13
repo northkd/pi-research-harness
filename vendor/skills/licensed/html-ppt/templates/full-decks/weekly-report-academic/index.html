@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-themes="academic-paper,corporate-clean,minimal-white,engineering-whiteprint" data-theme-base="../../../assets/themes/">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作汇报模板骨架</title>
+<link rel="stylesheet" href="../../../assets/fonts.css">
+<link rel="stylesheet" href="../../../assets/base.css">
+<link rel="stylesheet" id="theme-link" href="../../../assets/themes/academic-paper.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="tpl-weekly-report-academic">
+<div class="deck">
+
+  <section class="slide agenda-slide" data-title="汇报大纲">
+    <div class="page-band"></div>
+    <h1 class="page-title">汇报大纲</h1>
+    <div class="agenda-body">
+      <div class="agenda-group">
+        <div class="agenda-group-title">文献汇报</div>
+        <ol class="agenda-list">
+          <li>基本信息和摘要</li>
+          <li>背景和主要内容</li>
+          <li>结论和亮点</li>
+        </ol>
+      </div>
+      <div class="agenda-group">
+        <div class="agenda-group-title">工作汇报</div>
+        <ol class="agenda-list">
+          <li>系统工作的内容梗概</li>
+          <li>近两周的工作进展</li>
+          <li>工作的问题和后续计划</li>
+        </ol>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这一页先给听众一个整体地图。上半部分是文献汇报骨架，下半部分是工作汇报骨架，说明这套模板适合统一组会使用。</p>
+      <p>如果这次是工作汇报，就告诉大家后面主要看内容梗概、工作进展和问题计划三部分。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="内容梗概">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">内容梗概</div>
+      <div class="nav-label nav-center">工作进展</div>
+      <div class="nav-label nav-right">问题与计划</div>
+    </div>
+    <div class="page-body single-col">
+      <p>近期的主要工作，主要围绕 XX 体系（材料 / 分子），利用第一性原理计算研究其 XX 性质（如电子结构 / 催化路径 / 缺陷形成能），目标是解决 XX 问题（如解释实验现象 / 设计新材料）。</p>
+      <p>问题来源和依据稍微介绍一点。限时 1 分钟。</p>
+      <p class="page-count">1页 PPT</p>
+    </div>
+    <aside class="notes">
+      <p>内容梗概页只回答三个问题：最近在做什么、为什么做、想解决什么问题。控制在一分钟左右，不要把细节提前讲完。</p>
+      <p>这一页的作用是给后面的工作进展页做铺垫，让听众知道你后面的图和结果是在服务哪个核心目标。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="工作进展">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">工作梗概</div>
+      <div class="nav-label nav-center">工作进展</div>
+      <div class="nav-label nav-right">问题与计划</div>
+    </div>
+    <div class="page-body single-col">
+      <div class="section-title">已完成任务：例如：</div>
+      <p>建模或测试：构建的体系示意图（直接放图）+ 关键参数（如超胞大小、掺杂位点）。</p>
+      <p>计算内容：列出具体计算类型及状态，“完成：结构优化（收敛至 0.01 eV/Å）→ 静态自洽（电子密度）→ 能带 / 态密度计算（图1）”。</p>
+      <p>核心结果：展示 2-3 个关键图表 + 结论。</p>
+      <p>论文撰写：</p>
+      <p class="page-count">2-3页 PPT</p>
+    </div>
+    <aside class="notes">
+      <p>工作进展页重点是“已经做成了什么”。建议按照建模、计算、结果、写作四段来讲，每一段给一个可验证的产出。</p>
+      <p>如果有图，就让图承担证据功能；如果没有图，也要让听众听完后能明确知道你完成到了哪一步。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="问题与计划">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">工作梗概</div>
+      <div class="nav-label nav-center">工作进展</div>
+      <div class="nav-label nav-right">问题与计划</div>
+    </div>
+    <div class="page-body single-col">
+      <div class="section-title">技术问题</div>
+      <p>技术问题（如收敛困难、内存不足）：截图列出日志、输入参数等，描述可能的解决方案。</p>
+
+      <div class="section-title">科学问题</div>
+      <p>科学问题（如结果与预期不符）：介绍问题的来源，截图列出参考资料，描述如何考虑的。吸附能异常可能与表面偶极修正相关，已提交测试计算。</p>
+
+      <div class="section-title">明确未来两周的核心任务：例如</div>
+      <ol class="number-list">
+        <li>完成过渡态计算（预估 2 天）；</li>
+        <li>分析反应能垒（需结合脚本处理数据）；</li>
+        <li>补充氧吸附模型（验证活性位点）。</li>
+      </ol>
+
+      <div class="section-title">工作中的求助</div>
+      <p>非当前研究中的具体，而是思考或学习遇到的问题等。请教：在过渡态搜索中，初始结构选择更倾向于实验构型还是对称破缺构型？是否需要对比 PBE / HSE06 能带结果以验证结论？</p>
+
+      <p class="page-count">1页 PPT</p>
+    </div>
+    <aside class="notes">
+      <p>最后一页把问题和后续计划说清楚。先讲当前卡住的技术或科学问题，再给出下一阶段要做的三件事，最后明确需要组会提供什么反馈。</p>
+      <p>如果你希望导师或同学给建议，就把问题提得具体一些，不要只说“目前还有一些困难”。</p>
+    </aside>
+  </section>
+
+</div>
+<script src="../../../assets/runtime.js"></script>
+</body>
+</html>

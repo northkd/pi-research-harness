@@ -1,0 +1,11 @@
+{
+  "automaticallyStartsServices": false,
+  "tools": [
+    {"capability": "dashboard", "commands": ["node", "pnpm"], "nodeMinimum": "22.19", "pnpmVersion": "11.15.1", "source": "config/snapshot.json"},
+    {"capability": "browser", "commands": ["google-chrome"], "mcp": "chrome-devtools-mcp@1.10.1", "login": "human-only", "cdp": "127.0.0.1:9222"},
+    {"capability": "agy", "commands": ["agy"], "login": "local user authorization required", "versionAcceptance": "query installed CLI; not pinned from model identity"},
+    {"capability": "SSH/Slurm", "commands": ["ssh", "sbatch", "squeue"], "remoteCommandsOnly": ["sbatch", "squeue"], "alias": "YOUR_AUTHORIZED_HPC_ALIAS", "source": "https://github.com/Charlie-Z-work/slurm-mcp-server"},
+    {"capability": "paper compilation", "commands": ["latexmk", "pdflatex", "biber"], "installation": "local TeX distribution appropriate to project"},
+    {"capability": "memory retrieval", "commands": ["qmd"], "source": "https://github.com/tobi/qmd", "currentHostVerified": false}
+  ]
+}

@@ -10,6 +10,18 @@ The original license is preserved at vendor/licenses/pi-agent-dashboard.MIT.txt.
 Those upstream portions retain their MIT terms; this repository does not
 relicense third-party code or claim ownership of the dashboard.
 
+The nested-route source patch contains pi-subagents context, Copyright (c) 2026
+Nico Bailon, MIT; its license is preserved at vendor/licenses/pi-subagents.MIT.txt.
+
+Vendored ARIS skills retain the MIT license, Copyright (c) 2026 wanshuiyin.
+Vendored html-ppt and mineru retain their MIT notices. Vendored pdf, playwright
+and skill-creator retain Apache-2.0 license files and applicable notices.
+Per-file provenance and checksums appear in config/skill-provenance.json.
+These third-party sources are not relicensed by the repository root license.
+IEEEtran class/bibliography components have their own LPPL-1.3 notices; they
+are not vendored or marked MIT here. Obtain them from a TeX distribution or
+the complete CTAN IEEEtran work; external dependency provenance is retained.
+
 Pi, Feynman, pi-subagents, ARIS and other named tools are independent projects.
 Their names identify integrations, not endorsements. Third-party packages are
 installed separately under their original licenses.

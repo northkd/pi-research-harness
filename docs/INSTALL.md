@@ -26,12 +26,14 @@ pi-research
 
 安装脚本下载固定的 Pi 1.0.0，配置目录默认是
 `~/.local/share/pi-research-harness/agent`，运行依赖位于仓库的 `.runtime/`。
-它拒绝覆盖已有 `settings.json`，不复制个人 `auth.json`、会话或 browser profile。固定版本扩展会显式安装到隔离 agent 的 `npm/`，并逐项核对实际版本，而不是仅运行更新命令。
-如果初次安装被网络或资源中断，不要覆盖已经创建的配置；修复环境后可只继续缺失的包安装：
+它拒绝覆盖已有 `settings.json`，不复制个人 `auth.json`、会话或 browser profile。固定版本扩展会用发布的传递依赖锁执行`npm ci`到隔离 agent 的 `npm/`，并逐项核对实际版本，再应用hash保护的subagents源补丁，而不是仅运行更新命令。
+如果初次安装中断，不要覆盖已经创建的配置。下面命令只允许空的npm安装目录，或已完整安装的13包；非空但不完整的目录会拒绝，避免npm ci静默删除无关包。需本人先审查并隔离该不完整目录，再继续：
 
 ```bash
 node scripts/install-packages.mjs "$PI_RESEARCH_AGENT_DIR"
 node scripts/install-packages.mjs "$PI_RESEARCH_AGENT_DIR" --check-only
+node scripts/apply-subagents-patch.mjs "$PI_RESEARCH_AGENT_DIR"
+node scripts/apply-subagents-patch.mjs "$PI_RESEARCH_AGENT_DIR" --check-only
 ```
 
 未设置 `PI_RESEARCH_AGENT_DIR` 时，将参数换成实际的隔离 agent 绝对路径。
@@ -56,7 +58,7 @@ bash scripts/prepare-dashboard.sh --dry-run
 bash scripts/prepare-dashboard.sh
 ```
 
-该命令单独克隆上游并 checkout `config/snapshot.json` 的固定提交，检查并应用两个补丁，再执行固定锁文件安装与真实前端构建。**不会启动服务、reload Pi 或重启别的 dashboard。**
+该命令单独克隆上游并 checkout `config/snapshot.json` 的固定提交，检查并应用三个补丁并核对29源文件hash，再执行固定锁文件安装与真实前端构建。**不会启动服务、reload Pi 或重启别的 dashboard。**
 
 在独立 agent 的 `settings.json.packages` 添加：
 
@@ -80,6 +82,8 @@ ssh -L 8000:127.0.0.1:8000 your-server
 
 浏览器打开 `http://127.0.0.1:8000`。不要把无鉴权的管理接口直接暴露公网。
 
+四个可选plugin bridge、KB/project配置及服务模板见[复刻清单](REPRODUCTION.md)。全新安装可用`bash scripts/install.sh --with-dashboard-plugins --with-browser --with-bundled-skills`，或仅创建新的配置用`configure.mjs`及同flags。已有配置只手工合并，不重跑configure覆盖；可选入口不会自动准备或启动dashboard/browser服务。
+
 `config/dashboard.example.json` 是配置参考，不会覆盖现有 `~/.pi/dashboard/config.json`。
 Dashboard 自身的运行数据位置仍由上游控制，和本仓库隔离；在已有 dashboard 的机器上先确认端口与数据目录，不并行启动同端口实例。
 
@@ -96,8 +100,9 @@ pi-research-browser
 
 ```bash
 mkdir -p .runtime/browser-mcp
-cp config/browser-mcp.package.json .runtime/browser-mcp/package.json
-npm install --prefix .runtime/browser-mcp
+cp config/locks/browser/package.json .runtime/browser-mcp/package.json
+cp config/locks/browser/package-lock.json .runtime/browser-mcp/package-lock.json
+npm ci --prefix .runtime/browser-mcp --no-audit --no-fund
 ```
 
 再参考 `config/mcp.example.json`，在本地 `mcp.json` 配置 Node 启动已安装的
@@ -111,7 +116,7 @@ npm install --prefix .runtime/browser-mcp
 - `extensions/image-generation.ts` **默认不加载**。需要时配置自己的
   `CLIPROXY_BASE_URL` 和 `CLIPROXY_API_KEY`，再显式添加该 extension。发布版没有硬编码 key。
 - agy 独立安装、独立登录。`agy-subagent` 是 stdin/stdout 适配器，不提供第三方凭据，也不承诺所有 agy 版本支持相同参数。
-- ARIS canonical skills 按其上游说明独立安装。论文写作 wrapper 缺少 canonical 文件时应停止，而非声称完成 LaTeX/PDF。
+- 已许可的88个技能源码在`vendor/skills`，两个integration wrapper直接引用捆绑canonical文件。需要Pi发现时显式启用`--with-bundled-skills`；需要上游`~/.agents/skills`canonical路径时运行`install-skills.mjs`，拒绝覆盖非空目录。20个来源／许可待确认技能未复制。技能内提及外部MCP不等于本机可用；缺后端时停止，不声称完成LaTeX/PDF或独立审查。
 - SSH/HPC 使用自己的 host alias。Slurm MCP 可选择上游
   [slurm-mcp-server](https://github.com/Charlie-Z-work/slurm-mcp-server)，不包含作者学校地址或远程访问授权。
 

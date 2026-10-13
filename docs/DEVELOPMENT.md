@@ -9,7 +9,8 @@ extensions/               最后一条消息撤回；可选绘图扩展
 config/                   无凭据模板与版本来源/hash
 bin/                      可移植的 Pi/dashboard/browser 启动入口
 scripts/                  安装、上游补丁、发布检查；无自动运行环境重启
-patches/dashboard/        已部署定制的上游差异
+patches/                  已部署dashboard/subagents源码差异
+vendor/skills/            许可明确的技能与辅助源码、逐文件provenance
 vendor/licenses/          被引用上游的原许可证
 docs/images/              脱敏真实截图与已标注概念插画
 ```
@@ -30,16 +31,23 @@ npm run check:release
 
 ## Dashboard 定制
 
-上游是 MIT 项目，本仓库不是完整 fork。两个补丁只能应用到固定提交：
+上游是 MIT 项目，本仓库不是完整 fork。三个补丁只能应用到固定提交：
 
 1. `0001-deployed-frontend.patch`：当前部署的前端源差异，包含撤回按钮、输入回填、pending保护及此前native子任务/布局定制。
 2. `0002-deployed-native-bridge.patch`：**正在运行的**native子任务bridge改动。
+3. `0003-deployed-runtime-config.patch`：9个已安装server/shared源码差异；shared reader取真正被加载的单独shared包版本。包括隔离agent配置路径、defaultmodel/thinking写回、context-window投影与managed npm资源扫描。
 
 `node scripts/verify-dashboard.mjs /path/to/patched-checkout` 会逐文件核对
-发布快照 hash。补丁**不含**暂停的 B1/R4历史重放事务、超时tail等未验收后端。
+发布快照29个源hash。补丁**不含**暂停的 B1/R4历史重放事务、超时tail等未验收后端。
 
 执行 `scripts/prepare-dashboard.sh` 只准备源码与构建，运行/重启仍由开发者决定。
 如果未来升级上游，先重建补丁并做契约验证，不用 `git apply --reject` 后忽略失败。
+
+## 子代理、依赖与技能快照
+
+`apply-subagents-patch.mjs`限定pi-subagents0.76.1和原始／目标SHA256，拒绝未知内容，幂等检查后再应用。不要为兼容升级而删掉hash保护。依赖锁保存直接及传递包版本／integrity，不收录node_modules；npm ci遇到非空未知安装目录会停止。
+
+技能保留原许可证和来源状态。修改vendor文件须同步明确`config/skill-provenance.json`新hash及本地改动原因，不能保留旧hash谎称原文。显式install-skills拒绝已有目录；默认不执行源内脚本、hook或外部reviewer。若需恢复20个未知来源技能，先补足来源／许可，而不是把私有目录整树上传。
 
 ## 添加模型/服务
 

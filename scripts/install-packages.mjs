@@ -31,7 +31,7 @@ export function packageMismatches(agentDir, packages) {
   }).map(({name, version}) => `${name}@${version}`);
 }
 
-export function installPackages(agentDir, {checkOnly = false, run = spawnSync} = {}) {
+export function installPackages(agentDir, {checkOnly = false, run = spawnSync, lockDir = null} = {}) {
   if (!path.isAbsolute(agentDir)) throw new Error('Use an absolute isolated agent directory');
   const settingsPath = path.join(agentDir, 'settings.json');
   let settingsBefore;
@@ -49,13 +49,30 @@ export function installPackages(agentDir, {checkOnly = false, run = spawnSync} =
     const installRoot = path.join(agentDir, 'npm');
     fs.mkdirSync(installRoot, {recursive: true, mode: 0o700});
     const manifestPath = path.join(installRoot, 'package.json');
-    if (!fs.existsSync(manifestPath)) {
-      fs.writeFileSync(manifestPath, '{"private":true}\n', {flag: 'wx', mode: 0o600});
+    let args;
+    if (lockDir) {
+      let locked;
+      try {
+        locked = JSON.parse(fs.readFileSync(path.join(lockDir, 'package.json'), 'utf8'));
+      } catch (error) {
+        throw new Error('Cannot load released dependency pins', {cause: error});
+      }
+      const expected = Object.fromEntries(packages.map(p => [p.name, p.version]));
+      if (JSON.stringify(Object.entries(locked.dependencies).sort()) !== JSON.stringify(Object.entries(expected).sort())) {
+        throw new Error('Configured npm packages do not match released lock');
+      }
+      // Never silently delete an existing installation's unrelated packages with npm ci.
+      const nodeModules = path.join(installRoot, 'node_modules');
+      if (fs.existsSync(nodeModules) && fs.readdirSync(nodeModules).length) throw new Error('Locked repair requires a fresh empty managed npm directory');
+      fs.copyFileSync(path.join(lockDir, 'package.json'), manifestPath);
+      fs.copyFileSync(path.join(lockDir, 'package-lock.json'), path.join(installRoot, 'package-lock.json'));
+      args = ['ci', '--prefix', installRoot, '--legacy-peer-deps', '--no-audit', '--no-fund'];
+    } else {
+      if (!fs.existsSync(manifestPath)) fs.writeFileSync(manifestPath, '{"private":true}\n', {flag: 'wx', mode: 0o600});
+      args = ['install', ...packages.map(p => p.spec), '--prefix', installRoot, '--legacy-peer-deps', '--no-audit', '--no-fund'];
     }
-    // This is Pi 1.0.0's managed npm directory and peer-resolution policy.
-    // A pinned `pi update --extensions` skips packages, even on a fresh install.
-    const result = run('npm', ['install', ...packages.map(p => p.spec), '--prefix', installRoot,
-      '--legacy-peer-deps', '--no-audit', '--no-fund'], {stdio: 'inherit', shell: false});
+    // Pi's managed directory and peer-resolution policy, with explicit manifest checks.
+    const result = run('npm', args, {stdio: 'inherit', shell: false});
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`Pinned package installation failed: exit ${result.status}, signal ${result.signal ?? 'none'}`);
   }
@@ -70,5 +87,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (!args[0] || args.length > 2 || (args[1] && args[1] !== '--check-only')) {
     throw new Error('Usage: node scripts/install-packages.mjs /absolute/agent-dir [--check-only]');
   }
-  console.log(JSON.stringify(installPackages(args[0], {checkOnly: args[1] === '--check-only'}), null, 2));
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  console.log(JSON.stringify(installPackages(args[0], {checkOnly: args[1] === '--check-only', lockDir: path.join(repo, 'config/locks/extensions')}), null, 2));
 }

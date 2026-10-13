@@ -1,0 +1,39 @@
+[
+  {
+    "component": "extensions",
+    "entries": 366,
+    "rootVersions": {
+      "pi-subagents": "0.76.1",
+      "pi-background-tasks": "2.6.9",
+      "@companion-ai/feynman": "0.5.22",
+      "pi-web-access": "0.35.0",
+      "pi-scientific-skills": "1.6.0",
+      "pi-mcp-adapter": "5.0.0",
+      "@oresk/pi-remote-tools": "0.2.1",
+      "@juicesharp/rpiv-advisor": "2.12.0",
+      "pi-docparser": "4.0.0",
+      "pi-memory": "0.4.2",
+      "context-mode": "1.0.169",
+      "pi-lens": "4.3.0",
+      "pi-auto-model": "0.8.4"
+    },
+    "normalization": "root names/ranges to exact pins; public mirror URLs to registry.npmjs.org; integrity and resolved package versions unchanged"
+  },
+  {
+    "component": "pi",
+    "entries": 148,
+    "rootVersions": {
+      "@earendil-works/pi-coding-agent": "1.0.0"
+    },
+    "normalization": "root names/ranges to exact pins; public mirror URLs to registry.npmjs.org; existing integrity and resolved package versions unchanged",
+    "integrityCompletion": "7 initially missing @earendil-works 1.0.0 nested entries are completed from exact official npm name/version/tarball metadata; no version or URL change"
+  },
+  {
+    "component": "browser",
+    "entries": 2,
+    "rootVersions": {
+      "chrome-devtools-mcp": "1.10.1"
+    },
+    "normalization": "root names/ranges to exact pins; public mirror URLs to registry.npmjs.org; integrity and resolved package versions unchanged"
+  }
+]

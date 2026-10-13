@@ -45,5 +45,22 @@
     "Current-page final-message undo tested; arbitrary history editing not promised",
     "Backend refresh/reconnect history repair is intentionally not included",
     "Built asset hash is the deployment reference; rebuilds can differ by dependency/runtime platform"
-  ]
+  ],
+  "backendHashes": {
+    "packages/server/src/auth/provider-auth-storage.ts": "c403b54f5cd1edbae168b11834a3559a62ec07421b7a6d84484f46bbe2ee84be",
+    "packages/server/src/config-api.ts": "0301868b09f388760f250ba214e4c6609217edd5efe38a8d8e8608ed0197b073",
+    "packages/server/src/model-proxy/internal-registry.ts": "5e34b79bad440021830a6e56f06f82132e7ada320a17378e1bc4bc4b5be4ab1a",
+    "packages/server/src/model-proxy/registry-singleton.ts": "a4d3f964c9dbe7889111d27b0bd350d4777cf5635041f68504ea537f3dc74c4c",
+    "packages/server/src/package/provider-probe.ts": "ea8a5e785aa6c333e78c8d11cfeaace21edd9d0e32a0c56bb425e9d14591aef1",
+    "packages/server/src/pi/pi-resource-scanner.ts": "fc278ef3612d81a932e8a0980e61c604e85a21d581b6e80c04e3189ec85187fa",
+    "packages/server/src/routes/provider-routes.ts": "e67601759d4d6c70b507faed059c3c5d34cdff3074e2cb24b326a9bce7f3100a",
+    "packages/shared/src/config.ts": "20f6707e441aa5a930ad5ea4a811f7a5df3441bc2da5c90ade3e2b060312d029",
+    "packages/shared/src/models-json-reader.ts": "5249d2b402c981ce245fa916fec5ca7d917a00fed869b5fb7100a1511fb8027a"
+  },
+  "dashboardPatchOrder": [
+    "patches/dashboard/0001-deployed-frontend.patch",
+    "patches/dashboard/0002-deployed-native-bridge.patch",
+    "patches/dashboard/0003-deployed-runtime-config.patch"
+  ],
+  "backendSourceNote": "Actual server entry uses the aggregate package; shared models reader taken from the separately resolved live shared package. This exports source, not a new build/deployment acceptance."
 }

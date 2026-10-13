@@ -1,0 +1,15 @@
+{
+  "bridges": {
+    "dashboard-automation": "packages/automation-plugin/src/bridge/index.ts",
+    "dashboard-flows": "packages/flows-plugin/src/bridge/index.ts",
+    "dashboard-goal": "packages/goal-plugin/src/bridge/index.ts",
+    "dashboard-flows-anthropic-bridge": "packages/flows-anthropic-bridge-plugin/src/bridge/index.ts"
+  },
+  "knowledgeBase": {
+    "pluginPackage": "@blackbelt-technology/pi-dashboard-kb-plugin",
+    "sourcePath": "packages/kb-plugin",
+    "enginePath": "packages/kb",
+    "projectConfig": ".pi/dashboard/knowledge_base.json",
+    "sessionExtensionDefaultInstalled": false
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema": "pi-research-routing.example.v1",
+  "active": false,
+  "providerAllow": [],
+  "aliases": {},
+  "minimumAvailableMemoryBytes": 2147483648,
+  "maxLiveChildProcessesMachineWide": 3,
+  "idleEvaluation": {"enabled": false, "idleMs": 900000, "minimumIntervalMs": 3600000},
+  "taskCategories": {
+    "quick-lookup": {"preferredTier": "fast", "tiers": {"fast": [], "standard": [], "strong": []}, "escalationLadder": {"fast": "standard", "standard": "strong"}},
+    "numeric-check": {"preferredTier": "fast", "tiers": {"fast": [], "standard": [], "strong": []}, "escalationLadder": {"fast": "standard", "standard": "strong"}},
+    "literature-search": {"preferredTier": "standard", "tiers": {"standard": [], "strong": []}, "escalationLadder": {"standard": "strong"}},
+    "theory-derivation": {"preferredTier": "standard", "tiers": {"standard": [], "strong": []}, "escalationLadder": {"standard": "strong"}},
+    "critique": {"preferredTier": "standard", "tiers": {"standard": [], "strong": []}, "escalationLadder": {"standard": "strong"}},
+    "deep-synthesis": {"preferredTier": "strong", "tiers": {"strong": []}, "escalationLadder": {}}
+  }
+}

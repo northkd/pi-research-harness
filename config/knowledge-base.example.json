@@ -1,0 +1,11 @@
+{
+  "sources": [{"kind": "filesystem", "ref": "docs", "priority": 10}],
+  "include": ["**/*.md"],
+  "exclude": ["**/node_modules/**", "**/.git/**", "**/archive/**"],
+  "dbPath": ".pi/dashboard/kb/index.db",
+  "respectGitignore": true,
+  "directoryLevelAgents": {"enabled": true, "claudeMd": true, "mode": "pull", "fallbackManifest": true},
+  "doxEnforcement": false,
+  "rerank": {"enabled": false},
+  "queryExpansion": {"mode": "off"}
+}

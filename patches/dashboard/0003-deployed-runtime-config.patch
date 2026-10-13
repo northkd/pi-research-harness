@@ -1,0 +1,320 @@
+--- a/packages/server/src/auth/provider-auth-storage.ts
++++ b/packages/server/src/auth/provider-auth-storage.ts
+@@ -20,7 +20,7 @@
+ 
+ // ── Constants ────────────────────────────────────────────────────────────────
+ 
+-const AUTH_DIR = path.join(os.homedir(), ".pi", "agent");
++const AUTH_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+ const AUTH_PATH = path.join(AUTH_DIR, "auth.json");
+ 
+ export type ApiKeyCredential = { type: "api_key"; key: string };
+--- a/packages/server/src/config-api.ts
++++ b/packages/server/src/config-api.ts
+@@ -247,6 +247,35 @@
+       partial.openspec = { ...existing.openspec, ...partial.openspec };
+     }
+ 
++    if (partial.defaultModel !== undefined || partial.defaultThinkingLevel !== undefined) {
++      const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
++      const settingsFile = path.join(agentDir, "settings.json");
++      const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, "utf-8")) : {};
++      if (partial.defaultModel !== undefined) {
++        const value = partial.defaultModel;
++        if (typeof value !== "string") throw new Error("defaultModel must be a provider/model string");
++        if (value) {
++          const split = value.indexOf("/");
++          if (split <= 0 || split === value.length - 1) throw new Error("defaultModel must include provider/model");
++          settings.defaultProvider = value.slice(0, split);
++          settings.defaultModel = value.slice(split + 1);
++        } else {
++          delete settings.defaultProvider;
++          delete settings.defaultModel;
++        }
++      }
++      if (partial.defaultThinkingLevel !== undefined) {
++        const value = partial.defaultThinkingLevel;
++        if (value && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value))
++          throw new Error("Invalid thinking level");
++        if (value) settings.defaultThinkingLevel = value;
++        else delete settings.defaultThinkingLevel;
++      }
++      fs.mkdirSync(agentDir, { recursive: true });
++      const tmp = settingsFile + ".dashboard-" + process.pid;
++      fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
++      fs.renameSync(tmp, settingsFile);
++    }
+     const merged = { ...existing, ...partial };
+ 
+     // Remove computed fields that shouldn't be persisted. `reachability` is
+--- a/packages/server/src/model-proxy/internal-registry.ts
++++ b/packages/server/src/model-proxy/internal-registry.ts
+@@ -63,6 +63,8 @@
+ export interface InternalRegistryDeps {
+   readProviders: () => Record<string, CustomProviderEntry>;
+   readModels: () => CustomModelEntry[];
++  /** Context-window-only overrides from models.json, applied after fqid dedup. */
++  readContextOverrides?: () => ReadonlyMap<string, number>;
+   readAuth: () => Record<string, any>;
+   /**
+    * Discover models for every custom provider in `providers.json#providers`
+@@ -283,8 +285,21 @@
+       deduped.push(m);
+     }
+ 
+-    this.cachedAllModels = deduped;
+-    return deduped;
++    // Apply only known provider/id context-window overrides after deduplication.
++    // A match gets a shallow copy so pi-ai's shared model objects stay untouched;
++    // every other field, order, and model remain exactly as assembled above.
++    const contextOverrides = this.deps.readContextOverrides?.();
++    const projected = contextOverrides
++      ? deduped.map((model) => {
++          const key = `${model.provider}/${model.id}`;
++          return contextOverrides.has(key)
++            ? { ...model, contextWindow: contextOverrides.get(key) }
++            : model;
++        })
++      : deduped;
++
++    this.cachedAllModels = projected;
++    return projected;
+   }
+ 
+   private hasAuth(provider: string, auth: Record<string, any>): boolean {
+--- a/packages/server/src/model-proxy/registry-singleton.ts
++++ b/packages/server/src/model-proxy/registry-singleton.ts
+@@ -10,7 +10,10 @@
+ import { homedir } from "node:os";
+ import { join } from "node:path";
+ import { pathToFileURL } from "node:url";
+-import { flattenModelsJson } from "@blackbelt-technology/pi-dashboard-shared/models-json-reader.js";
++import {
++  flattenModelsJson,
++  readContextWindowOverrides,
++} from "@blackbelt-technology/pi-dashboard-shared/models-json-reader.js";
+ import { getDefaultRegistry, ModuleResolutionError } from "@blackbelt-technology/pi-dashboard-shared/tool-registry/index.js";
+ import { readAuthJson } from "../auth/provider-auth-storage.js";
+ import { readProvidersFromDisk, resolveProbeApiKey } from "../package/provider-probe.js";
+@@ -24,17 +27,11 @@
+ 
+ // ── Disk readers ──────────────────────────────────────────────────────────────
+ 
+-const PROVIDERS_PATH = join(homedir(), ".pi", "agent", "providers.json");
+-const MODELS_PATH = join(homedir(), ".pi", "agent", "models.json");
++const PROVIDERS_PATH = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "providers.json");
++const MODELS_PATH = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "models.json");
+ 
+ function readProviders(): Record<string, CustomProviderEntry> {
+-  if (!existsSync(PROVIDERS_PATH)) return {};
+-  try {
+-    const raw = JSON.parse(readFileSync(PROVIDERS_PATH, "utf-8"));
+-    return raw.providers ?? {};
+-  } catch {
+-    return {};
+-  }
++  return readProvidersFromDisk();
+ }
+ 
+ /** Exported for unit tests. Reads $HOME/.pi/agent/models.json via the shared reader. */
+@@ -43,15 +40,30 @@
+   let raw: unknown;
+   try {
+     raw = JSON.parse(readFileSync(MODELS_PATH, "utf-8"));
+-  } catch (err) {
+-    // A syntax error is no longer silent — warn so a broken file is diagnosable.
+-    console.warn(`[model-proxy] models.json parse failed: ${(err as Error).message}`);
++  } catch {
++    // A read or syntax error is no longer silent, but diagnostics must not echo
++    // configuration contents or parser details that could contain user data.
++    console.warn("[model-proxy] models.json parse failed");
+     return [];
+   }
+   // Native nested `providers.<p>.models[]` + legacy top-level shapes, via the
+   // single shared reader both registry paths use. See change:
+   // honor-native-models-json-metadata.
+   return flattenModelsJson(raw) as CustomModelEntry[];
++}
++
++/** Exported for unit tests. Reads only provider/model context-window overrides. */
++export function readContextOverrides(): Map<string, number> {
++  if (!existsSync(MODELS_PATH)) return new Map();
++  let raw: unknown;
++  try {
++    raw = JSON.parse(readFileSync(MODELS_PATH, "utf-8"));
++  } catch {
++    // Do not include raw configuration text or values in diagnostics.
++    console.warn("[model-proxy] models.json context overrides ignored: invalid JSON");
++    return new Map();
++  }
++  return readContextWindowOverrides(raw);
+ }
+ 
+ /**
+@@ -100,8 +112,12 @@
+     cachedRegistry = new InternalRegistry(piAi, authStorage, {
+       readProviders,
+       readModels,
++      readContextOverrides,
+       readAuth: readAugmentedAuth,
+-      discoverCustomProviders: discoverAllCustomProviders,
++      discoverCustomProviders: (providers) => {
++        const native = existsSync(MODELS_PATH) ? JSON.parse(readFileSync(MODELS_PATH, "utf-8")).providers ?? {} : {};
++        return discoverAllCustomProviders(Object.fromEntries(Object.entries(providers).filter(([name]) => !native[name]?.models?.length)));
++      },
+     });
+     // Fire-and-forget initial custom-provider discovery so /api/models reflects
+     // providers.json without waiting on the first request. Non-fatal on error.
+--- a/packages/server/src/package/provider-probe.ts
++++ b/packages/server/src/package/provider-probe.ts
+@@ -17,7 +17,7 @@
+   mapAdvertisedModels,
+ } from "@blackbelt-technology/pi-dashboard-shared/provider-model-metadata.js";
+ 
+-const CONFIG_PATH = join(homedir(), ".pi", "agent", "providers.json");
++const CONFIG_PATH = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "providers.json");
+ const REDACTED = "***";
+ const DEFAULT_TIMEOUT_MS = 8000;
+ const MAX_ERROR_BODY_CHARS = 500;
+@@ -101,13 +101,15 @@
+ export type ProvidersReader = () => Record<string, StoredProviderEntry>;
+ 
+ export function readProvidersFromDisk(): Record<string, StoredProviderEntry> {
+-  if (!existsSync(CONFIG_PATH)) return {};
+-  try {
+-    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+-    return raw.providers ?? {};
+-  } catch {
+-    return {};
+-  }
++  const modelsPath = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "models.json");
++  const native = existsSync(modelsPath) ? JSON.parse(readFileSync(modelsPath, "utf-8")).providers ?? {} : {};
++  const custom = existsSync(CONFIG_PATH) ? JSON.parse(readFileSync(CONFIG_PATH, "utf-8")).providers ?? {} : {};
++  const result: Record<string, StoredProviderEntry> = {};
++  for (const [name, raw] of Object.entries({ ...native, ...custom })) {
++    const entry = raw as StoredProviderEntry;
++    result[name] = { baseUrl: entry.baseUrl, apiKey: entry.apiKey, ...(entry.api ? { api: entry.api } : {}) };
++  }
++  return result;
+ }
+ 
+ export type ResolveResult =
+--- a/packages/server/src/pi/pi-resource-scanner.ts
++++ b/packages/server/src/pi/pi-resource-scanner.ts
+@@ -262,6 +262,10 @@
+ 
+   if (entry.startsWith("npm:")) {
+     const pkgName = entry.slice(4).replace(/@[^/]*$/, ""); // strip version
++    const managedPath = path.join(settingsDir, "npm", "node_modules", pkgName);
++    if (fs.existsSync(path.join(managedPath, "package.json"))) {
++      return { resolved: managedPath, source: entry };
++    }
+     const npmRoot = getNpmGlobalRoot();
+     if (!npmRoot) return null;
+     return { resolved: path.join(npmRoot, pkgName), source: entry };
+--- a/packages/server/src/routes/provider-routes.ts
++++ b/packages/server/src/routes/provider-routes.ts
+@@ -8,7 +8,7 @@
+ import type { FastifyInstance } from "fastify";
+ import { collectDashboardOrigins, isSelfPointing } from "../model-proxy/recursion-guard.js";
+ import { refreshModelRegistry } from "../model-proxy/registry-singleton.js";
+-import { type ProbeApi, type ProbeResult, probeProvider, resolveProbeApiKey } from "../package/provider-probe.js";
++import { type ProbeApi, type ProbeResult, probeProvider, resolveProbeApiKey, readProvidersFromDisk } from "../package/provider-probe.js";
+ import type { BrowserGateway } from "../pairing/browser-gateway.js";
+ import type { PiGateway } from "../pi/pi-gateway.js";
+ import { getTunnelUrl } from "../tunnel/tunnel.js";
+@@ -16,7 +16,7 @@
+ import type { NetworkGuard } from "./route-deps.js";
+ 
+ const REDACTED = "***";
+-const CONFIG_PATH = join(homedir(), ".pi", "agent", "providers.json");
++const CONFIG_PATH = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "models.json");
+ 
+ function toHealth(result: ProbeResult): ProviderHealth {
+   return result.ok
+@@ -49,13 +49,7 @@
+ }
+ 
+ function readProvidersRaw(): Record<string, ProviderEntry> {
+-  if (!existsSync(CONFIG_PATH)) return {};
+-  try {
+-    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+-    return raw.providers ?? {};
+-  } catch {
+-    return {};
+-  }
++  return readProvidersFromDisk();
+ }
+ 
+ function redactProviders(
+@@ -166,7 +160,9 @@
+           // start fresh
+         }
+       }
+-      fileData.providers = merged;
++      // Preserve native model definitions and metadata when editing endpoint/auth.
++      fileData.providers = Object.fromEntries(Object.entries(merged).map(([name, entry]) =>
++        [name, { ...(fileData.providers?.[name] ?? {}), ...entry }]));
+ 
+       const dir = dirname(CONFIG_PATH);
+       mkdirSync(dir, { recursive: true });
+--- a/packages/shared/src/config.ts
++++ b/packages/shared/src/config.ts
+@@ -1220,6 +1220,13 @@
+       for (const h of result.auth.bypassHosts) merged.add(h);
+     }
+     result.resolvedTrustedNetworks = Array.from(merged);
++    const settingsFile = path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "settings.json");
++    if (fs.existsSync(settingsFile)) {
++      const settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
++      result.defaultModel = settings.defaultProvider && settings.defaultModel
++        ? settings.defaultProvider + "/" + settings.defaultModel : "";
++      result.defaultThinkingLevel = settings.defaultThinkingLevel ?? "";
++    }
+     return result;
+   } catch {
+     return defaults;
+--- a/packages/shared/src/models-json-reader.ts
++++ b/packages/shared/src/models-json-reader.ts
+@@ -75,7 +75,10 @@
+     const models = isRecord(block) ? block.models : undefined;
+     if (!Array.isArray(models)) continue; // per-provider defensive: skip, keep the rest
+     for (const m of models) {
+-      if (hasStringId(m)) put(byKey, { ...(m as object), provider: name } as NativeModelEntry);
++      if (hasStringId(m)) {
++        const parent = block as Record<string, unknown>;
++        put(byKey, { api: parent.api, baseUrl: parent.baseUrl, headers: parent.headers, ...(m as object), provider: name } as NativeModelEntry);
++      }
+     }
+   }
+ }
+@@ -103,3 +106,29 @@
+ 
+   return [...byKey.values()];
+ }
++
++/**
++ * Extract only finite numeric context-window overrides from models.json.
++ *
++ * This deliberately does not return or retain the override objects: credentials,
++ * headers, and every other metadata field stay outside the dashboard projection.
++ * Provider/model keys are stored in a Map so configuration keys such as
++ * `__proto__` cannot alter an ordinary object. Unknown models are harmless here;
++ * the registry applies the map only to models already present in its directory.
++ */
++export function readContextWindowOverrides(parsed: unknown): Map<string, number> {
++  const overrides = new Map<string, number>();
++  if (!isRecord(parsed) || !isRecord(parsed.providers)) return overrides;
++
++  for (const [provider, providerConfig] of Object.entries(parsed.providers)) {
++    if (!isRecord(providerConfig) || !isRecord(providerConfig.modelOverrides)) continue;
++    for (const [modelId, override] of Object.entries(providerConfig.modelOverrides)) {
++      if (modelId.length === 0 || !isRecord(override)) continue;
++      const contextWindow = override.contextWindow;
++      if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) continue;
++      overrides.set(`${provider}/${modelId}`, contextWindow);
++    }
++  }
++
++  return overrides;
++}

@@ -18,6 +18,14 @@ Agent tool allow-lists express a working contract, not a process sandbox. Extern
 CLI runner/extension code can execute local programs. Review all code before
 installation; authorize external providers and material scope explicitly.
 
+Vendored skills retain upstream instructions and scripts. Installing or
+advertising them does not authorize model calls, remote jobs, paid review,
+watchdogs, hooks or uploads. Their tool/auto-proceed suggestions remain below
+current user/project authorization. Reviewer MCP names in a document are not
+registered or authenticated backends. Stop if an actual backend or material
+export authorization is absent. Source copies are opt-in; installers reject
+nonempty personal skill directories instead of silently merging or overwriting.
+
 The `check:release` script is a bounded publication allow-list/pattern audit,
 not a comprehensive DLP scanner or a guarantee against every secret format.
 Images require separate visual review. Report a suspected leaked credential

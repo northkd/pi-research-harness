@@ -1,5 +1,15 @@
 # Changelog
 
+## 当前可用版本源码补齐 — 2026-10-13
+
+- 补齐9个dashboard运行源码差异及实际shared context-window函数，第三源补丁与29文件hash；不含暂停的B1/R4。
+- 补齐pi-subagents嵌套async identity补丁、包版本/前后hash拒绝保护与MIT许可证。
+- 补齐compaction/非模型thinking、四插件bridge、KB/systemd/loopback proxy及外部工具可移植模板。
+- 保存路由与验收历史代码，不保存真实账号模型映射或历史记录，不新增自动后台调用。
+- 保存Pi、13扩展和browser依赖锁；固定首次安装使用npm ci与manifest检查。
+- 实际收录88个许可可核验技能及辅助源码、原许可证和逐文件来源/SHA256；另外20个仅盘点待许可核验。
+- 增加显式捆绑技能发现／canonical复制入口，拒绝覆盖已有技能，明确外部reviewer工具仍须单独授权配置。
+
 ## 迁移核验与浏览器入口修正 — 2026-10-13
 
 - 修正浏览器 MCP 模板启动入口：使用固定版本实际可执行的 `build/src/bin/chrome-devtools-mcp.js`，而非只导出库的 `build/src/index.js`。

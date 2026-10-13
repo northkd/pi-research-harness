@@ -1,0 +1,9 @@
+# Optional local-only reverse proxy. This contains no credentials or author host.
+# Keep loopback unless you explicitly configure authenticated remote access.
+http://127.0.0.1:8080 {
+    reverse_proxy 127.0.0.1:8000
+}
+
+# For remote access prefer SSH forwarding. If exposing TLS, use your own hostname,
+# certificate policy and independently generated password hash; never expose the
+# backend anonymously or copy the author's access/password/cookie files.

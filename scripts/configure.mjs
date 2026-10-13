@@ -11,6 +11,25 @@ export function makeSettings(template, repo, options = {}) {
   // The adapter owns configured MCP tools; avoid duplicate builtin discovery.
   settings.extensions = ['-builtin:mcp'];
   if (options.dashboard) settings.packages.push(path.join(repo, '.runtime/dashboard-source/packages/extension'));
+  if (options.dashboardPlugins) {
+    if (!options.dashboard) throw new Error('Dashboard plugin bridges require dashboard mode');
+    const base = path.join(repo, '.runtime/dashboard-source/packages');
+    const bridges = {
+      'dashboard-automation': path.join(base, 'automation-plugin/src/bridge/index.ts'),
+      'dashboard-flows': path.join(base, 'flows-plugin/src/bridge/index.ts'),
+      'dashboard-goal': path.join(base, 'goal-plugin/src/bridge/index.ts'),
+      'dashboard-flows-anthropic-bridge': path.join(base, 'flows-anthropic-bridge-plugin/src/bridge/index.ts'),
+    };
+    settings.dashboardPluginBridges = bridges;
+    settings._dashboardManagedPackages = Object.fromEntries(Object.entries(bridges).map(([name, source]) => [source, name]));
+    settings.packages.push(...Object.values(bridges));
+  }
+  if (options.bundledSkills) settings.skills = [
+    path.join(repo, 'vendor/skills/aris'),
+    path.join(repo, 'vendor/skills/licensed'),
+    '-' + path.join(repo, 'vendor/skills/aris/paper-writing/SKILL.md'),
+    '-' + path.join(repo, 'vendor/skills/aris/research-review/SKILL.md'),
+  ];
   if (options.image) settings.extensions.push(path.join(repo, 'extensions/image-generation.ts'));
   return settings;
 }
@@ -27,7 +46,12 @@ export function makeMcp(repo, _agentDir, options = {}) {
 
 export async function configure(repo, agentDir, options = {}) {
   if (!path.isAbsolute(repo) || !path.isAbsolute(agentDir)) throw new Error('Use absolute repo and agent-directory paths');
-  const template = JSON.parse(await fs.readFile(path.join(repo,'config/settings.example.json'),'utf8'));
+  let template;
+  try {
+    template = JSON.parse(await fs.readFile(path.join(repo,'config/settings.example.json'),'utf8'));
+  } catch (error) {
+    throw new Error('Cannot read valid released settings template', {cause: error});
+  }
   const settings = makeSettings(template,repo,options);
   if (options.dryRun) return {repo,agentDir,settings,mcp:makeMcp(repo,agentDir,options)};
   try {
@@ -52,6 +76,6 @@ export async function configure(repo, agentDir, options = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const flags = new Set(process.argv.slice(2));
   const agentDir=path.resolve(process.env.PI_RESEARCH_AGENT_DIR || path.join(os.homedir(),'.local/share/pi-research-harness/agent'));
-  const result=await configure(repositoryRoot,agentDir,{dashboard:flags.has('--with-dashboard'),browser:flags.has('--with-browser'),image:flags.has('--enable-image-generation'),dryRun:flags.has('--dry-run')});
+  const result=await configure(repositoryRoot,agentDir,{dashboard:flags.has('--with-dashboard') || flags.has('--with-dashboard-plugins'),dashboardPlugins:flags.has('--with-dashboard-plugins'),bundledSkills:flags.has('--with-bundled-skills'),browser:flags.has('--with-browser'),image:flags.has('--enable-image-generation'),dryRun:flags.has('--dry-run')});
   console.log(JSON.stringify(result,null,2));
 }

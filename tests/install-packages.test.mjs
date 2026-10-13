@@ -54,6 +54,32 @@ test('an exit-zero installer without installed packages is not accepted', t => {
   assert.throws(() => installPackages(dir, {run: () => ({status: 0, signal: null})}), /Installation incomplete/);
 });
 
+test('locked install preserves exact config and invokes npm ci, not an unlocked resolution', t => {
+  const dir = fixture(t);
+  const lockDir = path.join(dir, 'lock');
+  fs.mkdirSync(lockDir);
+  fs.writeFileSync(path.join(lockDir, 'package.json'), JSON.stringify({dependencies: {example: '1.2.3', '@scope/tool': '2.0.0'}}));
+  fs.writeFileSync(path.join(lockDir, 'package-lock.json'), '{}');
+  const result = installPackages(dir, {lockDir, run(command, args) {
+    assert.equal(command, 'npm');
+    assert.equal(args[0], 'ci');
+    createManifests(dir);
+    return {status: 0};
+  }});
+  assert.equal(result.verifiedPackages, 2);
+});
+
+test('locked repair refuses nonempty unknown installation and config mismatches', t => {
+  const dir = fixture(t);
+  const lockDir = path.join(dir, 'lock');
+  fs.mkdirSync(lockDir);
+  fs.writeFileSync(path.join(lockDir, 'package.json'), JSON.stringify({dependencies: {example: '9.0.0'}}));
+  assert.throws(() => installPackages(dir, {lockDir}), /do not match/);
+  fs.writeFileSync(path.join(lockDir, 'package.json'), JSON.stringify({dependencies: {example: '1.2.3', '@scope/tool': '2.0.0'}}));
+  fs.mkdirSync(path.join(dir, 'npm/node_modules/unknown'), {recursive: true});
+  assert.throws(() => installPackages(dir, {lockDir}), /fresh empty/);
+});
+
 test('check-only does not install absent packages', t => {
   const dir = fixture(t);
   assert.throws(() => installPackages(dir, {checkOnly: true, run() {throw new Error('must not run');}}), /Missing or mismatched/);

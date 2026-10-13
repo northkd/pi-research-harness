@@ -90,7 +90,8 @@ extensions/        undo-last、可选环境变量认证的绘图工具
 bin/               pi-research、dashboard、专用浏览器与agy入口
 config/            安全模板、可选service模板、固定版本和源码hash
 scripts/           独立安装、上游补丁检查、发布文件审计
-patches/dashboard/ 正在使用的前端/native bridge源码差异
+patches/           前端/native bridge/运行配置及subagents源码补丁
+vendor/skills/     88个许可明确技能及辅助源，不含私人状态
 vendor/licenses/   上游原许可证
 docs/              安装、开发、能力边界、截图来源
 ```
@@ -127,11 +128,14 @@ flowchart LR
 
 ## 换设备与迁移
 
-**当前仓库不是整机备份，不能保证“克隆后只配模型就与本机完全无缝一致”。** 核心集成、角色模板与部分 dashboard 源补丁已保存；浏览器登录、SSH／调度环境、外部技能、额外插件及私人会话／记忆／研究数据仍需单独配置或安全迁移。具体一致部分、缺口与验收顺序见 [迁移核验说明](docs/MIGRATION.md)。
+**已补齐此前可安全发布但遗漏的软件部分**：9个额外dashboard运行源码、subagents嵌套路由补丁、路由实现、传递依赖锁、插件／服务／KB模板，以及88个技能及辅助源码。逐项保存方式和新设备操作见 [可复刻内容清单](docs/REPRODUCTION.md)。
+
+这仍不是整机私有状态备份：账号、浏览器登录、SSH／调度环境及私人会话／记忆／研究数据需本地配置或安全迁移；另有20个技能许可／来源尚未确认。源码补齐不等于全部认证工作流已验收，真实安装与构建边界见 [迁移核验说明](docs/MIGRATION.md)。
 
 ## 文档与二次开发
 
 - [安装与本地认证](docs/INSTALL.md)
+- [已补齐的复刻源码与技能](docs/REPRODUCTION.md)
 - [新设备迁移核验](docs/MIGRATION.md)
 - [二次开发与补丁约定](docs/DEVELOPMENT.md)
 - [上游与许可证](docs/UPSTREAMS.md)
@@ -153,4 +157,4 @@ npm run check:release
 ## License
 
 本项目原创部分：**Apache License 2.0**。
-Dashboard上游代码/补丁上下文：**MIT**。详见 [LICENSE](LICENSE)、[NOTICE](NOTICE) 与 `vendor/licenses/`。
+Dashboard/subagents/ARIS等第三方源码保留各自**MIT或Apache-2.0**条款，不重新授权。详见 [LICENSE](LICENSE)、[NOTICE](NOTICE) 与 `vendor/licenses/`。
