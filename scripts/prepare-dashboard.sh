@@ -6,6 +6,7 @@ PIN=04985091706cb77d5e2f73bbf8b906966e9d97c7
 if [[ "${1:-}" == "--dry-run" ]]; then
   printf 'Would clone https://github.com/BlackBeltTechnology/pi-agent-dashboard.git\n'
   printf 'Checkout %s, apply 3 release patches, pnpm install --frozen-lockfile and pnpm run build.\n' "$PIN"
+  printf 'Would add content-hashed text-containment CSS and a bounded-preview toggle module after building (no existing JavaScript replacement).\n'
   printf 'Destination: %s\nNo automatic server start/reload/restart.\n' "$DEST"
   exit 0
 fi
@@ -22,5 +23,6 @@ for patch in "$ROOT/patches/dashboard/0001-deployed-frontend.patch" "$ROOT/patch
 done
 node "$ROOT/scripts/verify-dashboard.mjs" "$DEST"
 (cd "$DEST" && pnpm install --frozen-lockfile && pnpm run build)
+node "$ROOT/scripts/apply-dashboard-layout.mjs" "$DEST/packages/client/dist" --apply
 printf 'Dashboard prepared. Before starting, add its packages/extension path to your isolated agent settings.\n'
 printf 'See docs/INSTALL.md. This command did NOT start, reload or restart any service.\n'

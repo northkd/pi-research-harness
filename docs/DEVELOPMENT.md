@@ -5,7 +5,7 @@
 ```text
 integration/              自有证据工具、route/gate、workflow与离线测试
 agents/                   科研角色；默认继承本机实际模型
-extensions/               最后一条消息撤回；可选绘图扩展
+extensions/               阶段式主线监督、最后一条消息撤回；可选绘图扩展
 config/                   无凭据模板与版本来源/hash
 bin/                      可移植的 Pi/dashboard/browser 启动入口
 scripts/                  安装、上游补丁、发布检查；无自动运行环境重启
@@ -40,8 +40,18 @@ npm run check:release
 `node scripts/verify-dashboard.mjs /path/to/patched-checkout` 会逐文件核对
 发布快照29个源hash。补丁**不含**暂停的 B1/R4历史重放事务、超时tail等未验收后端。
 
-执行 `scripts/prepare-dashboard.sh` 只准备源码与构建，运行/重启仍由开发者决定。
+执行 `scripts/prepare-dashboard.sh` 只准备源码与构建，再以`apply-dashboard-layout.mjs`添加`patches/dashboard/text-containment.css`和`content-folding.mjs`（内容hash文件名的独立样式与原生DOM展开控件）；不替换现有JavaScript功能，不启动/重启服务。CSS是已有3个上游补丁之外的可移植布局修复，29源码hash仍保留原历史意义。
+
+`npm run test:dashboard:layout`在已有patched checkout/依赖上用真实ChatView/NativeSubagents与完整CSS、无私人数据的fixture验证360/768/1440px；不连接生产会话/WS/模型，代码和宽表仅内部横向滚动。独立Chrome路径可用CHROME_BIN指定；缺依赖明确报错，不自动下载。基线用`node scripts/test-dashboard-layout.mjs .runtime/dashboard-source --expect-overflow`，修后增加`--css-overlay`。
+
+仅更新已部署布局/展开控件时先备份static dist/index及压缩表示，再用`apply-dashboard-layout.mjs /absolute/dist --dry-run`审查、`--apply`明确写入。脚本先新增content-hashed CSS与展开模块及各自gz/br，index最后替换，保留旧asset供打开的标签页/回退；绝不重编或替换未知运行中的JS，以免丢失新功能。本人刷新页面后生效，不自动reload任何Pi会话。运行/重启仍由开发者决定。
 如果未来升级上游，先重建补丁并做契约验证，不用 `git apply --reject` 后忽略失败。
+
+## 主线监督开发
+
+`extensions/mainline-supervision`保存可移植policy2/cadence1，启动模型仅由本地`PI_RESEARCH_SUPERVISOR_MODEL`与项目直接UI授权决定。`npm test`包含无依赖合成core/policy/capture测试；`test:supervision:host`使用已安装Pi的peer aliases与真实public RPC、mock executor；`test:supervision:sdk`运行五项实际SDK no-model检查。明确缺依赖报错而非skip或自动安装。SDK检查不替代真实认证模型往返，不引用作者历史通过冒充当前版验收。见[SUPERVISION.md](SUPERVISION.md)。
+
+固定capture host source清单适配根Pi包发现，不包括本机standalone安装wrapper。源文件导出hash/适配理由位于`config/mainline-supervision-source.json`；不能以旧部署hash证明改后的发布版。
 
 ## 子代理、依赖与技能快照
 

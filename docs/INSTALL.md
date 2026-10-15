@@ -51,6 +51,17 @@ pi-research
 兼容代理示例是 `config/models.example.json`。将本地 agent 目录中的
 `models.example.json` 复制为 `models.json`，修改 endpoint 和 model ID，并在启动 shell 设置 `RESEARCH_API_KEY`。不要提交实际 `models.json` 或 key。
 
+## 阶段式后台主线监督
+
+主线监督extension已随根Pi包注册；没有项目配置时保持dormant，不自动外发或启动模型。新配置会复制只读`research-mainline-supervisor`角色。启动前显式设置本人的认证模型：
+
+```bash
+export PI_RESEARCH_SUPERVISOR_MODEL='your-provider/your-model:high'
+pi-research
+```
+
+先在目标项目查看`mainline_supervision status`；已有配置不重设核心或历史权限。新项目由主agent登记用户确认的core与最小证据范围，经直接UI一次授权。真正研究节点用稳定stageId的checkpoint，同阶段改代码/测试返回/收尾只积累证据；不需要为确认安装运行check。已有Pi完成当前工作后自行`/reload`、`/mainline-supervision status`，不自动替其他会话reload。详见[监督设置与边界](SUPERVISION.md)。
+
 ## 3. 可选：dashboard 及已经部署的定制
 
 ```bash
@@ -58,7 +69,7 @@ bash scripts/prepare-dashboard.sh --dry-run
 bash scripts/prepare-dashboard.sh
 ```
 
-该命令单独克隆上游并 checkout `config/snapshot.json` 的固定提交，检查并应用三个补丁并核对29源文件hash，再执行固定锁文件安装与真实前端构建。**不会启动服务、reload Pi 或重启别的 dashboard。**
+该命令单独克隆上游并 checkout `config/snapshot.json` 的固定提交，检查并应用三个补丁并核对29源文件hash，再执行固定锁文件安装与真实前端构建，最后添加内容hash命名的`text-containment.css`及`content-folding.mjs`。长正文/URL/路径换行；长内容默认限高预览，可「展开全文 / 收起」，短内容不折叠，代码/表格内部横向滚动；不改变会话/消息原文。**不会启动服务、reload Pi 或重启别的 dashboard。**
 
 在独立 agent 的 `settings.json.packages` 添加：
 

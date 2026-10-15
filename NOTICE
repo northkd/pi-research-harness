@@ -1,7 +1,7 @@
 Pi Research Harness
 Copyright 2026 northkd and contributors
 
-Original integration code, role configurations, launch scripts and documentation
+Original integration and mainline-supervision code, role configurations, launch scripts and documentation
 are distributed under Apache License 2.0.
 
 Dashboard patch files contain modifications and contextual source excerpts from

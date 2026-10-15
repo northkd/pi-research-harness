@@ -1,12 +1,17 @@
 {
   "schema": "pi-research-source-coverage.v1",
-  "date": "2026-10-13",
+  "date": "2026-10-15",
   "scope": "User-approved non-sensitive current software snapshot; not private machine state",
   "covered": {
     "dashboardSourceHashes": 29,
     "dashboardPatchFiles": 3,
+    "dashboardAdditiveLayoutStylesheet": "patches/dashboard/text-containment.css",
+    "dashboardOptionalFullContentModule": "patches/dashboard/content-folding.mjs",
+    "dashboardActualComponentSyntheticBrowserRegression": true,
     "subagentsDeployedSourcePatch": "0.76.1 nested-route identity with before/after SHA256",
     "routingModules": 2,
+    "mainlineSupervision": {"policyVersion":2,"cadenceVersion":1,"mode":"stage-checkpoints","portableSourceAndSyntheticTests":true,"privateProjectStateIncluded":false,"persistentHumanWorkflowAdjudication":false},
+    "controlledNestedRoleRules": true,
     "publicDependencyLocks": ["pi", "extensions", "browser"],
     "pinnedNpmExtensionRoots": 13,
     "portablePluginBridges": ["automation", "flows", "goal", "flows-anthropic-bridge"],

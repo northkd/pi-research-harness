@@ -26,6 +26,18 @@ registered or authenticated backends. Stop if an actual backend or material
 export authorization is absent. Source copies are opt-in; installers reject
 nonempty personal skill directories instead of silently merging or overwriting.
 
+Mainline supervision is dormant until a project is explicitly authorized for an
+exact locally configured model and minimum evidence scope. It is direction
+review, not scientific or publication approval. Risk, missing evidence and
+infrastructure failures are not global execution bans; raw-data, egress,
+resource and irreversible-operation permissions remain independent. Human
+branch decisions do not erase old findings or authorize future new scopes.
+
+The additive dashboard layout/folding module changes rendered presentation
+only. It makes no network/storage calls or source-text changes. Long content
+has an explicit preview/full toggle; it is not data truncation or a privacy
+redaction mechanism. Do not use it to hide secrets before screenshots or export.
+
 The `check:release` script is a bounded publication allow-list/pattern audit,
 not a comprehensive DLP scanner or a guarantee against every secret format.
 Images require separate visual review. Report a suspected leaked credential

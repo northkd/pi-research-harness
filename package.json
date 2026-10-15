@@ -15,7 +15,8 @@
   "pi": {
     "extensions": [
       "./integration/index.mjs",
-      "./extensions/undo-last.ts"
+      "./extensions/undo-last.ts",
+      "./extensions/mainline-supervision/src/index.ts"
     ],
     "skills": [
       "./integration/skills",
@@ -23,7 +24,11 @@
     ]
   },
   "scripts": {
-    "test": "node --test integration/test/*.test.mjs tests/*.test.mjs",
+    "test": "node --test integration/test/*.test.mjs tests/*.test.mjs && npm run test:supervision",
+    "test:supervision": "node extensions/mainline-supervision/scripts/run-checks.mjs offline",
+    "test:supervision:host": "node extensions/mainline-supervision/scripts/run-checks.mjs host",
+    "test:supervision:sdk": "node extensions/mainline-supervision/scripts/run-checks.mjs sdk",
+    "test:dashboard:layout": "node scripts/test-dashboard-layout.mjs .runtime/dashboard-source --css-overlay",
     "check:release": "python3 scripts/check-release.py",
     "check:syntax": "bash scripts/check-syntax.sh"
   },

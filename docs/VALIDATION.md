@@ -34,6 +34,18 @@
 - 最终检查不包含全新操作系统或dashboard完整重建。实际扩展安装与资源发现的通过范围如上；不将它们冒称全部扩展代码或认证工作流执行成功。
 - 当前软件源码、配置与技能覆盖见[REPRODUCTION.md](REPRODUCTION.md)；20个来源／许可未确认技能没有复制，私人会话与研究数据仍排除。
 
+## 2026-10-15 主线监管导出与文字布局修复
+
+本轮发布副本与作者历史部署版分开验证。四源码/测试/SDK脚本去除机器路径与固定作者provider/model，精确模型由`PI_RESEARCH_SUPERVISOR_MODEL`指定，根Pi包发现新入口；原始与发布SHA分列于`config/mainline-supervision-source.json`，无私人项目状态/会话/真实review包。
+
+- 首轮离线root49/49与监管core/policy/capture56/56；加入发布边界/source manifest及去继承尾空格后，当前完整离线**root58/58＋监管56/56**，实际installed host/public RPC **33/33**，0fail/0skip。不要与历史79/89重复相加或用旧部署测试替代适配版验收。
+- 监管实际SDK no-model五项（cadence / proportional / bounded capture / log capacity / unauthorized runtime）全部PASS，loaderErrors=[]，没有native模型/子agent；cadence固定本地RPC mock合并2组真正节点，8轮同阶段收尾0追加审查。原生公开RPC实际加载不等于真实模型往返，后者本轮NOT_RUN。
+- UI实际Chrome加载真实ChatView/NativeSubagents和完整Tailwind样式，360/768/1440px共**24/24布局场景、21/21预览/展开交互通过，errors=[]**。包括真实React流式state更新不重置展开、键盘展开/收起、全文源文本不变、短文无多余按钮、长链接/路径/行内可点击文件与代码/宽表局部滚动；最终增加UI标签不进入消息host innerText/plain-text复制的检查，修正后同24+21通过。
+- 相同fixture修前确有溢出/截断。最初ESM/React依赖解析失败、忽略目录导致Tailwind扫描不全的无效轮次均本机保留，不把这些基础设施错误当成功复现。几何最终用应用既有reduced-motion模式排除装饰性shimmer伪元素的瞬态scrollWidth，文字/卡片布局规则未放宽；原失败也保留。
+- 当前Dashboard静态部署只新增内容hash独立CSS/展开模块并改index引用，HTTP返回与验收SHA一致；**所有既有JavaScript/asset不变，无删除**，速度监控未被旧快照重建覆盖。service前后active且PID同值，未restart/reload会话、未触碰科研数据。本人刷新浏览器生效。
+- 新增static installer验证dry-run无写、幂等/压缩一致、保留旧脚本/asset、拒symlink/malformed index；Node语法、发布模式审计与install/prepare dry-run通过。完整dashboard fresh build仍未重跑，29原source hash保持。
+- 主动LSP检查5path仅2clean/3inconclusive，不宣称全面静态clean。没有独立新模型审查，不宣称科学验收/跨服务商验证或持久人工流程裁决已实现。
+
 ## 当前可用环境的来源证据
 
 已部署最小dashboard前端的定向测试25通过、2跳过；前端production TypeScript检查通过（不含testonly源文件）；实际Vite构建及预压缩通过。运行环境health/index/JS资源SHA核验通过。

@@ -6,6 +6,8 @@
 
 | 前轮缺口 | 当前保存方式 | 新设备操作 |
 |---|---|---|
+| 后台主线监督及比例化/阶段降频 | `extensions/mainline-supervision/`源码、离线/host/SDK合成检查与只读角色 | 根包自动发现；显式配置自己的认证模型与每项目最小证据授权；见[SUPERVISION.md](SUPERVISION.md)，不复制私人监管状态 |
+| 受控嵌套与监督科研约定 | `config/AGENTS.md`与脱离作者模型绑定的角色 | 仅当前授权/资源内生效；不使角色无限存活，不自动转交外发/SSH权限 |
 | 9 个额外 dashboard server/shared 源文件 | 第三个 MIT 补丁 `0003-deployed-runtime-config.patch`；实际加载 shared reader 的 context-window 解析也已包含 | `prepare-dashboard.sh`按顺序应用3补丁，核对共29文件hash，再构建 |
 | 子代理嵌套 async 身份修正 | `patches/subagents/`、包版本和前后hash、MIT许可证 | 核心安装后自动应用；未知版本或未知源码拒绝修改；check-only可验证 |
 | 四个 dashboard plugin bridge | 可移植源路径和opt-in配置，不复制dirty树；这4个bridge与固定上游源码一致 | 新配置加`--with-dashboard-plugins`，或自行合并模板；不会自动启动服务 |

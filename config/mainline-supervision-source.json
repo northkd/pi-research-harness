@@ -1,0 +1,135 @@
+{
+  "schema": "pi-research-mainline-supervision-source.v1",
+  "date": "2026-10-15",
+  "license": "Apache-2.0",
+  "source": "Author-owned locally deployed policy-v2 / cadence-v1 implementation; not an upstream package",
+  "localPriorAcceptance": {
+    "regressions": 89,
+    "sdkNoModelChecks": 5,
+    "meaning": "Historical local version only, not acceptance of the adapted publication copy"
+  },
+  "adaptations": [
+    "Exact authenticated model is selected via PI_RESEARCH_SUPERVISOR_MODEL; no author provider/account binding",
+    "Root Pi package discovery replaces machine-specific standalone extension wrapper",
+    "Actual host/RPC/SDK tests resolve locally installed dependencies via portable defaults or explicit env roots; no automatic installation",
+    "Public capture fixed host-source list excludes the unshipped local install wrapper",
+    "Machine-specific dashboard-source unit assertion omitted; actual SDK separately checks foreground idle",
+    "No private project state, review packets, transcripts, raw logs, runtime/deployment records or authenticated model tests exported",
+    "Historical SDK gates retained with portable dependency roots; real model/host claims remain separate from mocks",
+    "Remove four trailing spaces inherited from local author-owned source/tests; no behavioral change"
+  ],
+  "liveNewModelRoundtrip": "NOT_RUN",
+  "persistentWorkflowHumanAdjudication": "NOT_IMPLEMENTED",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "c6d0fdd91886be1e6f61c35c69d1ce9f2030b410f107b759ff26c884982aadac",
+      "localSourceSha256": "fbf62919822da034821f67c86972bd28c6ef1c795545ba92d066834e1b300d3b"
+    },
+    {
+      "path": "package.json",
+      "sha256": "b803140f351a3c589dcc8c179feeb676149a7781cd74631c210e4e7a6489d2ae",
+      "localSourceSha256": "8c3304e40bd2f71c0c9ea747fc814e27c66f0e8bfad7fe56515c5331d01b3657"
+    },
+    {
+      "path": "scripts/cadence-smoke.mjs",
+      "sha256": "df721a07de5f30a5c057f48b7b48669aee84fc43b14efd4ecd38db47fe57df79",
+      "localSourceSha256": "94234bc5f125b32938bac91a58ec5636578f5945b7a66ee153d3e3995816bb6f"
+    },
+    {
+      "path": "scripts/host-env.mjs",
+      "sha256": "e7d65037b305197c166ae1597fb2e65f7c27bc13f5d2674b0f082696e1572fc6",
+      "localSourceSha256": null
+    },
+    {
+      "path": "scripts/host-repair-smoke.mjs",
+      "sha256": "34cf72fee55d899f9e77a7baeb3b0e39bfdd0b52657e157f7d7c095468967e54",
+      "localSourceSha256": "fbbf3d626fed12b261f4ba33ce03cec0d21dc4db578dbf988d8c55bca8ba8481"
+    },
+    {
+      "path": "scripts/log-capacity-smoke.mjs",
+      "sha256": "cae1530df3b478dce11aad88767de8fc1960f3b0d4d7e01d9e196bc4051face7",
+      "localSourceSha256": "21affa4480ad4c4f0297ef2ae266f5afc1004c75edfa5bf32f784b2eb7434c78"
+    },
+    {
+      "path": "scripts/proportional-smoke.mjs",
+      "sha256": "ecc9feb0044188c1aed1c8996e0052de5c0d269d83363f6bec821d7a5444afb5",
+      "localSourceSha256": "3c9fc2fa16008dc130d768b3c2e0b30efe7babe5bb7c01377e10b422e0fcfacf"
+    },
+    {
+      "path": "scripts/run-checks.mjs",
+      "sha256": "53771ec728b395ed2d6c743ba41462f5af4f954b531cd0a60689c85f4d508b3d",
+      "localSourceSha256": null
+    },
+    {
+      "path": "scripts/runtime-smoke.mjs",
+      "sha256": "049c169d47f28ce23b512b692a1fb729af23dd4b8a5f7502e5c3e1688e4fec51",
+      "localSourceSha256": "d69961d17e1f40c25e320bfa2742ab3ad3e03c79a4a12f4c9512bb9483b636fa"
+    },
+    {
+      "path": "src/capture.mjs",
+      "sha256": "7948bd754c83f3ccad727b6517ecb82d5ad60c48db366c66396013aa8aeaedea",
+      "localSourceSha256": "02704f09bda900fa20c65b6c172cff4093a1f3d07f1783a726258e93be41fd01"
+    },
+    {
+      "path": "src/core.mjs",
+      "sha256": "e982f66ffcdb054b21c342d8ac9ddc8a4db83c71135cabbd0b5f009c59394bf9",
+      "localSourceSha256": "5d5cac5bced390491ae1c5d7bbbe2ccc502db18e96616760d120c2245814e0a2"
+    },
+    {
+      "path": "src/index.ts",
+      "sha256": "c5df050d868b9f427cc3c6624301e1de164718eac9cfbd625683c933683b3e70",
+      "localSourceSha256": "bbd94fa3c71c74c81bb3f85389580955d81fe0e004ff96f2eccc295997ae072a"
+    },
+    {
+      "path": "src/policy.mjs",
+      "sha256": "1d463b2f3f7c70054cada527b614d0795c855a8fbeae2e7dc1aebf12d1b6f93b",
+      "localSourceSha256": "1d463b2f3f7c70054cada527b614d0795c855a8fbeae2e7dc1aebf12d1b6f93b"
+    },
+    {
+      "path": "test/adapter.test.mjs",
+      "sha256": "cc049765fcafbf9961da5b6c263f6acd1f4cbf5bfecb3954d398a2fa69aaa883",
+      "localSourceSha256": "bdec5458ab378c4369648e6ba16f8259ffc1e3bb7f7be0cefabe45025f9016fe"
+    },
+    {
+      "path": "test/cadence.test.mjs",
+      "sha256": "a44bfa3abea21f193c4395b8595e43160130a3af3b9dc5e76fd4f53205878595",
+      "localSourceSha256": "a44bfa3abea21f193c4395b8595e43160130a3af3b9dc5e76fd4f53205878595"
+    },
+    {
+      "path": "test/core.test.mjs",
+      "sha256": "cb5be26255536f6b3b523ea3bc9f52756a8ac4e0ff149a6a3cefa033f4fd7993",
+      "localSourceSha256": "cb5be26255536f6b3b523ea3bc9f52756a8ac4e0ff149a6a3cefa033f4fd7993"
+    },
+    {
+      "path": "test/host-repair.test.mjs",
+      "sha256": "55f73ff88f7ed8abe85c1192203ead0b57c73e5fb6a9a5ffe43322d968c472d7",
+      "localSourceSha256": "55f73ff88f7ed8abe85c1192203ead0b57c73e5fb6a9a5ffe43322d968c472d7"
+    },
+    {
+      "path": "test/integration.test.mjs",
+      "sha256": "7012413847f29e4fe6e4428daae9075d67ced90eb2a587d5d72af6bba4d5ef26",
+      "localSourceSha256": "3e9d10bf74dac3ca5a06e48e31c759619c484fa63aad83408177bddd1243cb0c"
+    },
+    {
+      "path": "test/log-capacity.test.mjs",
+      "sha256": "706d0406541b33bd9a1eb46dc6ee2708a4171eae65e3766d4aab471eb2c69548",
+      "localSourceSha256": "706d0406541b33bd9a1eb46dc6ee2708a4171eae65e3766d4aab471eb2c69548"
+    },
+    {
+      "path": "test/mock-core.mjs",
+      "sha256": "336eee2e56380e29b3251aae314c8eeef6899b788d067abf78986856d824e47a",
+      "localSourceSha256": "336eee2e56380e29b3251aae314c8eeef6899b788d067abf78986856d824e47a"
+    },
+    {
+      "path": "test/proportional-policy.test.mjs",
+      "sha256": "003c33e51880f2b8655b815576a548f67032ceb265526a93c90c6cf61ade635e",
+      "localSourceSha256": "003c33e51880f2b8655b815576a548f67032ceb265526a93c90c6cf61ade635e"
+    },
+    {
+      "path": "test/reviewer-counterexamples.test.mjs",
+      "sha256": "f1b6b0521f1e74b86f53550d339de79a18a42e32b411e319d8a04411cd13c885",
+      "localSourceSha256": "f1b6b0521f1e74b86f53550d339de79a18a42e32b411e319d8a04411cd13c885"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "schema": "pi-research-dashboard-layout-source.v1",
+  "date": "2026-10-15",
+  "license": "Apache-2.0",
+  "scope": "Author-owned additive layout stylesheet and native-DOM content preview controls; no third-party application JavaScript replaced",
+  "files": {
+    "patches/dashboard/text-containment.css": "e30b3dfb83b80a7bf85924d76829ff5bb76f4a969fae5f75b4e8255b76df306d",
+    "patches/dashboard/content-folding.mjs": "ab42c9c350907bbd8926b464aa233a31dc424e081e282d8dd09f722eeae7a126"
+  },
+  "compatibleSnapshot": {
+    "upstreamCommit": "04985091706cb77d5e2f73bbf8b906966e9d97c7",
+    "baseSourceFiles": 29,
+    "basePatchFiles": 3,
+    "baseHashMeaning": "Unchanged historical source hashes, not hashes of a new full frontend build"
+  },
+  "previewDefaults": {
+    "chatMaxHeightRem": 18,
+    "nativeTaskMaxHeightRem": 7.5,
+    "shortContentFullyVisible": true,
+    "expandedStateLifetime": "Current mounted DOM node only; no storage/cross-refresh preference",
+    "toggleLabels": [
+      "展开全文",
+      "收起"
+    ]
+  },
+  "verificationMode": "Actual Chrome, real ChatView/NativeSubagents plus full stylesheet, synthetic events/content, local-only requests; no production/private session or model",
+  "notClaimed": [
+    "Authenticated model validation",
+    "Scientific acceptance",
+    "Fresh full application build",
+    "Arbitrary future upstream DOM compatibility"
+  ]
+}

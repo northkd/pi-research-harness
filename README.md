@@ -18,9 +18,10 @@
 
 - **科研工作入口**：独立 agent 配置目录启动，不污染个人 Pi 配置。
 - **证据优先**：文献/search/fetch observations、来源定位、claim conditions与原始结果可追踪。
-- **有边界的任务分工**：理论、文献、数值、匿名批评、网页模型、SSH各有明确角色；是否派发和外发材料由当前授权决定。
+- **有边界的任务分工**：理论、文献、数值、匿名批评、网页模型、SSH各有明确角色；受控嵌套不转交远程/外发权限，是否派发由当前授权、独立价值和资源决定。
+- **后台主线监督**：冻结核心与最小证据范围后按真正研究节点异步审查，方向与科学支持分开；同阶段代码/测试/收尾不逐次调用模型。支持准确分支人工放行，不含持久流程裁决。详见[监督设置](docs/SUPERVISION.md)。
 - **Feynman ↔ ARIS薄集成**：Markdown草稿是输入，不等于LaTeX/PDF；内部review不冒充独立审查。
-- **Dashboard定制**：科研会话与native子任务展示、布局和已部署的最后消息“撤销并编辑”。
+- **Dashboard定制**：科研会话与native子任务展示、布局和已部署的最后消息“撤销并编辑”；长正文/路径换行与代码/表格局部滚动；长内容默认限高预览，可「展开全文 / 收起」，避免卡片过高，短内容不折叠。
 - **可选能力**：专用Chrome MCP、用户配置的GPT-image接口、agy外部CLI和远程/HPC适配。
 
 ## 子代理如何连接推理与计算
@@ -86,7 +87,7 @@ bash scripts/prepare-dashboard.sh
 ```text
 integration/       evidence adapters、route/gate、workflow、离线测试
 agents/            research-*角色模板，不绑定作者模型账号
-extensions/        undo-last、可选环境变量认证的绘图工具
+extensions/        主线监督、undo-last、可选环境变量认证的绘图工具
 bin/               pi-research、dashboard、专用浏览器与agy入口
 config/            安全模板、可选service模板、固定版本和源码hash
 scripts/           独立安装、上游补丁检查、发布文件审计
@@ -122,6 +123,7 @@ flowchart LR
 | 可移植安装配置与临时目录验证 | 在任意新机完成有认证的全量安装 |
 | 已部署dashboard前端及native bridge源补丁、固定commit与hash | 打包所有node_modules/本机dist/私人状态 |
 | 最后消息撤回编辑的定向测试；运行前端资源已上线核验 | 所有网络重连/历史分支场景都已完善 |
+| 主线监督policy v2与stage-checkpoint cadence v1源码/合成检查 | 新安装就授权外发材料、已真实调用指定模型或验收科研结论 |
 | 合成封面与脱敏真实截图 | 科研实验结果或未公开的真实聊天内容 |
 
 **暂停的 B1/R4 完整历史重放后端不在本发布版中。** 这样保留当前可用功能，也避免把未验收的大改误当作稳定版。后台重启可中断同control group里的Pi；生产部署必须用独立执行器与备份，不在普通聊天里盲重启。
@@ -138,6 +140,8 @@ flowchart LR
 - [已补齐的复刻源码与技能](docs/REPRODUCTION.md)
 - [新设备迁移核验](docs/MIGRATION.md)
 - [二次开发与补丁约定](docs/DEVELOPMENT.md)
+- [阶段式后台主线监督](docs/SUPERVISION.md)
+- [Dashboard文字溢出修复与回归](docs/DASHBOARD-LAYOUT.md)
 - [上游与许可证](docs/UPSTREAMS.md)
 - [实际验证与未验证边界](docs/VALIDATION.md)
 - [科研集成说明](integration/README.md)
