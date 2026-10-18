@@ -46,7 +46,7 @@ function bundle(resourcesDir, {version = '0.1.0'} = {}) {
 }
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-research-profile-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pi-research-profile-')));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const resourcesDir = path.join(root, 'Resources');
   const dataDir = path.join(root, 'userData', 'research');

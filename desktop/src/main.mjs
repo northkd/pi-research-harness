@@ -49,6 +49,15 @@ function savePreferences(value) {
   fs.renameSync(temporary, preferencePath);
 }
 
+function documentationUrl() {
+  const repository = 'https://github.com/northkd/pi-research-harness';
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(resourcesDir, 'research-bundle.json'), 'utf8'));
+    if (/^[a-f0-9]{40}$/.test(manifest.sourceCommit)) return `${repository}/blob/${manifest.sourceCommit}/docs/DESKTOP.md`;
+  } catch { /* Development runs can start before resources are prepared. */ }
+  return repository;
+}
+
 function assertLauncher(event) {
   if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== launcherUrl) {
     throw new Error('This action is available only from the desktop launcher.');
@@ -333,7 +342,7 @@ else {
       ] },
       { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
       { label: '帮助', submenu: [
-        { label: '项目与使用说明', click: () => void shell.openExternal('https://github.com/northkd/pi-research-harness/blob/main/docs/DESKTOP.md') },
+        { label: '项目与使用说明', click: () => void shell.openExternal(documentationUrl()) },
         { label: '第三方许可证', click: () => void shell.openPath(path.join(resourcesDir, 'licenses')) }
       ] }
     ];

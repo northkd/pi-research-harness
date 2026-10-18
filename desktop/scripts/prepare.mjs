@@ -62,6 +62,8 @@ if (!suppliedSource) {
   if (fs.existsSync(source)) throw new Error(`Build checkout already exists: ${source}. Remove only this disposable .build/dashboard directory before rebuilding.`);
   fs.mkdirSync(source, { recursive: true });
   run('git', ['init'], source);
+  // Snapshot hashes describe LF source bytes, including on Windows hosts.
+  run('git', ['config', 'core.autocrlf', 'false'], source);
   run('git', ['remote', 'add', 'origin', snapshot.upstream.url], source);
   run('git', ['fetch', '--depth', '1', 'origin', snapshot.upstream.commit], source);
   run('git', ['checkout', '--detach', 'FETCH_HEAD'], source);
