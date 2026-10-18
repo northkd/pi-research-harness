@@ -1,0 +1,2 @@
+# Patch bytes must match the pinned upstream sources on every build platform.
+*.patch text eol=lf

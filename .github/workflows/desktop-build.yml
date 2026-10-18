@@ -5,6 +5,7 @@ on:
     branches:
       - 'codex/desktop-*'
     paths:
+      - '.gitattributes'
       - '.github/workflows/desktop-build.yml'
       - 'desktop/**'
       - 'patches/**'
@@ -12,6 +13,12 @@ on:
       - 'integration/**'
       - 'extensions/**'
       - 'skills/**'
+      - 'agents/**'
+      - 'scripts/**'
+      - 'vendor/**'
+      - 'package.json'
+      - 'LICENSE'
+      - 'NOTICE'
   workflow_dispatch:
 
 # Installers remain downloadable workflow artifacts. This workflow never publishes
