@@ -10,9 +10,11 @@ import { finished } from 'node:stream/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { NODE_VERSION } from './download-node.mjs';
+import { auditMacFramework } from './mac-framework-audit.cjs';
 
 const execFileAsync = promisify(execFile);
 const desktopDirectory = fileURLToPath(new URL('..', import.meta.url));
+const nativeAuditDirectory = path.join(desktopDirectory, 'dist', 'native-audit');
 const productName = 'Pi Research Harness';
 const launchTimeoutMs = 180_000;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -73,29 +75,40 @@ function runNsis(executable, args, timeout) {
 
 async function installApplication(installer, temporary) {
   if (process.platform === 'darwin') {
+    const command = (executable, args, options) => {
+      console.log(`[mac-install] ${JSON.stringify({ executable, arguments: args })}`);
+      return execFileAsync(executable, args, options);
+    };
     const mountpoint = path.join(temporary, 'mounted');
     await mkdir(mountpoint);
-    await execFileAsync('/usr/bin/hdiutil', [
+    await command('/usr/bin/hdiutil', [
       'attach', installer, '-readonly', '-nobrowse', '-mountpoint', mountpoint,
     ], { timeout: 90_000 });
+    let installation;
+    let installed;
     try {
       const apps = (await readdir(mountpoint)).filter((name) => name.endsWith('.app'));
       assert.equal(apps.length, 1, 'The DMG must contain exactly one application bundle');
-      const installed = path.join(temporary, 'Applications with spaces', apps[0]);
+      const mountedApp = path.join(mountpoint, apps[0]);
+      auditMacFramework({ appPath: mountedApp, stage: 'dmg-mounted', directory: nativeAuditDirectory });
+      installed = path.join(temporary, 'Applications with spaces', apps[0]);
       await mkdir(path.dirname(installed));
       // ditto preserves the executable modes and framework links in the .app.
-      await execFileAsync('/usr/bin/ditto', [path.join(mountpoint, apps[0]), installed], { timeout: 180_000 });
-      const { stdout } = await execFileAsync('/usr/libexec/PlistBuddy', [
+      await command('/usr/bin/ditto', [mountedApp, installed], { timeout: 180_000 });
+      auditMacFramework({ appPath: installed, stage: 'installed-before-detach', directory: nativeAuditDirectory });
+      const { stdout } = await command('/usr/libexec/PlistBuddy', [
         '-c', 'Print :CFBundleExecutable', path.join(installed, 'Contents', 'Info.plist'),
       ], { timeout: 30_000 });
       const binaryName = stdout.trim();
       assert.equal(binaryName, productName, 'The DMG contains an unexpected application');
       const executable = path.join(installed, 'Contents', 'MacOS', binaryName);
       await access(executable);
-      return { executable, kind: 'DMG drag-copy installation' };
+      installation = { executable, kind: 'DMG drag-copy installation' };
     } finally {
-      await execFileAsync('/usr/bin/hdiutil', ['detach', mountpoint], { timeout: 60_000 });
+      await command('/usr/bin/hdiutil', ['detach', mountpoint], { timeout: 60_000 });
     }
+    auditMacFramework({ appPath: installed, stage: 'installed-after-detach', directory: nativeAuditDirectory, launchProbe: true });
+    return installation;
   }
 
   const installed = path.join(temporary, 'Installed application with spaces');

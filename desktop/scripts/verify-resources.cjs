@@ -46,10 +46,12 @@ function finish() {
   if (finished || exitCode !== 0 || !output.includes(marker)) return;
   finished = true;
   clearTimeout(timer);
-  console.log(JSON.stringify({
+  // Windows ConPTY retains a worker even after its child exits. All native
+  // checks are complete here; flush the report before terminating this probe.
+  process.stdout.write(JSON.stringify({
     platform: process.platform, arch: process.arch, version: process.version,
     modules: process.versions.modules, pty: true, sqlite: true, koffi: process.platform === 'win32',
-  }));
+  }) + '\n', () => process.exit(0));
 }
 terminal.onData((data) => { output += data; finish(); });
 terminal.onExit((event) => {
@@ -130,7 +132,12 @@ module.exports = async function verifyResources(context) {
     cwd: resources, encoding: 'utf8', windowsHide: true, timeout: 25000,
   });
   if (probe.error || probe.status !== 0) {
-    throw new Error(`Bundled native runtime failed: ${probe.error?.message || probe.stderr?.trim() || `exit ${probe.status}`}`);
+    throw new Error(`Bundled native runtime failed:\n${[
+      `error: ${probe.error?.message || '(none)'}`,
+      `status: ${probe.status}; signal: ${probe.signal || '(none)'}`,
+      `stdout: ${probe.stdout?.trim() || '(empty)'}`,
+      `stderr: ${probe.stderr?.trim() || '(empty)'}`,
+    ].join('\n')}`);
   }
   const identity = JSON.parse(probe.stdout.trim().split(/\r?\n/).at(-1));
   if (identity.platform !== platform || identity.arch !== arch || identity.version !== 'v24.15.0' || identity.modules !== process.versions.modules) {

@@ -14,6 +14,7 @@ module.exports = {
   ],
   beforePack: './scripts/verify-resources.cjs',
   afterPack: './scripts/verify-packaged.cjs',
+  afterSign: './scripts/mac-framework-audit.cjs',
   publish: null,
   mac: {
     icon: 'resources/icons/icon.icns',

@@ -125,6 +125,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}-smoke-results
-          path: desktop/dist/smoke-results/
+          path: |
+            desktop/dist/smoke-results/
+            desktop/dist/native-audit/
           if-no-files-found: ignore
           retention-days: 30
