@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { adaptDashboardDirectory } from './adapt-dashboard.mjs';
+import { pruneEsbuildPlatforms } from './prune-esbuild-platforms.mjs';
 
 const desktop = fileURLToPath(new URL('..', import.meta.url));
 const root = path.dirname(desktop);
@@ -196,6 +197,9 @@ run('git', ['-c', 'core.autocrlf=false', 'apply', '--check', path.join(root, sub
 run('git', ['-c', 'core.autocrlf=false', 'apply', path.join(root, subagentPatch.patch)], subagentDirectory);
 if (sha256(patchedFile) !== subagentPatch.afterSha256) throw new Error('Research subagent patch result hash mismatch');
 
+const esbuildPlatformPruning = pruneEsbuildPlatforms(resources);
+console.log(`Removed ${esbuildPlatformPruning.removedPackages} non-target esbuild platform packages (${esbuildPlatformPruning.removedBytes} bytes) for ${process.platform}/${process.arch}.`);
+
 const gitRoot = path.join(resources, 'git');
 fs.mkdirSync(gitRoot, { recursive: true });
 if (process.platform === 'win32') {
@@ -228,7 +232,8 @@ const manifest = {
   build: { platform: process.platform, arch: process.arch, nodeVersion: process.version },
   dependencyLocks: Object.fromEntries(['dashboard-pnpm-lock.yaml', 'server-package-lock.json', 'harness-package-lock.json'].map((name) => [name, sha256(path.join(locks, name))])),
   sourceHashesVerified: Object.keys(snapshot.sourceHashes).length,
-  runtimePathAdaptations: isolation.changeCount
+  runtimePathAdaptations: isolation.changeCount,
+  esbuildPlatformPruning
 };
 writeJson(path.join(resources, 'research-bundle.json'), manifest);
 console.log(`Prepared ${plugins.length} Dashboard plugins and ${manifest.packages.length} research extensions for ${process.platform}/${process.arch}.`);

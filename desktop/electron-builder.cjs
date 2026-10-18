@@ -9,7 +9,11 @@ module.exports = {
   extraResources: [
     // Keep node_modules nested beneath the matcher root: builder deliberately
     // excludes a root-level node_modules directory even for extraResources.
-    { from: 'resources', to: '.', filter: ['server/**/*', 'harness/**/*', 'node/**/*', 'licenses/**/*', 'git/**/*', 'research-bundle.json'] },
+    { from: 'resources', to: '.', filter: [
+      'server/**/*', 'harness/**/*', 'node/**/*', 'licenses/**/*', 'git/**/*', 'research-bundle.json',
+      // Runtime jiti writes to userData/cache/jiti, not the build machine cache.
+      '!server/node_modules/.cache/jiti{,/**/*}'
+    ] },
     { from: 'resources/icons/icon.png', to: 'icon.png' }
   ],
   beforePack: './scripts/verify-resources.cjs',
@@ -18,7 +22,7 @@ module.exports = {
   publish: null,
   mac: {
     icon: 'resources/icons/icon.icns',
-    target: ['dmg', 'zip'],
+    target: ['dmg'],
     category: 'public.app-category.developer-tools',
     minimumSystemVersion: '13.5',
     identity: '-',

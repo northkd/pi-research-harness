@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -53,27 +53,126 @@ async function findInstaller(dist) {
   return path.join(dist, files[0]);
 }
 
-function runNsis(executable, args, timeout) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, {
-      // Quote argv[0] separately: verbatim arguments are needed for NSIS /D,
-      // but the installer itself may also live under a path containing spaces.
-      argv0: `"${executable}"`,
-      windowsVerbatimArguments: true,
-      windowsHide: true,
-      shell: false,
-      stdio: 'inherit',
-      timeout,
-    });
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error(`NSIS exited with code ${code}, signal ${signal}`));
-    });
-  });
+async function nsisProcessSnapshot(rootPid) {
+  if (!Number.isInteger(rootPid)) return [];
+  // Query only this installer and its descendants. No machine-wide process list
+  // or recursive filesystem scan: the bundle contains over 100,000 small files.
+  const command = `
+$ErrorActionPreference = 'Stop'
+$nsisQueue = [System.Collections.Generic.Queue[int]]::new()
+$nsisSeen = [System.Collections.Generic.HashSet[int]]::new()
+$nsisRows = [System.Collections.Generic.List[object]]::new()
+$nsisQueue.Enqueue(${rootPid})
+while ($nsisQueue.Count -gt 0 -and $nsisSeen.Count -lt 32) {
+  $nsisId = $nsisQueue.Dequeue()
+  if (-not $nsisSeen.Add($nsisId)) { continue }
+  $nsisProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $nsisId" -ErrorAction SilentlyContinue
+  if (-not $nsisProcess) { continue }
+  $nsisWindow = Get-Process -Id $nsisId -ErrorAction SilentlyContinue
+  $nsisRows.Add([pscustomobject]@{
+    pid = $nsisProcess.ProcessId; parentPid = $nsisProcess.ParentProcessId; name = $nsisProcess.Name
+    cpuSeconds = ([double]$nsisProcess.KernelModeTime + [double]$nsisProcess.UserModeTime) / 10000000
+    readBytes = [double]$nsisProcess.ReadTransferCount; writeBytes = [double]$nsisProcess.WriteTransferCount
+    workingSetBytes = [double]$nsisProcess.WorkingSetSize; windowTitle = $nsisWindow.MainWindowTitle
+  })
+  Get-CimInstance Win32_Process -Filter "ParentProcessId = $nsisId" -ErrorAction SilentlyContinue |
+    ForEach-Object { $nsisQueue.Enqueue([int]$_.ProcessId) }
+}
+ConvertTo-Json -InputObject @($nsisRows.ToArray()) -Depth 4 -Compress`;
+  const { stdout } = await execFileAsync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64'),
+  ], { windowsHide: true, timeout: 10_000, maxBuffer: 256_000 });
+  return JSON.parse(stdout.trim() || '[]');
 }
 
-async function installApplication(installer, temporary) {
+async function nsisInstallationSnapshot(installed) {
+  const markers = [
+    `${productName}.exe`, `Uninstall ${productName}.exe`, 'resources/app.asar',
+    'resources/research-bundle.json', 'resources/node/node.exe', 'resources/git/cmd/git.exe',
+    'resources/harness/package.json', 'resources/server/package.json',
+    'resources/server/node_modules/@blackbelt-technology/pi-dashboard-web/dist/index.html',
+  ];
+  const files = await Promise.all(markers.map(async (relative) => {
+    try {
+      const info = await stat(path.join(installed, relative));
+      return { path: relative, exists: true, bytes: info.size, modifiedAt: info.mtime.toISOString() };
+    } catch (error) { return { path: relative, exists: false, error: error.code }; }
+  }));
+  const directories = await Promise.all(['.', 'resources', 'resources/server/node_modules', 'resources/harness/node_modules'].map(async (relative) => {
+    try { return { path: relative, entries: (await readdir(path.join(installed, relative))).length }; }
+    catch (error) { return { path: relative, entries: null, error: error.code }; }
+  }));
+  return { directory: installed, files, directories };
+}
+
+async function runNsis(executable, args, { timeout, installed, evidence, stage }) {
+  const started = Date.now();
+  const diagnosticFile = path.join(evidence, `nsis-${stage}.jsonl`);
+  const child = spawn(executable, args, {
+    // NSIS /D and _?= must be final and unquoted. Only argv[0] is quoted,
+    // preserving executable paths with spaces without shell interpretation.
+    argv0: `"${executable}"`, windowsVerbatimArguments: true,
+    windowsHide: true, shell: false, stdio: 'inherit',
+  });
+  const exit = new Promise((resolve) => {
+    child.once('error', (error) => resolve({ error }));
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  let sampling = false;
+  let pendingSample = Promise.resolve();
+  const snapshot = async (event, details = {}) => {
+    sampling = true;
+    try {
+      const [processes, installation] = await Promise.all([
+        child.exitCode === null && child.signalCode === null
+          ? nsisProcessSnapshot(child.pid).catch((error) => ({ diagnosticError: error.message }))
+          : [],
+        nsisInstallationSnapshot(installed),
+      ]);
+      const record = { at: new Date().toISOString(), event, stage, elapsedMs: Date.now() - started,
+        pid: child.pid, executable, arguments: args, timeoutMs: timeout, processes, installation, ...details };
+      await appendFile(diagnosticFile, `${JSON.stringify(record)}\n`);
+      console.log(`[nsis-${stage}] ${JSON.stringify(record)}`);
+    } catch (error) {
+      console.error(`[nsis-${stage}] Could not record diagnostics: ${error.message}`);
+    } finally { sampling = false; }
+  };
+  // Samples never overlap, and each process query has its own short timeout.
+  pendingSample = snapshot('started');
+  const interval = setInterval(() => {
+    if (!sampling) pendingSample = snapshot('running');
+  }, 30_000);
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timedOut: true }), timeout);
+  });
+  const result = await Promise.race([exit, deadline]);
+  clearTimeout(timer);
+  clearInterval(interval);
+  if (result.timedOut) {
+    // Kill the owned process tree, including an NSIS bootstrap child, before
+    // cleanup can remove files underneath a still-running installer.
+    let termination;
+    try {
+      const killed = await execFileAsync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+        windowsHide: true, timeout: 15_000,
+      });
+      termination = { ok: true, stdout: killed.stdout.trim(), stderr: killed.stderr.trim() };
+    } catch (error) {
+      termination = { ok: false, error: error.message, stdout: error.stdout, stderr: error.stderr };
+    }
+    const stopped = await Promise.race([exit, delay(10_000).then(() => ({ stillRunning: true }))]);
+    await pendingSample;
+    await snapshot('timeout', { termination, exit: { code: stopped.code, signal: stopped.signal, stillRunning: stopped.stillRunning } });
+    throw new Error(`NSIS ${stage} exceeded ${timeout / 1000}s; owned process-tree termination ${termination.ok ? 'succeeded' : 'failed'}. Diagnostics: ${diagnosticFile}`);
+  }
+  await pendingSample;
+  await snapshot('exited', { exit: { code: result.code, signal: result.signal, error: result.error?.message } });
+  if (result.error) throw result.error;
+  if (result.code !== 0) throw new Error(`NSIS ${stage} exited with code ${result.code}, signal ${result.signal}. Diagnostics: ${diagnosticFile}`);
+}
+
+async function installApplication(installer, temporary, evidence) {
   if (process.platform === 'darwin') {
     const command = (executable, args, options) => {
       console.log(`[mac-install] ${JSON.stringify({ executable, arguments: args })}`);
@@ -115,20 +214,25 @@ async function installApplication(installer, temporary) {
   // NSIS requires /D to be the final, unquoted command-line argument; the path
   // may contain spaces. Direct spawn avoids a shell and its escaping rules.
   // NSIS contract: https://nsis.sourceforge.io/Docs/Chapter3.html#installerusage
-  await runNsis(installer, ['/S', '/currentuser', `/D=${installed}`], 240_000);
+  await runNsis(installer, ['/S', '/currentuser', `/D=${installed}`], {
+    timeout: 600_000, installed, evidence, stage: 'install',
+  });
   const executable = path.join(installed, `${productName}.exe`);
   await access(executable);
   return { executable, installed, kind: 'NSIS silent per-user installation' };
 }
 
-async function uninstallApplication(installation, temporary) {
+async function uninstallApplication(installation, temporary, evidence) {
   if (!installation?.installed) return;
   const original = path.join(installation.installed, `Uninstall ${productName}.exe`);
   const uninstaller = path.join(temporary, 'uninstall-smoke.exe');
   await copyFile(original, uninstaller);
   // Running the copy with _?= avoids NSIS returning before its child uninstaller
   // finishes, and lets it remove the original installer directory in one pass.
-  await runNsis(uninstaller, ['/S', '/currentuser', `_?=${installation.installed}`], 120_000);
+  await runNsis(uninstaller, ['/S', '/currentuser', `_?=${installation.installed}`], {
+    timeout: 300_000, installed: installation.installed, evidence, stage: 'uninstall',
+  });
+  await assert.rejects(access(installation.executable), { code: 'ENOENT' }, 'NSIS left the installed application executable behind');
 }
 
 async function terminateTree(child) {
@@ -246,11 +350,11 @@ export async function smokeInstalled() {
     const installer = await findInstaller(dist);
     const installerSha256 = await hashFile(installer);
     console.log(`Installing and smoke testing ${path.basename(installer)}`);
-    installation = await installApplication(installer, temporary);
+    installation = await installApplication(installer, temporary, evidence);
     await launchApplication(installation.executable, temporary, evidence);
     const report = validateSmokeReport(JSON.parse(await readFile(path.join(evidence, 'desktop-smoke.json'), 'utf8')));
     await assertServerStopped(report.baseUrl);
-    await uninstallApplication(installation, temporary);
+    await uninstallApplication(installation, temporary, evidence);
     const installationKind = installation.kind;
     installation = undefined;
 
@@ -285,7 +389,7 @@ export async function smokeInstalled() {
     throw error;
   } finally {
     if (installation) {
-      await uninstallApplication(installation, temporary).catch((error) => {
+      await uninstallApplication(installation, temporary, evidence).catch((error) => {
         if (!primaryError) throw error;
         console.error(`Smoke cleanup also failed: ${error.message}`);
       });

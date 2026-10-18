@@ -18,9 +18,29 @@ function nativeTarget(context, host = process) {
 // them in Electron would test a different ABI. A real short-lived PTY child also
 // checks spawn-helper permissions and Windows ConPTY support before packaging.
 const nativeProbe = String.raw`
+const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const root = process.argv[1];
+// A build-machine override must not substitute a binary outside this bundle.
+delete process.env.ESBUILD_BINARY_PATH;
+const esbuildTransforms = [];
+for (const tree of ['server', 'harness']) {
+  const modules = path.join(root, '..', tree, 'node_modules', '@earendil-works', 'pi-coding-agent', 'node_modules');
+  const esbuildRequire = createRequire(path.join(modules, 'esbuild', 'package.json'));
+  const platformPackage = '@esbuild/' + process.platform + '-' + process.arch;
+  const selected = esbuildRequire.resolve(platformPackage + '/package.json');
+  if (fs.realpathSync(path.dirname(selected)) !== fs.realpathSync(path.join(modules, platformPackage))) {
+    throw new Error('Native esbuild resolved outside its retained platform package: ' + tree);
+  }
+  const esbuild = esbuildRequire('./lib/main.js');
+  const transformed = esbuild.transformSync('const answer: number = 6 * 7;', { loader: 'ts', target: 'es2022' });
+  if (vm.runInNewContext(transformed.code + '\nanswer;', {}, { timeout: 1000 }) !== 42) {
+    throw new Error('Bundled esbuild failed its actual TypeScript transform: ' + tree);
+  }
+  esbuildTransforms.push({ tree, version: esbuild.version, platformPackage, transformed: true });
+}
 const runtimeRequire = createRequire(path.join(root, 'package.json'));
 const pty = runtimeRequire('node-pty');
 if (process.platform === 'win32') runtimeRequire('koffi');
@@ -51,6 +71,7 @@ function finish() {
   process.stdout.write(JSON.stringify({
     platform: process.platform, arch: process.arch, version: process.version,
     modules: process.versions.modules, pty: true, sqlite: true, koffi: process.platform === 'win32',
+    esbuild: esbuildTransforms,
   }) + '\n', () => process.exit(0));
 }
 terminal.onData((data) => { output += data; finish(); });
@@ -121,6 +142,9 @@ module.exports = async function verifyResources(context) {
     const pkg = readJson(`${tree}/node_modules/@earendil-works/${name}/package.json`);
     if (pkg.version !== '1.0.0') throw new Error(`Unexpected ${name} version in ${tree}: ${pkg.version}`);
   }
+  const { planEsbuildPlatformPruning } = await import('./prune-esbuild-platforms.mjs');
+  const esbuildPlan = planEsbuildPlatformPruning(resources, { platform, arch });
+  if (esbuildPlan.removedPackages !== 0) throw new Error('Foreign esbuild platform packages remain in the prepared runtime');
   if (platform === 'win32') {
     for (const file of ['git/cmd/git.exe', 'git/usr/bin/sh.exe', 'git/usr/bin/bash.exe', 'git/THIRD-PARTY-LICENSE.txt']) resourceFile(file);
     resourceFile('git/mingw64');
@@ -143,7 +167,11 @@ module.exports = async function verifyResources(context) {
   if (identity.platform !== platform || identity.arch !== arch || identity.version !== 'v24.15.0' || identity.modules !== process.versions.modules) {
     throw new Error('Bundled Node platform, architecture, version, or native ABI differs from the native build target');
   }
-  console.log(`Verified native research bundle ${platform}/${arch}, Node ${identity.version}, ABI ${identity.modules}, PTY, SQLite${platform === 'win32' ? ', and koffi' : ''}.`);
+  if (identity.esbuild?.length !== 2 || esbuildPlan.trees.some((tree) => !identity.esbuild.some((result) =>
+    result.tree === tree.tree && result.version === tree.esbuildVersion && result.platformPackage === tree.retained.name && result.transformed === true))) {
+    throw new Error('Both retained esbuild binaries must pass an actual TypeScript transform');
+  }
+  console.log(`Verified native research bundle ${platform}/${arch}, Node ${identity.version}, ABI ${identity.modules}, PTY, SQLite${platform === 'win32' ? ', koffi' : ''}, and both esbuild transforms.`);
 };
 
 module.exports.nativeTarget = nativeTarget;

@@ -61,7 +61,7 @@
 
 桌面客户端沿用本项目的定制 Dashboard 页面，将本地后台、Node/Pi 运行时与科研配置随应用打包。使用安装包无需先安装 Node.js 或部署服务器；首次打开后，在设置中配置自己的模型账号，并选择工作目录。
 
-- **macOS**：Apple Silicon 与 Intel 分别提供 DMG 安装包。
+- **macOS**：为 Apple Silicon（M 系列芯片）提供 DMG 安装包。
 - **Windows**：提供 x64 EXE 安装程序。
 
 安装包由 [Desktop installers 工作流](https://github.com/northkd/pi-research-harness/actions/workflows/desktop-build.yml) 在对应平台构建和验证；下载时选择目标提交的成功运行及其安装包 artifact。实际可用版本与验证结果以该次运行记录为准。

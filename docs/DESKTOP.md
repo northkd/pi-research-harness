@@ -9,10 +9,9 @@
 | 电脑 | 系统要求 | 安装文件 |
 |---|---|---|
 | Apple Silicon Mac，M 系列芯片 | macOS 13.5 或更高版本 | `Pi-Research-Harness-<版本>-macOS-arm64.dmg` |
-| Intel Mac | macOS 13.5 或更高版本 | `Pi-Research-Harness-<版本>-macOS-x64.dmg` |
 | Windows Intel / AMD 64 位电脑 | Windows 10 或更高版本，x64 | `Pi-Research-Harness-<版本>-windows-x64-Setup.exe` |
 
-Mac 另提供包含 `.app` 的 ZIP 文件。Windows ARM 原生包与 32 位安装包不在本次构建矩阵内。
+macOS 只分发 DMG，Windows 只分发 EXE，避免在同一个下载包中重复放入同一应用的另一种格式。Windows ARM 原生包与 32 位安装包不在本次构建矩阵内。
 
 macOS 最低要求由随包运行时决定：[Node.js 24 官方二进制要求 macOS 13.5+](https://nodejs.org/en/blog/migrations/v22-to-v24#platform-support)，[Electron 44 已停止支持 macOS 12](https://www.electronjs.org/blog/electron-44-0#removed-macos-12-support)。上表是兼容性要求；最终以对应平台的实际安装验证记录为准，较新系统的 CI 通过不等于最低系统版本已完成实机验收。
 
@@ -21,16 +20,15 @@ macOS 最低要求由随包运行时决定：[Node.js 24 官方二进制要求 m
 打开本仓库的 [Desktop installers 工作流](https://github.com/northkd/pi-research-harness/actions/workflows/desktop-build.yml)，选择目标提交的成功运行，在 **Artifacts** 中下载对应文件：
 
 - `Pi-Research-Harness-macOS-arm64`
-- `Pi-Research-Harness-macOS-x64`
 - `Pi-Research-Harness-Windows-x64`
 
-解压 artifact 后取得 DMG 或 EXE，以及同批构建的 `SHA256SUMS.txt`。带 `-smoke-results` 后缀的是测试记录，不是安装包。Artifacts 配置保留 **30 天**；过期后需要重新构建。下载权限遵循仓库访问权限。
+GitHub 将 artifact 作为 ZIP 下载；解压后取得该平台唯一的 DMG 或 EXE，以及同批构建的 `SHA256SUMS.txt`。外层 ZIP 是 GitHub 的下载容器，不再额外包含一份 `.app` ZIP。带 `-smoke-results` 后缀的是测试记录，不是安装包。Artifacts 配置保留 **30 天**；过期后需要重新构建。下载权限遵循仓库访问权限。
 
 ## 2. 安装与首次打开
 
 ### macOS
 
-1. 双击适合本机芯片的 DMG。
+1. 双击 macOS arm64 的 DMG。
 2. 将 **Pi Research Harness.app** 拖入“应用程序”。
 3. 从“应用程序”打开客户端，等待本地工作台完成初始化。
 
@@ -108,12 +106,13 @@ node desktop/scripts/download-node.mjs
 
 `prepare.mjs` 准备固定上游源码、核对并应用补丁、安装锁定依赖、构建 Dashboard，组装应用资源。`download-node.mjs` 下载本机平台的完整 Node 运行时，用官方 SHA-256 清单校验，解压后实际执行 Node 校验版本和架构。
 
+组装时会按依赖包声明的系统和 CPU 类型，精确移除两份 Pi 依赖树中不适用于本机的 esbuild 二进制包，保留目标平台工具与许可证，并在 `research-bundle.json` 中记录裁剪结果。打包检查实际执行保留工具的转换功能；构建机生成的 jiti 缓存也不随安装包分发。
+
 然后只执行与当前构建机匹配的一条命令：
 
 | 构建机 | 打包命令 |
 |---|---|
 | Apple Silicon Mac | `npm --prefix desktop run dist -- --mac --arm64` |
-| Intel Mac | `npm --prefix desktop run dist -- --mac --x64` |
 | Windows x64 | `npm --prefix desktop run dist -- --win --x64` |
 
 产物写入 **`desktop/dist/`**。已有其他架构或旧版本产物时，先另行保存并清理旧输出，避免混淆。开发时可在准备资源后运行 `npm --prefix desktop start`；开发窗口不能替代打包应用的安装验证。
@@ -132,9 +131,9 @@ node desktop/scripts/smoke-installed.mjs
 
 ## 7. CI 与验证边界
 
-[`desktop-build.yml`](../.github/workflows/desktop-build.yml) 覆盖 `macos-15` arm64、`macos-15-intel` x64 与 `windows-latest` x64。`codex/desktop-*` 分支的相关改动触发构建，也支持手动触发。工作流只上传本仓库 Actions artifacts，不创建 GitHub Release、不发布 npm 包。
+[`desktop-build.yml`](../.github/workflows/desktop-build.yml) 覆盖 `macos-15` arm64 与 `windows-latest` x64。`codex/desktop-*` 分支的相关改动触发构建，也支持手动触发。工作流只上传本仓库 Actions artifacts，不创建 GitHub Release、不发布 npm 包。
 
-安装包仅在对应原生安装测试通过后上传；失败时保留可取得的诊断材料。每次交付应核对 **具体提交、三个原生作业状态及其 smoke 报告**。仅有打包脚本、ZIP 文件名、Linux 测试或成功构建日志，不构成 macOS 与 Windows 安装启动已通过的证据。
+安装包仅在对应原生安装测试通过后上传；失败时保留可取得的诊断材料。每次交付应核对 **具体提交、两个原生作业状态及其 smoke 报告**。仅有打包脚本、ZIP 文件名、Linux 测试或成功构建日志，不构成 macOS 与 Windows 安装启动已通过的证据。
 
 本次验证记录与具体构建链接由维护者在实际完成后补充。本说明不预先宣称最低系统版本、所有 13 个扩展的外部工具调用、有认证模型、远程工作流或长期后台任务均已验收。
 
