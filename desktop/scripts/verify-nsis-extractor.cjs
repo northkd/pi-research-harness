@@ -126,6 +126,7 @@ async function main() {
       '!macro extractUsing7za FILE',
       '!macroend',
       `!include "${nsisString(path.join(desktop, 'nsis', 'direct-extract.nsh'))}"`,
+      `!include "${nsisString(path.join(desktop, 'nsis', 'long-path-remove.nsh'))}"`,
       'Section "Install"',
       '  InitPluginsDir',
       '  SetOutPath "$PLUGINSDIR"',
@@ -137,12 +138,7 @@ async function main() {
       'Section "Uninstall"',
       // Use the exact fixture directory; do not depend on NSIS self-copy paths.
       `  StrCpy $INSTDIR "${nsisString(installed)}"`,
-      '  SetOutPath "$TEMP"',
-      '  ClearErrors',
-      '  RMDir /r "$INSTDIR"',
-      '  IfErrors 0 +3',
-      '    SetErrorLevel 3',
-      '    Quit',
+      '  !insertmacro ResearchRemoveInstallDirectory',
       '  SetErrorLevel 0',
       'SectionEnd',
       '',
@@ -162,7 +158,7 @@ async function main() {
         bytes: actual.length, sha256: hash(actual) });
     }
     // _?= is the final, deliberately unquoted NSIS argument. The generated
-    // uninstaller is outside INSTDIR so RMDir can remove every installed file.
+    // uninstaller is outside INSTDIR so the production macro can remove it all.
     await run('remove long paths using the generated NSIS uninstaller', uninstaller,
       ['/S', `_?=${installed}`], {
         cwd: work, env, argv0: `"${uninstaller}"`, windowsVerbatimArguments: true,

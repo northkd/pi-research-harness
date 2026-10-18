@@ -9,8 +9,12 @@ const templatePins = {
   'installer.nsi': '8811964416d122612c3e7601728af5d3f998d677918df829a4e8b4c739c8b9f8',
   'installSection.nsh': '74c4dbb4163cdd90ca4850b75d304e916235c882d6af7b5cdad63bffbc977072',
   'include/extractAppPackage.nsh': 'e4174388a0f7a1df0b85a0742aa1ea7a4b2b18f9f29dccd6ef10a66212f68148',
+  'uninstaller.nsh': '9ee2dac4593478083e8aa6f8487287ce9401006ccd50ecc538871d133ea4a42c',
 };
 const includeLine = '!include "${PROJECT_DIR}\\nsis\\direct-extract.nsh"\n';
+const removeIncludeLine = '!include "${PROJECT_DIR}\\nsis\\long-path-remove.nsh"\n';
+const originalRemoveLine = '    RMDir /r $INSTDIR\n';
+const removeMacroLine = '    !insertmacro ResearchRemoveInstallDirectory\n';
 const binarySha256 = 'b0cfdeaf429f5cc53f85123dd8f5a5feb92c19d31aa34df257edf9a26be05f95';
 const sourceSha256 = 'd1074d56f415aab99d99e597a7b66dc455dba6349ae8a4c89df76475b6a1284c';
 const sourceUrls = [
@@ -46,17 +50,23 @@ async function patchTemplate() {
   assert.equal(builder.version, '26.8.1', 'Review the NSIS integration before changing electron-builder');
   const templates = path.join(desktop, 'node_modules/app-builder-lib/templates/nsis');
   let section;
+  let uninstaller;
   for (const [name, expected] of Object.entries(templatePins)) {
     const text = await fs.readFile(path.join(templates, name), 'utf8');
-    // Only our one exact include may already have been applied in this checkout.
-    const original = name === 'installSection.nsh' ? text.replace(includeLine, '') : text;
+    // Only these exact reviewed edits may already exist in this checkout.
+    const original = name === 'installSection.nsh' ? text.replace(includeLine, '')
+      : name === 'uninstaller.nsh' ? text.replace(removeIncludeLine, '').replace(removeMacroLine, originalRemoveLine)
+        : text;
     assert.equal(sha256(original), expected, `Unexpected pinned NSIS template: ${name}`);
     if (name === 'installSection.nsh') section = original;
+    if (name === 'uninstaller.nsh') uninstaller = original;
   }
   assert.ok(section.startsWith('!include installer.nsh\n'), 'Extraction macro insertion point changed');
   await fs.writeFile(path.join(templates, 'installSection.nsh'), section.replace(
     '!include installer.nsh\n', `!include installer.nsh\n${includeLine}`,
   ));
+  await fs.writeFile(path.join(templates, 'uninstaller.nsh'), removeIncludeLine
+    + uninstaller.replace(originalRemoveLine, removeMacroLine));
 }
 
 module.exports = async function prepareNsis(context) {
@@ -79,6 +89,7 @@ module.exports = async function prepareNsis(context) {
   const manifest = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
   manifest.windowsInstaller = {
     format: 'NSIS', extraction: 'direct-to-install-directory',
+    removal: 'unicode-extended-paths',
     extractor: '7-Zip 21.07 x64', extractorSha256: binarySha256,
     correspondingSource: 'licenses/Windows-installer-7zip/7z2107-src.7z',
     correspondingSourceSha256: sourceSha256,
