@@ -3,7 +3,7 @@
   "active": false,
   "providerAllow": [],
   "aliases": {},
-  "minimumAvailableMemoryBytes": 2147483648,
+  "minimumAvailableMemoryBytes": 1073741824,
   "maxLiveChildProcessesMachineWide": 3,
   "idleEvaluation": {"enabled": false, "idleMs": 900000, "minimumIntervalMs": 3600000},
   "taskCategories": {

@@ -9,7 +9,7 @@ extensions/               阶段式主线监督、最后一条消息撤回；可
 config/                   无凭据模板与版本来源/hash
 bin/                      可移植的 Pi/dashboard/browser 启动入口
 scripts/                  安装、上游补丁、发布检查；无自动运行环境重启
-patches/                  已部署dashboard/subagents源码差异
+patches/                  dashboard开发快照、subagents/可选Hermes源码差异
 vendor/skills/            许可明确的技能与辅助源码、逐文件provenance
 vendor/licenses/          被引用上游的原许可证
 docs/images/              脱敏真实截图与已标注概念插画
@@ -31,21 +31,32 @@ npm run check:release
 
 ## Dashboard 定制
 
-上游是 MIT 项目，本仓库不是完整 fork。三个补丁只能应用到固定提交：
+上游是 MIT 项目，本仓库不是完整 fork。
+四个补丁按顺序应用到固定提交：
 
-1. `0001-deployed-frontend.patch`：当前部署的前端源差异，包含撤回按钮、输入回填、pending保护及此前native子任务/布局定制。
-2. `0002-deployed-native-bridge.patch`：**正在运行的**native子任务bridge改动。
-3. `0003-deployed-runtime-config.patch`：9个已安装server/shared源码差异；shared reader取真正被加载的单独shared包版本。包括隔离agent配置路径、defaultmodel/thinking写回、context-window投影与managed npm资源扫描。
+1. `0001-deployed-frontend.patch`：旧部署前端源差异，包含撤回按钮、输入回填、pending保护及此前native子任务/布局定制。
+2. `0002-deployed-native-bridge.patch`：旧部署native子任务bridge改动。
+3. `0003-deployed-runtime-config.patch`：旧快照9个server/shared源码差异；shared reader取当时实际加载的单独shared包版本。包括隔离agent配置路径、defaultmodel/thinking写回、context-window投影与managed npm资源扫描。
+4. `0004-current-development.patch`：叠加旧3补丁，保存当前完整开发差异，包含计费、Goal与历史重放候选。
 
-`node scripts/verify-dashboard.mjs /path/to/patched-checkout` 会逐文件核对
-发布快照29个源hash。补丁**不含**暂停的 B1/R4历史重放事务、超时tail等未验收后端。
+`node scripts/verify-dashboard.mjs /path/to/patched-checkout` 按 `config/snapshot.json` 逐文件核对完整源码hash。
+校验范围随manifest更新，不固定为旧29文件清单。
+旧3补丁未包含暂停的B1/R4历史重放后端；第4补丁包含当前开发候选。
+候选保存不表示每个文件已部署或完整验收。
 
-执行 `scripts/prepare-dashboard.sh` 只准备源码与构建，再以`apply-dashboard-layout.mjs`添加`patches/dashboard/text-containment.css`和`content-folding.mjs`（内容hash文件名的独立样式与原生DOM展开控件）；不替换现有JavaScript功能，不启动/重启服务。CSS是已有3个上游补丁之外的可移植布局修复，29源码hash仍保留原历史意义。
+执行 `scripts/prepare-dashboard.sh` 只准备源码与构建，再以`apply-dashboard-layout.mjs`添加`patches/dashboard/text-containment.css`和`content-folding.mjs`（内容hash文件名的独立样式与原生DOM展开控件）；不替换现有JavaScript功能，不启动/重启服务。
+独立布局修复保留；旧3补丁与29源码hash仅描述历史快照。
+当前完整源码范围与hash以 `config/snapshot.json` 为准。
 
 `npm run test:dashboard:layout`在已有patched checkout/依赖上用真实ChatView/NativeSubagents与完整CSS、无私人数据的fixture验证360/768/1440px；不连接生产会话/WS/模型，代码和宽表仅内部横向滚动。独立Chrome路径可用CHROME_BIN指定；缺依赖明确报错，不自动下载。基线用`node scripts/test-dashboard-layout.mjs .runtime/dashboard-source --expect-overflow`，修后增加`--css-overlay`。
 
 仅更新已部署布局/展开控件时先备份static dist/index及压缩表示，再用`apply-dashboard-layout.mjs /absolute/dist --dry-run`审查、`--apply`明确写入。脚本先新增content-hashed CSS与展开模块及各自gz/br，index最后替换，保留旧asset供打开的标签页/回退；绝不重编或替换未知运行中的JS，以免丢失新功能。本人刷新页面后生效，不自动reload任何Pi会话。运行/重启仍由开发者决定。
 如果未来升级上游，先重建补丁并做契约验证，不用 `git apply --reject` 后忽略失败。
+
+可选 Hermes 补丁独立于4个dashboard补丁。
+`scripts/apply-goal-hermes-patch.mjs` 仅处理操作者显式指定的隔离agent内 `@ricoyudog/pi-goal-hermes@0.1.0`。
+脚本核对9个源文件的原始／目标hash，拒绝未知或混合状态，不重启服务、不启动目标。
+原生安装、settings注册与费率模板合并见[2026-10-18更新](UPDATES-2026-10-18.md)。
 
 ## 主线监督开发
 
@@ -69,7 +80,7 @@ npm run check:release
 
 1. 只发布白名单资产；不提交 `.runtime`、日志、论文数据、auth、session。
 2. 新截图只在独立浏览器中脱敏，目视核验，不改变真实会话。
-3. 记录可复现的上游提交、依赖版本、已部署源码hash和明确未验证条件。
+3. 记录可复现的上游提交、依赖版本、完整源码hash及部署／未验证边界。
 4. 执行离线门禁与敏感信息检查，再commit/tag/push。
 
 仓库现已由所有者改为公开，已审查源码获准公开。后续新增内容仍须复核许可证和数据授权；公开或私有仓库都不是存储凭据的地方。

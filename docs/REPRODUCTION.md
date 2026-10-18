@@ -8,16 +8,24 @@
 |---|---|---|
 | 后台主线监督及比例化/阶段降频 | `extensions/mainline-supervision/`源码、离线/host/SDK合成检查与只读角色 | 根包自动发现；显式配置自己的认证模型与每项目最小证据授权；见[SUPERVISION.md](SUPERVISION.md)，不复制私人监管状态 |
 | 受控嵌套与监督科研约定 | `config/AGENTS.md`与脱离作者模型绑定的角色 | 仅当前授权/资源内生效；不使角色无限存活，不自动转交外发/SSH权限 |
-| 9 个额外 dashboard server/shared 源文件 | 第三个 MIT 补丁 `0003-deployed-runtime-config.patch`；实际加载 shared reader 的 context-window 解析也已包含 | `prepare-dashboard.sh`按顺序应用3补丁，核对共29文件hash，再构建 |
+| 9 个额外 dashboard server/shared 源文件 | 第三个 MIT 补丁 `0003-deployed-runtime-config.patch`；旧部署shared reader的context-window解析 | `prepare-dashboard.sh`顺序应用4补丁，按`config/snapshot.json`核对完整源码hash，再构建 |
+| 当前 dashboard 完整开发差异 | 第4补丁 `0004-current-development.patch`；计费、Goal、会话入口与历史重放候选 | 查看[本轮更新](UPDATES-2026-10-18.md)；保存源码不等于全部已部署 |
+| 原生 Goal Resume／轮数预算ACK | `patches/goals/pi-goal-hermes-0.1.0-resume.patch`、`config/goal-hermes-patch.json`与显式应用脚本 | 单独安装原生0.1.0包并注册settings；隔离目录内核对版本与9文件前后hash；不自动加载或启动目标 |
+| 21项CNY费率 | `config/model-pricing.example.json`仅含provider、模型ID与cost | 手动合并费率，不覆盖现有`models.json`；自行保留端点与认证 |
 | 子代理嵌套 async 身份修正 | `patches/subagents/`、包版本和前后hash、MIT许可证 | 核心安装后自动应用；未知版本或未知源码拒绝修改；check-only可验证 |
-| 四个 dashboard plugin bridge | 可移植源路径和opt-in配置，不复制dirty树；这4个bridge与固定上游源码一致 | 新配置加`--with-dashboard-plugins`，或自行合并模板；不会自动启动服务 |
+| 四个 dashboard plugin bridge | 可移植源路径与opt-in配置；当前源码由固定上游与第4补丁共同保存 | 新配置加`--with-dashboard-plugins`，或自行合并模板；不会自动启动服务 |
 | KB 与服务 | 项目KB模板、plugin/engine位置、systemd和loopback Caddy模板 | 设置自己的知识源并Index now；启动端口与远程授权由本人决定 |
 | compaction、非模型 thinking 覆盖 | settings模板已对齐reserveTokens/keepRecentTokens与角色thinking | 新配置自动取得；不包含作者真实provider/model默认值 |
 | 路由／历史工具实现 | `integration/model-routing/`两个实现、默认禁用的policy模板、synthetic测试 | 明确填入自己的授权池；不是自动后台评测服务，不恢复真实验收历史 |
 | 传递依赖漂移 | Pi、13扩展和browser MCP三组npm lock | 使用`npm ci`与逐项manifest校验；版本锁不等于外部CLI或OS环境锁 |
 | 外部技能 | `vendor/skills/`实际源码、辅助文件和许可证；每文件SHA256、来源状态 | 显式启用或安装canonical目录，见下节 |
 
-第三个dashboard补丁保存当前实际使用的provider/config/context/scanner修改，不包含账号或key。补丁不对这些历史修改追加新功能或声称每项已在全新构建下重新验收。暂停的B1/R4历史重放候选仍不在仓库。
+第三个dashboard补丁保留旧部署的provider/config/context/scanner修改，不包含账号或key。
+旧3补丁与29文件hash描述历史边界，未收录当时暂停的B1/R4历史重放后端。
+第4补丁补齐当前完整开发快照，包含历史重放候选。
+当前文件范围与hash由 `config/snapshot.json` 决定，不沿用固定29文件清单。
+源码保存不证明每项已部署、全新构建通过或认证工作流验收。
+原生Hermes包另行显式安装，不计入默认13扩展依赖锁。
 
 ## 技能不是只有清单
 

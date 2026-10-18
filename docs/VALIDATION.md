@@ -46,6 +46,59 @@
 - 新增static installer验证dry-run无写、幂等/压缩一致、保留旧脚本/asset、拒symlink/malformed index；Node语法、发布模式审计与install/prepare dry-run通过。完整dashboard fresh build仍未重跑，29原source hash保持。
 - 主动LSP检查5path仅2clean/3inconclusive，不宣称全面静态clean。没有独立新模型审查，不宣称科学验收/跨服务商验证或持久人工流程裁决已实现。
 
+## 2026-10-18 当前开发源码同步
+
+本轮仅发布源码，不部署Dashboard、不启动或继续真实目标。
+GitHub API确认仓库当前 `visibility: private`；本轮不修改权限。
+此前公开状态记录保留历史意义。
+
+### 已确认检查
+
+- 根离线测试 `61/61` 通过。
+- 监管core／policy／capture测试 `56/56` 通过。
+- Speed定向测试7文件 `86/86` 通过。
+- 临时原版Hermes `0.1.0` 的9文件补丁dry-run／apply／check-only与幂等检查通过。
+- 本地实际Pi `1.0.0` SDK离线测试 `23/23` 通过，网络调用 `0`。
+- Shell／ESM语法与安装、Dashboard准备dry-run通过。
+
+### 最终源码与Dashboard回归
+
+4补丁manifest的169个文件SHA256全部匹配。
+完整git tree回放与导出开发树逐字一致。
+上述结果包含旧观察器测试计时修正后的最终复核。
+
+Dashboard测试使用官方隔离 `npm test`。
+
+| 执行范围 | 文件结果 | 用例结果 |
+|---|---|---|
+| 首轮41文件 | 37通过／4失败 | 590通过／7失败，共597；其中2个ChatView suite依赖未加载 |
+| 补齐package-local依赖后，仅重跑4失败文件 | 2通过／2失败 | 107通过／7失败，共114；恢复的2个ChatView文件24用例全过 |
+| 按文件与用例去重后的41文件覆盖 | 39通过／2失败 | 614通过／7失败，共621 |
+
+最终覆盖合并首轮未受影响文件与4文件重跑结果，不累加重复用例。
+`614/621` 表示合并去重覆盖，不表示一次全量执行无失败。
+剩余2失败文件共90用例，83通过／7失败。
+原开发树官方隔离对照同样83通过／7失败，失败名称逐项一致。
+
+- `SettingsPanel` 5项既有失败：alias保存、default model thinking、session-only、catalogue fallback、union。
+- 未部署R3-B1历史重放候选2项既有失败：`navigation supersedes retry`、`retry exhaustion`保持已知良好history。
+
+本轮不扩修上述7项，按实际失败保存开发快照，不标记稳定发布。
+
+### 原始失败与处理
+
+- Node沙箱测试遇到 `EPERM`；保留原失败，改在主机本地执行后通过。
+- 直接Vitest调用被HOME隔离tripwire拒绝；未触碰真实会话。
+- 导出副本缺少package-local workspace links，导致12个suite加载失败；随后仅补临时依赖链接。
+- 一轮Dashboard定向测试记录 `280 passed + 1 failed`；失败位于旧 `native-subagent-observer.test.ts` 首用例。
+- 该用例推进 `5000ms`，先触发 `4000ms` 超时，造成错误归因；仅改测试推进值为 `1000ms`，运行代码不变。
+- `pnpm 11.15.1 --offline` 仍尝试2113条供应链metadata，DNS返回 `EAI_AGAIN`；主动终止，未记作安装成功。
+- 锁文件仅对齐新增speed importer与client link；既有package解析核对无变化。
+
+本轮未执行完整依赖安装、frozen install或fresh build。
+离线测试与源码一致性不代表新机部署、模型认证或科研验收。
+本轮结果保留7项既有失败；源码一致性通过不消除功能失败。
+
 ## 当前可用环境的来源证据
 
 已部署最小dashboard前端的定向测试25通过、2跳过；前端production TypeScript检查通过（不含testonly源文件）；实际Vite构建及预压缩通过。运行环境health/index/JS资源SHA核验通过。

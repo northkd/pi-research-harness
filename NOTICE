@@ -13,6 +13,9 @@ relicense third-party code or claim ownership of the dashboard.
 The nested-route source patch contains pi-subagents context, Copyright (c) 2026
 Nico Bailon, MIT; its license is preserved at vendor/licenses/pi-subagents.MIT.txt.
 
+The Goal engine patch contains pi-goal-hermes source context under MIT.
+Its original notice is preserved at vendor/licenses/pi-goal-hermes.MIT.txt.
+
 Vendored ARIS skills retain the MIT license, Copyright (c) 2026 wanshuiyin.
 Vendored html-ppt and mineru retain their MIT notices. Vendored pdf, playwright
 and skill-creator retain Apache-2.0 license files and applicable notices.

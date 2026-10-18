@@ -1,0 +1,46 @@
+{
+  "package": "@ricoyudog/pi-goal-hermes",
+  "version": "0.1.0",
+  "license": "MIT",
+  "patch": "patches/goals/pi-goal-hermes-0.1.0-resume.patch",
+  "patchSha256": "2f00889ba074ec72ebad02c4c476581e74cc66653959e98a55636770b4f5598b",
+  "files": {
+    "LICENSE": {
+      "beforeSha256": "f73b9b9b747330e7fef776e3a1569993f035474747d20ff5fbcf347d13c2c5fd",
+      "afterSha256": "f73b9b9b747330e7fef776e3a1569993f035474747d20ff5fbcf347d13c2c5fd"
+    },
+    "README.md": {
+      "beforeSha256": "0b601363fa844a90242c27ac024d157d90ef1cc54a89882c8baf95f6f099760f",
+      "afterSha256": "0b601363fa844a90242c27ac024d157d90ef1cc54a89882c8baf95f6f099760f"
+    },
+    "continuation-prompt.ts": {
+      "beforeSha256": "4b0bfc53ddd3633c319c6b3092f431057a21f95b228e4e38ce3ce85d6f12f445",
+      "afterSha256": "75d96f8e552e3d1897bfaf8423fc08e96d6201014e49ff0f2dc8eb6d29867f93"
+    },
+    "event-renderer.ts": {
+      "beforeSha256": "201b4ba7c886012d5667bc806160fd546f923cb2c0e77c8492d7548e244ac30b",
+      "afterSha256": "201b4ba7c886012d5667bc806160fd546f923cb2c0e77c8492d7548e244ac30b"
+    },
+    "goal-manager.ts": {
+      "beforeSha256": "ea90cc131c1ff9b4b67a0c200cb826e87c2bff7e262f9712fd2542d8e49bea78",
+      "afterSha256": "245c665041bdafa3015e7586087a6755418b792321aeca0f39ea14cba2a7f765"
+    },
+    "goal-state.ts": {
+      "beforeSha256": "9cbab1cb3443d3c2fe73187bb26dd54748d5a17a9d0896e7b45a5c9c87f072ec",
+      "afterSha256": "de5e197d361a31501dde328f5305e9f2a67c684a6376d3276864f9996a58fd36"
+    },
+    "index.ts": {
+      "beforeSha256": "846b3372b434c7c5d47b8826c9b17826d17216ed49e4ea8c4ae8717d880154f2",
+      "afterSha256": "54614b2979fcd89f76e6b871b5896b21c6ce875893201198a342979c620ec51d"
+    },
+    "judge-service.ts": {
+      "beforeSha256": "aa9f2abb6e945ca88797ed384e0cc6e22453c8342c6b966c5b0fca4800c29155",
+      "afterSha256": "57e5f4d9e62ad79ba1a95459515251c630dc913511492a98410566bdd70b4cfe"
+    },
+    "package.json": {
+      "beforeSha256": "05cc9b7d286bee2f222a2c6eb20e3c94dc0561ea65ddc8bf4ea9865ba67bf6a3",
+      "afterSha256": "05cc9b7d286bee2f222a2c6eb20e3c94dc0561ea65ddc8bf4ea9865ba67bf6a3"
+    }
+  },
+  "purpose": "Preserve progress on Resume, distinguish blocked/completed, fence stale judges, acknowledge synchronized total-turn budgets"
+}

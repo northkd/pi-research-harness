@@ -31,7 +31,8 @@ test('resource and idle gates require capacity, reliable observations and cooldo
   const resources = {reliable: true, availableBytes: 3 * 1024 ** 3, liveChildProcesses: 1, queuedCount: 0};
   assert.equal(resourceAdmission(policy, resources, true).allow, true);
   assert.equal(resourceAdmission(policy, {...resources, liveChildProcesses: 2}, true).allow, false);
-  assert.equal(resourceAdmission(1 * 1024 ** 3, 0).allow, false);
+  assert.equal(resourceAdmission(0.5 * 1024 ** 3, 0).allow, false);
+  assert.equal(resourceAdmission(1 * 1024 ** 3, 0).allow, true);
   const state = {reliable: true, running: 0, queued: 0, evaluations: 0, lastInteractionAt: 0, lastEvaluationAt: null, resources};
   assert.equal(idleEvaluationAllowed(policy, state, 900000), true);
   assert.equal(idleEvaluationAllowed(policy, {...state, queued: 1}, 900000), false);

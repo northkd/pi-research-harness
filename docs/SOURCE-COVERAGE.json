@@ -1,26 +1,45 @@
 {
   "schema": "pi-research-source-coverage.v1",
-  "date": "2026-10-15",
+  "date": "2026-10-18",
   "scope": "User-approved non-sensitive current software snapshot; not private machine state",
   "covered": {
-    "dashboardSourceHashes": 29,
-    "dashboardPatchFiles": 3,
+    "dashboardSourceHashes": 169,
+    "dashboardPatchFiles": 4,
     "dashboardAdditiveLayoutStylesheet": "patches/dashboard/text-containment.css",
     "dashboardOptionalFullContentModule": "patches/dashboard/content-folding.mjs",
     "dashboardActualComponentSyntheticBrowserRegression": true,
     "subagentsDeployedSourcePatch": "0.76.1 nested-route identity with before/after SHA256",
     "routingModules": 2,
-    "mainlineSupervision": {"policyVersion":2,"cadenceVersion":1,"mode":"stage-checkpoints","portableSourceAndSyntheticTests":true,"privateProjectStateIncluded":false,"persistentHumanWorkflowAdjudication":false},
+    "mainlineSupervision": {
+      "policyVersion": 2,
+      "cadenceVersion": 1,
+      "mode": "stage-checkpoints",
+      "portableSourceAndSyntheticTests": true,
+      "privateProjectStateIncluded": false,
+      "persistentHumanWorkflowAdjudication": false
+    },
     "controlledNestedRoleRules": true,
-    "publicDependencyLocks": ["pi", "extensions", "browser"],
+    "publicDependencyLocks": [
+      "pi",
+      "extensions",
+      "browser"
+    ],
     "pinnedNpmExtensionRoots": 13,
-    "portablePluginBridges": ["automation", "flows", "goal", "flows-anthropic-bridge"],
+    "portablePluginBridges": [
+      "automation",
+      "flows",
+      "goal",
+      "flows-anthropic-bridge"
+    ],
     "knowledgeBaseServerAndProjectTemplate": true,
     "serviceAndLoopbackProxyTemplates": true,
     "compactionAndNonAccountThinkingSettings": true,
     "externalSkillSources": 88,
     "externalSkillInventory": 108,
-    "perFileLicenseAndSha256Manifest": "config/skill-provenance.json"
+    "perFileLicenseAndSha256Manifest": "config/skill-provenance.json",
+    "monthlyBillingAndTpsSource": true,
+    "optionalGoalHermesPatch": "0.1.0, nine source files, before/after checksums",
+    "publicCnyModelRateEntries": 21
   },
   "remaining": {
     "skillsWithoutEstablishedSourceOrLicense": 20,
@@ -28,7 +47,7 @@
     "modelAccountMappingAndRealRoutingHistory": "local configuration, not publication content",
     "systemToolsAndAuthorizedRemoteResources": "install/configure locally; templates and requirements included",
     "trueSecondDeviceOrCrossOsAndAuthenticatedWorkflows": "not tested",
-    "dashboardFreshFullBuildAndDeployment": "not performed by this source export task"
+    "dashboardFreshFullBuildAndDeployment": "Not rerun by this source export; current-development and installed source differences recorded in config/snapshot.json"
   },
   "doesNotAutomaticallyInvokeModelsJobsIndexingOrServices": true
 }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const MAX_LIVE_CHILD_PROCESSES = 3;
-export const MIN_AVAILABLE_MEMORY_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB (2147483648 bytes)
+export const MIN_AVAILABLE_MEMORY_BYTES = 1 * 1024 * 1024 * 1024; // 1 GiB (1073741824 bytes)
 
 /**
  * Computes a deterministic SHA-256 fingerprint for a list of models.

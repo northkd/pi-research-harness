@@ -1,0 +1,219 @@
+{
+  "providers": {
+    "cliproxy": {
+      "currency": "CNY",
+      "models": [
+        {
+          "id": "gpt-6-astra(high)[1m]",
+          "cost": {
+            "input": 2.4,
+            "output": 12.0,
+            "cacheRead": 0.24,
+            "cacheWrite": 3.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-6-astra(xhigh)[1m]",
+          "cost": {
+            "input": 2.4,
+            "output": 12.0,
+            "cacheRead": 0.24,
+            "cacheWrite": 3.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-6-astra(max)[1m]",
+          "cost": {
+            "input": 2.4,
+            "output": 12.0,
+            "cacheRead": 0.24,
+            "cacheWrite": 3.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-5.6-luna(max)[1m]",
+          "cost": {
+            "input": 0.48,
+            "output": 2.88,
+            "cacheRead": 0.048,
+            "cacheWrite": 0.6,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-6.1-sol(high)[1m]",
+          "cost": {
+            "input": 0.48,
+            "output": 2.4,
+            "cacheRead": 0.024,
+            "cacheWrite": 0.6,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-6.1-sol(xhigh)[1m]",
+          "cost": {
+            "input": 0.48,
+            "output": 2.4,
+            "cacheRead": 0.024,
+            "cacheWrite": 0.6,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-6.1-sol(max)[1m]",
+          "cost": {
+            "input": 0.48,
+            "output": 2.4,
+            "cacheRead": 0.024,
+            "cacheWrite": 0.6,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "codex-auto-review",
+          "cost": {
+            "input": 2.4,
+            "output": 12.0,
+            "cacheRead": 0.24,
+            "cacheWrite": 3.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-image-2.5[1m]",
+          "cost": {
+            "input": 0.05,
+            "output": 0.05,
+            "cacheRead": 0.0,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-image-2.5-flare[1m]",
+          "cost": {
+            "input": 0.05,
+            "output": 0.05,
+            "cacheRead": 0.0,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "gpt-image-2.5-sunburst[1m]",
+          "cost": {
+            "input": 0.05,
+            "output": 0.05,
+            "cacheRead": 0.0,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "api-gpt-6-astra",
+          "cost": {
+            "input": 2.4,
+            "output": 12.0,
+            "cacheRead": 0.24,
+            "cacheWrite": 3.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "api-gpt-5.6-sol",
+          "cost": {
+            "input": 1.2,
+            "output": 7.2,
+            "cacheRead": 0.12,
+            "cacheWrite": 1.5,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "deepseek-v4-pro[1m]",
+          "cost": {
+            "input": 9.0,
+            "output": 27.0,
+            "cacheRead": 0.3,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "glm-5.3[1m]",
+          "cost": {
+            "input": 4.0,
+            "output": 14.0,
+            "cacheRead": 1.0,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "api-glm-5.3[1m]",
+          "cost": {
+            "input": 8.0,
+            "output": 28.0,
+            "cacheRead": 2.0,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "glm-5.3-flash[1m]",
+          "cost": {
+            "input": 0.4,
+            "output": 1.4,
+            "cacheRead": 0.115,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "deepseek-v4.1-flash[1m]",
+          "cost": {
+            "input": 1.0,
+            "output": 4.0,
+            "cacheRead": 0.02,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "deepseek-v4-flash-vision-exp[1m]",
+          "cost": {
+            "input": 2.0,
+            "output": 8.0,
+            "cacheRead": 0.04,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "kimi-k2.8-preview[1m]",
+          "cost": {
+            "input": 3.5,
+            "output": 14.0,
+            "cacheRead": 0.875,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        },
+        {
+          "id": "api-kimi-k3[1m]",
+          "cost": {
+            "input": 7.0,
+            "output": 28.0,
+            "cacheRead": 1.75,
+            "cacheWrite": 0.0,
+            "currency": "CNY"
+          }
+        }
+      ]
+    }
+  }
+}
