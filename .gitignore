@@ -21,3 +21,8 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 .DS_Store
+
+# Desktop build output and staged application runtimes.
+/desktop/.build/
+/desktop/resources/
+/desktop/dist/

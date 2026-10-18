@@ -57,6 +57,17 @@
 **不会撤销已经执行的命令、文件修改或外部操作。** 原始持久会话历史仍保留。
 当前实现对无回复第一条消息、连续用户等不能安全导航的结构会明确拒绝，不宣称支持任意历史编辑。
 
+## macOS 与 Windows 桌面客户端
+
+桌面客户端沿用本项目的定制 Dashboard 页面，将本地后台、Node/Pi 运行时与科研配置随应用打包。使用安装包无需先安装 Node.js 或部署服务器；首次打开后，在设置中配置自己的模型账号，并选择工作目录。
+
+- **macOS**：Apple Silicon 与 Intel 分别提供 DMG 安装包。
+- **Windows**：提供 x64 EXE 安装程序。
+
+安装包由 [Desktop installers 工作流](https://github.com/northkd/pi-research-harness/actions/workflows/desktop-build.yml) 在对应平台构建和验证；下载时选择目标提交的成功运行及其安装包 artifact。实际可用版本与验证结果以该次运行记录为准。
+
+客户端使用独立科研数据目录，也可连接已有 Dashboard。安装步骤、数据位置、签名状态及完整源码构建流程见 **[桌面客户端指南](docs/DESKTOP.md)**。开发者可在仓库根目录使用 `npm run desktop:deps`、`npm run desktop:test`、`npm run desktop:prepare` 等快捷入口；原有 `npm test` 继续只运行离线科研集成检查。
+
 ## 五分钟理解安装路线
 
 ```bash
@@ -96,6 +107,7 @@ bin/               pi-research、dashboard、专用浏览器与agy入口
 config/            安全模板、可选service模板、固定版本和源码hash
 scripts/           独立安装、上游补丁检查、发布文件审计
 patches/           前端/native bridge/运行配置及subagents源码补丁
+desktop/           macOS与Windows客户端、独立运行时组装与安装包验证
 vendor/skills/     88个许可明确技能及辅助源，不含私人状态
 vendor/licenses/   上游原许可证
 docs/              安装、开发、能力边界、截图来源
@@ -144,6 +156,7 @@ flowchart LR
 ## 文档与二次开发
 
 - [安装与本地认证](docs/INSTALL.md)
+- [macOS与Windows桌面客户端](docs/DESKTOP.md)
 - [已补齐的复刻源码与技能](docs/REPRODUCTION.md)
 - [新设备迁移核验](docs/MIGRATION.md)
 - [二次开发与补丁约定](docs/DEVELOPMENT.md)

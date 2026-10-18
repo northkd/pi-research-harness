@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'none'; base-uri 'none'">
+  <title>Pi Research Harness</title>
+  <link rel="stylesheet" href="launcher.css">
+</head>
+<body>
+  <main>
+    <div class="brand"><span class="pi">π</span><span>PI RESEARCH HARNESS</span></div>
+    <p class="eyebrow">科研工作台 · 桌面版</p>
+    <h1>把问题带进来，<br>让证据接着走。</h1>
+    <p class="intro">你的科研会话、子代理和工作记录，在同一个 Dashboard 中继续。</p>
+    <section aria-live="polite" aria-atomic="true" class="status-panel">
+      <span class="indicator" id="indicator"></span>
+      <div><h2 id="status-title">正在启动本地工作台</h2><p id="status-detail">首次启动需要准备独立的科研配置，请稍候。</p></div>
+    </section>
+    <div class="actions">
+      <button id="local" type="button" class="primary">打开本地工作台</button>
+      <button id="logs" type="button">查看运行日志</button>
+    </div>
+    <details id="connection">
+      <summary>连接已有 Dashboard</summary>
+      <p>已有服务器时，填写它的 HTTPS 地址；SSH 转发可以使用本机地址。</p>
+      <form id="remote-form">
+        <label for="url">Dashboard 地址</label>
+        <div class="connection-row"><input id="url" type="url" placeholder="https://dashboard.example.com" required autocomplete="url"><button type="submit">连接</button></div>
+      </form>
+      <p id="connection-error" role="alert"></p>
+    </details>
+    <footer><span id="version">桌面版</span><span>模型与 API 在 Dashboard 设置中配置</span></footer>
+  </main>
+  <script src="launcher.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "pi-research-harness-desktop",
+  "productName": "Pi Research Harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi Research Harness desktop client with the customized dashboard and bundled research runtime",
+  "author": "northkd",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/main.mjs",
+  "repository": "https://github.com/northkd/pi-research-harness",
+  "engines": { "node": ">=24.15.0 <25" },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "prepare:runtime": "node scripts/prepare.mjs",
+    "dist": "electron-builder --config electron-builder.cjs --publish never",
+    "smoke:installed": "node scripts/smoke-installed.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "26.8.1",
+    "typescript": "5.9.3"
+  }
+}

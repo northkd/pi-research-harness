@@ -30,7 +30,13 @@
     "test:supervision:sdk": "node extensions/mainline-supervision/scripts/run-checks.mjs sdk",
     "test:dashboard:layout": "node scripts/test-dashboard-layout.mjs .runtime/dashboard-source --css-overlay",
     "check:release": "python3 scripts/check-release.py",
-    "check:syntax": "bash scripts/check-syntax.sh"
+    "check:syntax": "bash scripts/check-syntax.sh",
+    "desktop:deps": "npm --prefix desktop ci",
+    "desktop:test": "npm --prefix desktop test",
+    "desktop:prepare": "node desktop/scripts/prepare.mjs && node desktop/scripts/download-node.mjs",
+    "desktop:start": "npm --prefix desktop start",
+    "desktop:dist": "npm --prefix desktop run dist --",
+    "desktop:smoke": "node desktop/scripts/smoke-installed.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

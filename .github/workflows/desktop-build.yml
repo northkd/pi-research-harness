@@ -1,0 +1,123 @@
+name: Desktop installers
+
+on:
+  push:
+    branches:
+      - 'codex/desktop-*'
+    paths:
+      - '.github/workflows/desktop-build.yml'
+      - 'desktop/**'
+      - 'patches/**'
+      - 'config/**'
+      - 'integration/**'
+      - 'extensions/**'
+      - 'skills/**'
+  workflow_dispatch:
+
+# Installers remain downloadable workflow artifacts. This workflow never publishes
+# a GitHub release or an npm package and does not need repository write access.
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-15 is Apple Silicon; the -intel label explicitly selects x64.
+          - label: macOS Apple Silicon
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+            builder: '--mac --arm64'
+            artifact: Pi-Research-Harness-macOS-arm64
+          - label: macOS Intel
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+            builder: '--mac --x64'
+            artifact: Pi-Research-Harness-macOS-x64
+          - label: Windows x64
+            runner: windows-latest
+            platform: win32
+            arch: x64
+            builder: '--win --x64'
+            artifact: Pi-Research-Harness-Windows-x64
+    defaults:
+      run:
+        shell: bash
+    env:
+      # A Developer ID / Authenticode certificate can be added in a later release.
+      # Do not accidentally pick up a runner's signing identity or auto-publish.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      EXPECTED_PLATFORM: ${{ matrix.platform }}
+      EXPECTED_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Check out this revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install the matching Node build runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+          architecture: ${{ matrix.arch }}
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Verify the runner architecture
+        run: >-
+          node --input-type=module -e
+          'import assert from "node:assert/strict";
+          assert.equal(process.platform, process.env.EXPECTED_PLATFORM);
+          assert.equal(process.arch, process.env.EXPECTED_ARCH);
+          console.log(process.platform, process.arch, process.version);'
+
+      - name: Install desktop build dependencies
+        run: npm --prefix desktop ci
+
+      - name: Test desktop runtime contracts
+        run: npm --prefix desktop test
+
+      - name: Build the pinned dashboard and bundled research harness
+        run: node desktop/scripts/prepare.mjs
+
+      - name: Download and verify the bundled Node runtime
+        run: node desktop/scripts/download-node.mjs
+
+      - name: Build the native installer
+        run: npm --prefix desktop run dist -- ${{ matrix.builder }} --publish never
+
+      - name: Install and launch the packaged application
+        run: node desktop/scripts/smoke-installed.mjs
+
+      - name: Upload verified installers and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*Setup.exe
+            desktop/dist/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Upload launch evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-smoke-results
+          path: desktop/dist/smoke-results/
+          if-no-files-found: ignore
+          retention-days: 30

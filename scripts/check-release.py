@@ -16,10 +16,40 @@ PATTERNS = {
 }
 FORBIDDEN_NAMES = {'auth.json', 'providers.json', 'models.json', 'settings.json', '.env', 'id_rsa', 'id_ed25519'}
 ALLOWED_TOP = {'.github', '.gitignore', 'LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md', 'package.json', 'bin', 'scripts', 'config', 'agents', 'extensions', 'skills', 'integration', 'docs', 'patches', 'vendor', 'tests'}
+# Desktop source is publishable; staged third-party runtimes and installers are
+# generated separately by the native build jobs and are never source input.
+DESKTOP_SOURCE_DIRS = {'assets', 'locks', 'runtime', 'scripts', 'src', 'test'}
+DESKTOP_SOURCE_FILES = {'package.json', 'package-lock.json', 'electron-builder.cjs'}
+DESKTOP_GENERATED_DIRS = {'.build', 'resources', 'dist'}
+
+
+def publication_paths(directory):
+    """Prune generated trees before traversal, including untracked build data."""
+    for path in sorted(directory.iterdir()):
+        rel = path.relative_to(ROOT)
+        if path.name in EXCLUDED:
+            continue
+        if len(rel.parts) == 2 and rel.parts[0] == 'desktop' and rel.parts[1] in DESKTOP_GENERATED_DIRS:
+            continue
+        if path.is_symlink():
+            yield path
+        elif path.is_dir():
+            yield from publication_paths(path)
+        elif path.is_file():
+            yield path
+
+
+def is_allowed_source(rel):
+    if rel.parts[0] != 'desktop':
+        return rel.parts[0] in ALLOWED_TOP
+    return ((len(rel.parts) == 2 and rel.name in DESKTOP_SOURCE_FILES)
+            or (len(rel.parts) >= 3 and rel.parts[1] in DESKTOP_SOURCE_DIRS))
+
+
 findings = []
 count = 0
 size = 0
-for path in sorted(ROOT.rglob('*')):
+for path in publication_paths(ROOT):
     rel = path.relative_to(ROOT)
     if any(part in EXCLUDED for part in rel.parts):
         continue
@@ -30,7 +60,7 @@ for path in sorted(ROOT.rglob('*')):
         continue
     count += 1
     size += path.stat().st_size
-    if rel.parts[0] not in ALLOWED_TOP:
+    if not is_allowed_source(rel):
         findings.append({'path': str(rel), 'rule': 'outside-publication-whitelist'})
     if path.name in FORBIDDEN_NAMES or path.suffix in {'.log', '.jsonl', '.bak'}:
         findings.append({'path': str(rel), 'rule': 'runtime-private-file'})
