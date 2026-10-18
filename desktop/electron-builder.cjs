@@ -7,15 +7,13 @@ module.exports = {
   directories: { output: 'dist', buildResources: 'resources/icons' },
   files: ['src/**', 'runtime/**', 'assets/**', 'package.json'],
   extraResources: [
-    { from: 'resources/server', to: 'server' },
-    { from: 'resources/harness', to: 'harness' },
-    { from: 'resources/node', to: 'node' },
-    { from: 'resources/research-bundle.json', to: 'research-bundle.json' },
-    { from: 'resources/licenses', to: 'licenses' },
-    { from: 'resources/icons/icon.png', to: 'icon.png' },
-    { from: 'resources/git', to: 'git', filter: ['**/*'] }
+    // Keep node_modules nested beneath the matcher root: builder deliberately
+    // excludes a root-level node_modules directory even for extraResources.
+    { from: 'resources', to: '.', filter: ['server/**/*', 'harness/**/*', 'node/**/*', 'licenses/**/*', 'git/**/*', 'research-bundle.json'] },
+    { from: 'resources/icons/icon.png', to: 'icon.png' }
   ],
   beforePack: './scripts/verify-resources.cjs',
+  afterPack: './scripts/verify-packaged.cjs',
   publish: null,
   mac: {
     icon: 'resources/icons/icon.icns',

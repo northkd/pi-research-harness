@@ -192,8 +192,8 @@ const subagentPatch = readJson(path.join(root, 'config/subagents-patch.json'));
 const subagentDirectory = path.join(harnessRoot, 'node_modules', subagentPatch.package);
 const patchedFile = path.join(subagentDirectory, subagentPatch.path);
 if (sha256(patchedFile) !== subagentPatch.beforeSha256) throw new Error('Research subagent patch source hash mismatch');
-run('git', ['apply', '--check', path.join(root, subagentPatch.patch)], subagentDirectory);
-run('git', ['apply', path.join(root, subagentPatch.patch)], subagentDirectory);
+run('git', ['-c', 'core.autocrlf=false', 'apply', '--check', path.join(root, subagentPatch.patch)], subagentDirectory);
+run('git', ['-c', 'core.autocrlf=false', 'apply', path.join(root, subagentPatch.patch)], subagentDirectory);
 if (sha256(patchedFile) !== subagentPatch.afterSha256) throw new Error('Research subagent patch result hash mismatch');
 
 const gitRoot = path.join(resources, 'git');

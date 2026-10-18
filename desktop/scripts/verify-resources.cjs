@@ -65,7 +65,7 @@ terminal.onExit((event) => {
 
 module.exports = async function verifyResources(context) {
   const { platform, arch } = nativeTarget(context);
-  const resources = fs.realpathSync(path.resolve(__dirname, '../resources'));
+  const resources = fs.realpathSync(context.researchResourcesDirectory || path.resolve(__dirname, '../resources'));
   function resourceFile(relative) {
     const file = path.resolve(resources, relative);
     const within = (target) => target.startsWith(`${resources}${path.sep}`);
