@@ -107,6 +107,7 @@ async function nsisInstallationSnapshot(installed) {
 
 async function runNsis(executable, args, { timeout, installed, evidence, stage }) {
   const started = Date.now();
+  console.log(`[${new Date(started).toISOString()}] NSIS ${stage}: starting, deadline ${timeout / 1000}s`);
   const diagnosticFile = path.join(evidence, `nsis-${stage}.jsonl`);
   const child = spawn(executable, args, {
     // NSIS /D and _?= must be final and unquoted. Only argv[0] is quoted,
@@ -125,7 +126,11 @@ async function runNsis(executable, args, { timeout, installed, evidence, stage }
     try {
       const [processes, installation] = await Promise.all([
         child.exitCode === null && child.signalCode === null
-          ? nsisProcessSnapshot(child.pid).catch((error) => ({ diagnosticError: error.message }))
+          ? nsisProcessSnapshot(child.pid).catch((error) => ({ diagnosticError: {
+            kind: 'powershell-process-query', timedOut: Boolean(error.killed),
+            code: error.code ?? null, signal: error.signal ?? null,
+            stderr: String(error.stderr ?? '').slice(-1000),
+          } }))
           : [],
         nsisInstallationSnapshot(installed),
       ]);
@@ -149,6 +154,9 @@ async function runNsis(executable, args, { timeout, installed, evidence, stage }
   const result = await Promise.race([exit, deadline]);
   clearTimeout(timer);
   clearInterval(interval);
+  console.log(`[${new Date().toISOString()}] NSIS ${stage}: ${result.timedOut
+    ? 'deadline reached'
+    : `process finished, code ${result.code ?? 'none'}, signal ${result.signal ?? 'none'}`}; elapsed ${Date.now() - started}ms`);
   if (result.timedOut) {
     // Kill the owned process tree, including an NSIS bootstrap child, before
     // cleanup can remove files underneath a still-running installer.
@@ -215,7 +223,7 @@ async function installApplication(installer, temporary, evidence) {
   // may contain spaces. Direct spawn avoids a shell and its escaping rules.
   // NSIS contract: https://nsis.sourceforge.io/Docs/Chapter3.html#installerusage
   await runNsis(installer, ['/S', '/currentuser', `/D=${installed}`], {
-    timeout: 600_000, installed, evidence, stage: 'install',
+    timeout: 900_000, installed, evidence, stage: 'install',
   });
   const executable = path.join(installed, `${productName}.exe`);
   await access(executable);
@@ -233,6 +241,26 @@ async function uninstallApplication(installation, temporary, evidence) {
     timeout: 300_000, installed: installation.installed, evidence, stage: 'uninstall',
   });
   await assert.rejects(access(installation.executable), { code: 'ENOENT' }, 'NSIS left the installed application executable behind');
+  await assert.rejects(access(installation.installed), { code: 'ENOENT' }, 'NSIS left the installation directory behind');
+}
+
+async function verifyWindowsInstalledLongPaths(installation) {
+  const checks = [];
+  for (const tree of ['server', 'harness']) {
+    const relative = `resources/${tree}/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/node_modules/openai/resources/admin/organization/projects/service-accounts.mjs`;
+    const sourcePath = path.join(desktopDirectory, 'dist', 'win-unpacked', relative);
+    const installedPath = path.join(installation.installed, relative);
+    assert.ok(installedPath.length > 260, `The ${tree} installation probe must exercise a path longer than 260 characters`);
+    const [sourceFile, installedFile] = await Promise.all([stat(sourcePath), stat(installedPath)]);
+    assert.ok(sourceFile.isFile() && installedFile.isFile(), `The ${tree} long-path probe must identify regular files`);
+    const [sourceSha256, installedSha256] = await Promise.all([hashFile(sourcePath), hashFile(installedPath)]);
+    assert.equal(installedFile.size, sourceFile.size, `The installed ${tree} long-path file is incomplete`);
+    assert.equal(installedSha256, sourceSha256, `The installed ${tree} long-path file differs from the packaged source`);
+    checks.push({ tree, sourcePath, installedPath, installedPathLength: installedPath.length,
+      sourceBytes: sourceFile.size, installedBytes: installedFile.size, sourceSha256, installedSha256 });
+  }
+  console.log(`[${new Date().toISOString()}] PASS: both installed paths exceed 260 characters and match packaged bytes/SHA256`);
+  return checks;
 }
 
 async function terminateTree(child) {
@@ -345,12 +373,14 @@ export async function smokeInstalled() {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'pi-research-desktop-smoke-'));
   const started = Date.now();
   let installation;
+  let installedLongPaths;
   let primaryError;
   try {
     const installer = await findInstaller(dist);
     const installerSha256 = await hashFile(installer);
     console.log(`Installing and smoke testing ${path.basename(installer)}`);
     installation = await installApplication(installer, temporary, evidence);
+    if (process.platform === 'win32') installedLongPaths = await verifyWindowsInstalledLongPaths(installation);
     await launchApplication(installation.executable, temporary, evidence);
     const report = validateSmokeReport(JSON.parse(await readFile(path.join(evidence, 'desktop-smoke.json'), 'utf8')));
     await assertServerStopped(report.baseUrl);
@@ -371,6 +401,8 @@ export async function smokeInstalled() {
       installerSha256,
       application: report,
       serverStoppedAfterExit: true,
+      installedLongPaths,
+      installedDirectoryRemovedAfterUninstall: process.platform === 'win32' ? true : undefined,
       artifacts,
       durationMs: Date.now() - started,
       completedAt: new Date().toISOString(),
@@ -384,6 +416,7 @@ export async function smokeInstalled() {
       platform: process.platform,
       arch: process.arch,
       message: error.stack ?? error.message,
+      installedLongPaths,
       durationMs: Date.now() - started,
     }, null, 2)}\n`);
     throw error;

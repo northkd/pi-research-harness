@@ -93,7 +93,7 @@ GitHub 将 artifact 作为 ZIP 下载；解压后取得该平台唯一的 DMG �
 
 ## 6. 从源码构建
 
-构建机需有 **Git、Node.js 24.15.0 与 npm**，并能访问 GitHub、npm registry、Node.js 与 Electron 的官方下载服务。原生依赖需要源码编译时，还需平台对应的编译工具。请在目标平台和目标架构的机器上构建。
+构建机需有 **Git、Node.js 24.15.0 与 npm**，并能访问 GitHub、npm registry、Node.js 与 Electron 的官方下载服务。Windows 构建还会从 7-Zip 的官方 SourceForge 发布档下载并校验对应源码，与安装器解压工具的许可证一起分发。原生依赖需要源码编译时，还需平台对应的编译工具。请在目标平台和目标架构的机器上构建。
 
 在仓库根目录运行：
 
@@ -107,6 +107,8 @@ node desktop/scripts/download-node.mjs
 `prepare.mjs` 准备固定上游源码、核对并应用补丁、安装锁定依赖、构建 Dashboard，组装应用资源。`download-node.mjs` 下载本机平台的完整 Node 运行时，用官方 SHA-256 清单校验，解压后实际执行 Node 校验版本和架构。
 
 组装时会按依赖包声明的系统和 CPU 类型，精确移除两份 Pi 依赖树中不适用于本机的 esbuild 二进制包，保留目标平台工具与许可证，并在 `research-bundle.json` 中记录裁剪结果。打包检查实际执行保留工具的转换功能；构建机生成的 jiti 缓存也不随安装包分发。
+
+Windows 安装器保留 7z 压缩，使用校验过的解压工具直接写入安装目录，检查退出状态。构建步骤对固定版本的 NSIS 模板做一处有哈希保护的适配，以避免默认“解压到临时目录、再逐文件复制”的额外 I/O 和长路径复制问题；原有安装向导与卸载器生成仍由 electron-builder 管理。CI 会先用小型安装器检查长路径解压，再对完整安装包执行真实安装与启动测试。
 
 然后只执行与当前构建机匹配的一条命令：
 
@@ -127,7 +129,7 @@ node desktop/scripts/smoke-installed.mjs
 
 脚本实际安装或复制打包应用，并使用临时独立数据目录启动。验证后端健康响应、Dashboard 页面加载、内置 Node 版本与架构，以及应用退出后本地端口关闭。Windows 测试会执行实际安装与卸载，适合没有既有同名安装的测试机。
 
-通过后生成 `desktop/dist/SHA256SUMS.txt` 与 `desktop/dist/smoke-results/`。JSON 报告记录原生平台、安装包校验值、启动结果和清理结果，日志供失败诊断使用。脚本不改写 `HOME` 或 `USERPROFILE`；只为测试指定独立的应用数据和报告目录。
+通过后生成 `desktop/dist/SHA256SUMS.txt` 与 `desktop/dist/smoke-results/`。JSON 报告记录原生平台、安装包校验值、启动结果和清理结果。Windows 还会比对两份超过 260 字符路径的实际文件及其 SHA-256，并检查整个安装目录在卸载后消失；安装和卸载分别有 15 分钟、5 分钟的测试上限与进度记录。脚本不改写 `HOME` 或 `USERPROFILE`；只为测试指定独立的应用数据和报告目录。
 
 ## 7. CI 与验证边界
 

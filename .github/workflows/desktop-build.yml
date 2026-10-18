@@ -89,6 +89,10 @@ jobs:
       - name: Test desktop runtime contracts
         run: npm --prefix desktop test
 
+      - name: Verify Windows installer extraction and long paths
+        if: matrix.platform == 'win32'
+        run: node desktop/scripts/verify-nsis-extractor.cjs
+
       - name: Build the pinned dashboard and bundled research harness
         run: node desktop/scripts/prepare.mjs
 

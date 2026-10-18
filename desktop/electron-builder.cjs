@@ -16,7 +16,10 @@ module.exports = {
     ] },
     { from: 'resources/icons/icon.png', to: 'icon.png' }
   ],
-  beforePack: './scripts/verify-resources.cjs',
+  beforePack: async (context) => {
+    await require('./scripts/prepare-nsis.cjs')(context);
+    await require('./scripts/verify-resources.cjs')(context);
+  },
   afterPack: './scripts/verify-packaged.cjs',
   afterSign: './scripts/mac-framework-audit.cjs',
   publish: null,

@@ -18,7 +18,7 @@ FORBIDDEN_NAMES = {'auth.json', 'providers.json', 'models.json', 'settings.json'
 ALLOWED_TOP = {'.github', '.gitattributes', '.gitignore', 'LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md', 'package.json', 'bin', 'scripts', 'config', 'agents', 'extensions', 'skills', 'integration', 'docs', 'patches', 'vendor', 'tests'}
 # Desktop source is publishable; staged third-party runtimes and installers are
 # generated separately by the native build jobs and are never source input.
-DESKTOP_SOURCE_DIRS = {'assets', 'locks', 'runtime', 'scripts', 'src', 'test'}
+DESKTOP_SOURCE_DIRS = {'assets', 'locks', 'nsis', 'runtime', 'scripts', 'src', 'test'}
 DESKTOP_SOURCE_FILES = {'package.json', 'package-lock.json', 'electron-builder.cjs'}
 DESKTOP_GENERATED_DIRS = {'.build', 'resources', 'dist'}
 
