@@ -28,6 +28,7 @@ import {
 } from "./research-projection.js";
 import { executionRecordStatus, researchStatusLabel, roleLabel } from "./ResearchAgentDetail.js";
 import { CollapsibleSection } from "./CollapsibleSection.js";
+import { ResearchAgentCanvas } from "./ResearchAgentCanvas.js";
 import {
   leadArt,
   getMemberArt,
@@ -227,6 +228,7 @@ export function ResearchExecutionPanels({
 
   const [topoViewMode, setTopoViewMode] = useState<"topology" | "swimlanes">("topology");
   const [fusionFilter, setFusionFilter] = useState<"all" | "with-subs" | "standalone">("all");
+  const [fusionLayout, setFusionLayout] = useState<"canvas" | "list">("canvas");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   // Only recorded steps are shown; missing dependencies are not inferred.
@@ -971,8 +973,15 @@ export function ResearchExecutionPanels({
                         </span>
                       </div>
                       <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-                        每个 Multi-Agent 独立会话展示其专属研究任务名称与本研究职责，并在卡片内直接融合其单向派发的所有 Subagent 专职角色与子任务
+                        先查看会话总览，点击会话聚焦其下属角色；也可切换到详细列表。
                       </p>
+                    </div>
+
+                    <div className="win11-card-subtle inline-flex items-center gap-1 p-1 text-xs" role="group" aria-label="协作视图布局">
+                      <button type="button" onClick={() => setFusionLayout("canvas")} aria-pressed={fusionLayout === "canvas"}
+                        className={`rounded px-2.5 py-1 text-[11px] font-medium ${fusionLayout === "canvas" ? "bg-[var(--accent-solid)] font-semibold text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"}`}>画布</button>
+                      <button type="button" onClick={() => setFusionLayout("list")} aria-pressed={fusionLayout === "list"}
+                        className={`rounded px-2.5 py-1 text-[11px] font-medium ${fusionLayout === "list" ? "bg-[var(--accent-solid)] font-semibold text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"}`}>列表</button>
                     </div>
 
                     {/* Filter Pills for Multi-Agent + Subagent Clusters */}
@@ -1015,7 +1024,11 @@ export function ResearchExecutionPanels({
                     )}
                   </div>
 
-                  {/* Fused Parent Multi-Agent + Child Subagent Cards */}
+                  {/* Keep the detailed list available, with the canvas as the compact default. */}
+                  {fusionLayout === "canvas" ? (
+                    visibleClusters.length ? <ResearchAgentCanvas clusters={visibleClusters} stale={stale} onAgent={onAgent} statusLabel={researchStatusLabel} roleLabel={getSubagentRoleDisplayTitle} />
+                      : <div className="win11-card-subtle p-4 text-xs text-[var(--text-secondary)]">没有符合筛选条件的会话。</div>
+                  ) : (
                   <div className="space-y-3.5">
                     {visibleClusters.map((cluster) => {
                       const { sessionExec, title, roleObj, isCaptain, childSubs, childRoleGroups } = cluster;
@@ -1228,6 +1241,7 @@ export function ResearchExecutionPanels({
                       );
                     })}
                   </div>
+                  )}
                 </div>
               )}
 

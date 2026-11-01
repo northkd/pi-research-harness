@@ -54,6 +54,12 @@ node scripts/create-demo-project.mjs /absolute/path/to/new-demo-project
 
 脚本会输出本地模拟入口。打开后可查看 4 个虚构 Multi-Agent 和 8 个虚构 Subagent，并播放或单步；演示标签页拦截实际模型请求和写入。退出演示后回到正常 Dashboard，按钮仍是实际操作。手动重新执行前端构建后，需运行 `node scripts/install-demo-entry.mjs "$PI_RESEARCH_DASHBOARD_SOURCE/packages/client/dist"` 恢复演示入口。
 
+## 智能体协作画布
+
+在研究工作台的「Agent 协作网络」中，协作会话默认以画布显示。可搜索会话或任务、拖动空白处平移，使用缩放按钮或 Ctrl / ⌘ 加滚轮缩放，并通过「适应画布」查看全局。点击会话可聚焦它已记录的 Subagent 角色；角色较多时分组翻页，点击角色可打开原有执行详情。「列表」可切回详细卡片。
+
+总览中的虚线只代表工作区中的会话分组，不表示会话之间一定存在通信；聚焦视图的实线表示记录中的父子归属。画布只读取现有数据，不创建或启动智能体。
+
 ## 本机开发更新覆盖层
 
 需要改 Dashboard 定制时，编辑 `patches/dashboard-v0.20/overlay/` 中相应文件，再用已准备的上游检出重新生成校验清单：

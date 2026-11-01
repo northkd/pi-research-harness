@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResearchWorkbenchObservation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
 import { ResearchExecutionPanels } from "../ResearchExecutionPanels.js";
@@ -21,6 +21,17 @@ describe("research scientific panels", () => {
     view.rerender(<ResearchExecutionPanels projection={projectResearch(snapshot, observed)} stage={null} includeUnstaged stale={false} onAgent={onAgent} />);
     expect(screen.getAllByTestId("research-relation")).toHaveLength(1); expect(screen.getByText(/派发证据/).textContent).toContain("call-1");
     fireEvent.click(screen.getByTestId("research-role-numerics")); expect(onAgent).toHaveBeenCalled();
+  });
+  it("opens the compact canvas by default and keeps the detailed list available", () => {
+    const projection=projectResearch(snapshot, observation());
+    render(<ResearchExecutionPanels projection={projection} stage={null} includeUnstaged stale={false} onAgent={vi.fn()} />);
+    const controls=within(screen.getByRole("group", {name:"协作视图布局"}));
+    expect(screen.getByRole("region", {name:"协作拓扑画布"})).toBeTruthy();
+    fireEvent.click(controls.getByRole("button", {name:"列表"}));
+    expect(screen.queryByRole("region", {name:"协作拓扑画布"})).toBeNull();
+    expect(screen.getAllByText("会话详情与纠偏").length).toBeGreaterThan(0);
+    fireEvent.click(controls.getByRole("button", {name:"画布"}));
+    expect(screen.getByRole("region", {name:"协作拓扑画布"})).toBeTruthy();
   });
   it("shows current configuration and latest actual model independently, including a newer second instance", () => {
     const observed = observation(); observed.configuration = { stages: { "2-experiment": { roles: [{ role: "numerics", model: "configured/model", skills: ["actual-skill"] }] } } };

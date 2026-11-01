@@ -595,6 +595,10 @@
       "sha256": "947df95b5a06587594e39804a0ff33148457391a9a33b90eb5cf73b4185c788d",
       "baseBlob": null
     },
+    "packages/client/src/components/research/ResearchAgentCanvas.tsx": {
+      "sha256": "c75d77c64058ce784fed1aa6b06db01a1564cbe34135a54335c833a594a2ad5d",
+      "baseBlob": null
+    },
     "packages/client/src/components/research/ResearchAgentDetail.tsx": {
       "sha256": "e2b9a863137bf8ba3d9f9c59dfddacc1c9af1987aaa834cdbaef776a81e5a9b2",
       "baseBlob": null
@@ -608,7 +612,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchExecutionPanels.tsx": {
-      "sha256": "77ce9b32eccc498b1ea1cde5300345c92f659e85fc1f51752b9b0cf0ceba5d72",
+      "sha256": "5e8b5fe6aef68ea934d1fedaa406b7f14e0d75c84223759f837e2fab087837d4",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchOverviewAndBudget.tsx": {
@@ -667,6 +671,10 @@
       "sha256": "a03c621a0b851b03773caae09d1e544742b32fb5389c626cf737cfdf61bdd299",
       "baseBlob": null
     },
+    "packages/client/src/components/research/__tests__/ResearchAgentCanvas.test.tsx": {
+      "sha256": "eef4b87987a0357923755704fa0d4ed1ed278a191676af0e2e3c87908508a171",
+      "baseBlob": null
+    },
     "packages/client/src/components/research/__tests__/ResearchAgentDetail.test.tsx": {
       "sha256": "03c9f03f34cf5b19ce12a13e91df7611d24f7d90fedb8e1aa328ce6beb85cb97",
       "baseBlob": null
@@ -680,7 +688,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchWorkbenchPanels.test.tsx": {
-      "sha256": "6487e7d8586d09494ecf1548be65a7f5193b1a27269a395ed4167302ddd9892b",
+      "sha256": "1ae4fafd848f6c83af04cdbca318f3e472a007db6a66861f46adc1de3d99111c",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ScienceArtifactViewer.test.tsx": {
@@ -717,6 +725,10 @@
     },
     "packages/client/src/components/research/agent-teams-artwork.ts": {
       "sha256": "6e98aa1daf5fe26e33d3e5f5fd112c916d0a19d8660c024be0949415881479e5",
+      "baseBlob": null
+    },
+    "packages/client/src/components/research/research-agent-canvas-layout.ts": {
+      "sha256": "708deba0b9f8d826ace42b27bd307d19ab4792fd203fe7acd24f153244fe1208",
       "baseBlob": null
     },
     "packages/client/src/components/research/research-presentation.ts": {
