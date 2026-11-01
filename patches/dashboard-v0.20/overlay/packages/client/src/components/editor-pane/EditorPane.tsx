@@ -1,0 +1,525 @@
+/**
+ * Editor pane shell — composes the tab strip, the collapsible + resizable
+ * file-tree rail, and the active viewer. Viewer resolution is split by open
+ * path: the four pseudo-tab kinds render from `pseudoTabRegistry` directly,
+ * every other kind goes through `CappedViewer` (size gate + `viewerRegistry`).
+ * See change: cleanup-import-cycles (D3).
+ * Co-mounts alongside `ChatView` inside `SplitWorkspace`. Read-only in v1.
+ *
+ * State (open tabs, tree expansion) and the file-open plumbing come from
+ * `SplitWorkspaceContext` so tree clicks, chat file-links, and search results
+ * all funnel through one `openInSplit`. The inner rail↔viewer divider resizes
+ * the rail independently of the outer chat/editor split.
+ *
+ * See change: add-internal-monaco-editor-pane, split-editor-workspace.
+ */
+
+import { fileKind } from "@blackbelt-technology/pi-dashboard-shared/file-kind.js";
+import { parseScienceArtifactTabPath } from "@blackbelt-technology/pi-dashboard-shared/science-paths.js";
+import { mdiClose, mdiConsoleLine, mdiFileTreeOutline, mdiMagnify, mdiRefresh, mdiWeb } from "@mdi/js";
+import { Icon } from "@mdi/react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { grepContents } from "../../lib/api/grep-api.js";
+import { useI18n } from "../../lib/i18n/i18n.js";
+import { clampRailWidth, useRailWidth } from "../../lib/layout/rail-width.js";
+import { stripTermId } from "../../lib/layout/use-terminal-pane-tabs.js";
+import { useTreeVisible } from "../../lib/util/tree-visible.js";
+import { ErrorBoundary } from "../primitives/ErrorBoundary.js";
+import { SplitDivider } from "../split/SplitDivider.js";
+import { useSplitWorkspace } from "../split/SplitWorkspaceContext.js";
+import { TerminalLimitNotice } from "../terminal/TerminalLimitNotice.js";
+import { ChangedOnDiskBanner } from "./ChangedOnDiskBanner.js";
+import { ChangesRailSection } from "./ChangesRailSection.js";
+import { EditorFileTree } from "./EditorFileTree.js";
+import { EditorSearchPanel } from "./EditorSearchPanel.js";
+import { EditorTabs } from "./EditorTabs.js";
+import { FileHandlerAnchor } from "./file-handler/FileHandlerAnchor.js";
+import { FileModeSwitcher } from "./file-handler/FileModeSwitcher.js";
+import { type FileModeOffers, FileModeOffersContext } from "./file-handler/file-mode-offers.js";
+import { useFileHandlerPane } from "./file-handler/use-file-handler-pane.js";
+
+// D3 (change: add-lazy-terminal-diff-bootstrap): the keep-alive terminal layer
+// is a lazy boundary. `React.lazy` fires its import as soon as it is rendered,
+// so the mount is gated on the sticky `terminalActivated` latch — NOT on "a
+// terminal tab exists" (already true on a reload with persisted term tabs and
+// on every folder pane).
+const TerminalPaneLayer = lazy(() => import("./TerminalPaneLayer.js").then((m) => ({ default: m.TerminalPaneLayer })));
+
+import { EditorPaneTabLabelSlot, useShellSessionOrNull } from "@blackbelt-technology/dashboard-plugin-runtime";
+import { useServerCapabilities } from "../../hooks/useServerCapabilities.js";
+import { PreviewProvenance } from "../../lib/access-grants/preview-provenance.js";
+import { CappedViewer } from "./CappedViewer.js";
+import { PluginTabHost, pluginTabPrefix } from "./PluginTabHost.js";
+import { pseudoTabRegistry } from "./pseudo-tab-registry.js";
+import { TabActions, type TabActionTarget } from "./TabActions.js";
+import { isPseudoTabViewer, type OpenPathViewer } from "./viewer-kinds.js";
+
+const absOf = (cwd: string, rel: string): string => (rel ? `${cwd}/${rel}` : cwd);
+
+export function EditorPane() {
+  const { t } = useI18n();
+  const {
+    sessionId,
+    cwd,
+    paneState: state,
+    dispatch,
+    updateSplit,
+    openInSplit,
+    pendingScroll,
+    consumePendingScroll,
+    fileResults,
+    onFilenameSearch,
+    changedFiles,
+    clearChanged,
+    changeDetection,
+    captureBaseline,
+    resyncWatch,
+    changesRevealSignal,
+    openDiffTab,
+    terminal,
+    terminalActivated,
+  } = useSplitWorkspace();
+  const terminalTitle = useCallback(
+    (id: string) => {
+      const s = terminal.terminals.find((t) => t.id === id);
+      return s?.title || s?.shell?.split("/").pop() || undefined;
+    },
+    [terminal.terminals],
+  );
+  // Plugin tab labels: the claim's label component (always mounted, so a
+  // background tab stays live), else the prefix. See change: add-browser-editor-pane-tab.
+  const shellSession = useShellSessionOrNull(sessionId);
+  const pluginLabel = useCallback(
+    (path: string) => <EditorPaneTabLabelSlot path={path} session={shellSession} fallback={pluginTabPrefix(path)} />,
+    [shellSession],
+  );
+  const [treeVisible, setTreeVisible] = useTreeVisible(sessionId);
+  // Rail-local `this session only` (D3 — NOT lifted to context; that would
+  // break the FileDiffView takeover, which renders DiffFileTree outside the
+  // SplitWorkspaceProvider). Shared by the summary bar + the tree's other-
+  // changes group; ephemeral, resets each mount.
+  const [sessionOnly, setSessionOnly] = useState(false);
+  // Reset the filter when the pane is reused for a different session.
+  useEffect(() => setSessionOnly(false), [sessionId]);
+
+  // openChanges() (the Changed Files chip) bumps changesRevealSignal to request
+  // the Changes rail. The tree rail defaults to collapsed (change:
+  // collapse-files-panel-by-default), so reveal it here — otherwise the split
+  // opens but ChangesRailSection (mounted only when treeVisible) stays hidden
+  // and the chip appears to do nothing. Skip the initial mount value so it does
+  // not fight a user's collapse choice. See change: detect-tool-created-files.
+  const prevRevealRef = useRef(changesRevealSignal);
+  useEffect(() => {
+    if (changesRevealSignal !== prevRevealRef.current) {
+      prevRevealRef.current = changesRevealSignal;
+      setTreeVisible(true);
+    }
+  }, [changesRevealSignal, setTreeVisible]);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  // Fail-safe ordering (changed-on-disk verification): a file tab's content
+  // baseline is read BEFORE its viewer mounts, so a change landing in between
+  // can only produce a false-positive banner, never a silently stale view.
+  // `baselineReadyKey` is the `viewerKey` whose baseline has been stored.
+  // See change: gate-changed-on-disk-by-content (D2).
+  const [baselineReadyKey, setBaselineReadyKey] = useState<string | null>(null);
+  const captureBaselineRef = useRef(captureBaseline);
+  captureBaselineRef.current = captureBaseline;
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [railWidth, setRailWidth] = useRailWidth(sessionId);
+
+  // Cmd/Ctrl-P (filenames) or Cmd/Ctrl-Shift-F (contents) toggles the search.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      if (e.key === "p" || e.key === "P" || (e.shiftKey && (e.key === "f" || e.key === "F"))) {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const onContentSearch = useCallback(
+    (q: string, regex: boolean) => grepContents(cwd, q, regex),
+    [cwd],
+  );
+  // Tree+viewer row — its left edge anchors the rail-width drag math so the
+  // width stays correct regardless of the outer split ratio.
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Rail wrapper: the drag previews its width straight in the DOM and commits
+  // once on release. See change: fix-split-divider-drag (D5).
+  const railRef = useRef<HTMLDivElement>(null);
+  const railLeft = () => rowRef.current?.getBoundingClientRect().left ?? 0;
+  // Scroll target for the active tab, latched from the pending-scroll signal.
+  const [scrollTo, setScrollTo] = useState<{ path: string; line: number } | null>(null);
+
+  const activeTab = state.activeIndex >= 0 ? state.openFiles[state.activeIndex] : null;
+  const activePath = activeTab?.path ?? null;
+  // A browse rail can consume almost the entire narrow research pane.
+  useEffect(() => {
+    if (activeTab?.viewer === "research") setTreeVisible(false);
+  }, [activeTab?.viewer, sessionId, setTreeVisible]);
+  // Plugin file-handler modes (session-scoped panes only — `changeDetection` is
+  // the session-pane flag). See change: add-editor-pane-file-handlers.
+  const fh = useFileHandlerPane({ sessionId, cwd, sessionPane: changeDetection, state, dispatch });
+  // The binary notice names the matching modes (D11 A4); same claims + action as the switcher.
+  const fhSelect = fh.selectMode;
+  const modeOffers = useMemo<FileModeOffers | null>(
+    () => (fh.matching.length > 0 && !fh.outsideCwd ? { claims: fh.matching, onSelect: (key) => void fhSelect(key) } : null),
+    [fh.matching, fh.outsideCwd, fhSelect],
+  );
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  // System-open tab actions (D9). Gated on the server capability; only a real
+  // file or a url tab exposes an action (virtual live-server/diff/terminal do
+  // not). See change: open-view-command-in-editor-pane.
+  const caps = useServerCapabilities();
+  // `url` MUST be tested before the pseudo-tab guard: it is the one pseudo-tab
+  // kind that still exposes an action. Collapsing all four onto the guard would
+  // silently drop system-open for `url:` tabs, with no type error.
+  const tabActionTarget: TabActionTarget | null = !activeTab
+    ? null
+    : activeTab.viewer === "url"
+      ? { kind: "url", url: activeTab.path.replace(/^url:/, "") }
+      : isPseudoTabViewer(activeTab.viewer)
+        ? null
+        : { kind: "file", cwd, path: activeTab.path };
+
+  // Honour a pending scroll for the active tab exactly once, then clear it.
+  useEffect(() => {
+    if (pendingScroll && pendingScroll.path === activePath) {
+      setScrollTo(pendingScroll);
+      consumePendingScroll();
+    }
+  }, [pendingScroll, activePath, consumePendingScroll]);
+
+  const lineForTab = scrollTo && scrollTo.path === activePath ? scrollTo.line : undefined;
+
+  // The mount key of the active FILE tab's viewer (open, activation, Refresh and
+  // provenance/line changes all change it); `null` for pseudo/plugin tabs, which
+  // are never watched or baselined. `autoOpened` is in the key: a provenance
+  // change remounts the tab so its next request uses the new eligibility
+  // (surface-denial-remedy-in-previews, D4). Scoped to (session, cwd): a switch drops the
+  // per-scope baseline store, so an identical path:nonce key must still recapture one.
+  // A handler-mode tab has no built-in viewer: no baseline read here (the handler's
+  // `snapshot()` sets the baseline) and `refreshNonce` does not key it.
+  const fileViewerKey =
+    activeTab && !isPseudoTabViewer(activeTab.viewer) && !fh.handlerView
+      ? `${sessionId}\u0000${cwd}\u0000${activeTab.path}:${refreshNonce}:${lineForTab ?? ""}:${activeTab.autoOpened === true}`
+      : null;
+  useEffect(() => {
+    if (!changeDetection || !fileViewerKey || !activePath) return;
+    let active = true;
+    void captureBaselineRef.current(activePath).then(() => {
+      if (active) setBaselineReadyKey(fileViewerKey);
+    });
+    return () => {
+      active = false;
+    };
+  }, [changeDetection, fileViewerKey, activePath]);
+
+  let body: React.ReactNode;
+  if (!activeTab) {
+    body = (
+      <div className="flex h-full items-center justify-center text-sm text-[var(--text-tertiary)]">
+        {t("editor.noFilesOpen", undefined, "No files open — pick one from the tree.")}
+      </div>
+    );
+  } else {
+    const classification = fileKind(absOf(cwd, activeTab.path));
+    // NOTE: `classification` is computed for every tab, including pseudo-tab
+    // paths where its `.viewer` is wrong (`diff:src/foo.ts` → `monaco`). Only
+    // `.kind`/`.mimeType` are consumed. `activeTab.viewer` is the discriminator.
+    //
+    // Bound to a local so the `isPseudoTabViewer` guard narrows it: the else
+    // branch becomes `OpenPathViewer`, which is what lets `tsc` catch a
+    // mis-routed kind instead of deferring it to a runtime `<undefined/>`.
+    // Never replace this with a cast.
+    const viewer = activeTab.viewer;
+    const autoOpened = activeTab.autoOpened === true;
+    const viewerKey = fileViewerKey ?? "";
+    const viewerProps = {
+      cwd,
+      path: activeTab.path,
+      kind: classification.kind,
+      mimeType: classification.mimeType,
+      size: 0,
+      line: lineForTab,
+      restrictCsp: activeTab.restrictCsp,
+    };
+    // Plugin tabs render through PluginTabHost (claim by prefix, richer
+    // props); never the registry, never CappedViewer (no `/api/file`).
+    // See change: add-browser-editor-pane-tab (D1).
+    const activeIdx = state.activeIndex;
+    const PseudoTabViewerComponent =
+      isPseudoTabViewer(viewer) && viewer !== "plugin" ? pseudoTabRegistry[viewer] : null;
+    body = (
+      <PreviewProvenance autoOpened={autoOpened}>
+        <Suspense fallback={<div className="p-4 text-sm text-[var(--text-tertiary)]">{t("editor.loadingViewer", undefined, "Loading viewer…")}</div>}>
+          {viewer === "plugin" ? (
+            <PluginTabHost
+              key={activeTab.path}
+              path={activeTab.path}
+              sessionId={sessionId}
+              isActive
+              onClose={() => dispatch({ type: "closeTab", index: activeIdx })}
+            />
+          ) : PseudoTabViewerComponent ? (
+            <PseudoTabViewerComponent key={viewerKey} {...viewerProps} />
+          ) : isPseudoTabViewer(viewer) ? null : fh.handlerView && fh.activeKey ? (
+            // Plugin file-handler mode: the page-level layer aligns the live
+            // instance over this anchor; CappedViewer is NOT mounted.
+            <FileHandlerAnchor instanceKey={fh.activeKey} />
+          ) : changeDetection && baselineReadyKey !== viewerKey ? (
+            // Baseline first (D2): the digest round-trip is the price of the
+            // fail-safe ordering; a failed digest still resolves (null baseline).
+            <div className="p-4 text-sm text-[var(--text-tertiary)]">{t("editor.loadingViewer", undefined, "Loading viewer…")}</div>
+          ) : (
+            <FileModeOffersContext.Provider value={modeOffers}>
+              <CappedViewer key={viewerKey} viewer={viewer} {...viewerProps} />
+            </FileModeOffersContext.Provider>
+          )}
+        </Suspense>
+      </PreviewProvenance>
+    );
+  }
+
+  const language = activeTab && activeTab.viewer !== "research" && activeTab.viewer !== "science" ? activeTab.path.slice(activeTab.path.lastIndexOf(".") + 1) : "";
+  const scienceTitle = activeTab?.viewer === "science" ? parseScienceArtifactTabPath(activeTab.path)
+    ? t("science.artifact.title", undefined, "Science artifact")
+    : activeTab.path === "science:workspace" ? t("science.workspace", undefined, "Science workspace") : t("science.task", undefined, "Science task") : null;
+  const activeTitle =
+    activeTab?.viewer === "science"
+      ? scienceTitle
+      : activeTab?.viewer === "research"
+      ? t("editor.research", undefined, "Research workbench")
+      : (activePath ?? t("editor.editorTitle", undefined, "Editor"));
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Header */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-primary)] px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setTreeVisible(!treeVisible)}
+          aria-pressed={treeVisible}
+          aria-label={t("editor.toggleFileTree", undefined, "Toggle file tree")}
+          data-testid="tree-toggle"
+          className={[
+            "flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium",
+            treeVisible
+              ? "bg-[var(--bg-selected)] text-[var(--text-primary)]"
+              : "text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]",
+          ].join(" ")}
+          title={treeVisible ? t("editor.hideFileTree", undefined, "Hide file tree") : t("editor.showFileTree", undefined, "Show file tree")}
+        >
+          <Icon path={mdiFileTreeOutline} size={0.7} />
+          <span>{t("common.files", undefined, "Files")}</span>
+        </button>
+        {activeTab?.viewer !== "research" && <span className="truncate text-sm font-medium">{activeTitle}</span>}
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={() => dispatch({ type: "openFile", path: "live:preview", viewer: "live-server" })}
+          data-testid="live-preview-launch"
+          className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+          title={t("editor.previewLocalDevServer", undefined, "Preview a local dev server")}
+        >
+          <Icon path={mdiWeb} size={0.7} />
+        </button>
+        <button
+          type="button"
+          onClick={() => terminal.createTerminal()}
+          data-testid="new-terminal-launch"
+          className="text-[var(--text-tertiary)] hover:text-cyan-400"
+          title={t("terminal.newTerminal", undefined, "New Terminal")}
+        >
+          <Icon path={mdiConsoleLine} size={0.7} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setSearchOpen((v) => !v)}
+          aria-pressed={searchOpen}
+          data-testid="editor-search-toggle"
+          className={searchOpen ? "text-blue-400" : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"}
+          title={t("editor.searchShortcutHint", undefined, "Search (Cmd-P / Cmd-Shift-F)")}
+        >
+          <Icon path={mdiMagnify} size={0.7} />
+        </button>
+        {tabActionTarget && <TabActions target={tabActionTarget} systemOpen={caps.systemOpen} />}
+        {activeTab && (
+          <button
+            type="button"
+            onClick={() => (fh.handlerView ? void fh.refreshHandler() : setRefreshNonce((n) => n + 1))}
+            className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+            title={t("editor.reloadFile", undefined, "Reload file")}
+          >
+            <Icon path={mdiRefresh} size={0.7} />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => updateSplit({ mode: "closed" })}
+          className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+          title={t("editor.closeEditor", undefined, "Close editor")}
+        >
+          <Icon path={mdiClose} size={0.7} />
+        </button>
+      </div>
+
+      {/* A refused terminal spawn (PTY cap) reports here, under the header that has the "+".
+          See change: harden-server-capability-bounds. */}
+      <TerminalLimitNotice cwd={cwd} inline={false} />
+
+      {/* Tabs */}
+      {state.openFiles.length > 0 && (
+        <EditorTabs
+          openFiles={state.openFiles}
+          activeIndex={state.activeIndex}
+          terminalTitle={terminalTitle}
+          pluginLabel={pluginLabel}
+          onActivate={(i) => dispatch({ type: "setActive", index: i })}
+          onClose={(i) => {
+            const f = state.openFiles[i];
+            const termId = f?.viewer === "terminal" ? stripTermId(f.path) : null;
+            // D4 — closing a terminal tab kills its terminal.
+            if (termId) terminal.closeTerminalTab(termId);
+            else if (f?.handlerMode && changeDetection) {
+              // Closing the last tab of a handler instance with unsaved/unknown
+              // edits asks first; re-resolve the index afterwards (async).
+              void fh.guardTabClose(i).then((ok) => {
+                if (!ok) return;
+                const idx = stateRef.current.openFiles.findIndex((t) => t.path === f.path);
+                if (idx >= 0) dispatch({ type: "closeTab", index: idx });
+              });
+            } else dispatch({ type: "closeTab", index: i });
+          }}
+          onReorder={(from, to) => dispatch({ type: "reorderTabs", from, to })}
+        />
+      )}
+
+      {/* Tree + inner divider + viewer */}
+      <div ref={rowRef} className="flex min-h-0 flex-1">
+        {treeVisible && (
+          <>
+            <div ref={railRef} className="shrink-0 flex min-h-0 flex-col" style={{ width: railWidth }}>
+              {/* Changes section pinned atop the project-tree rail (change:
+                  add-change-summary-table). Absent when no changes. */}
+              <ChangesRailSection sessionOnly={sessionOnly} onSessionOnlyChange={setSessionOnly} />
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <EditorFileTree
+                  cwd={cwd}
+                  treeOpenRoots={state.treeOpenRoots}
+                  onToggleRoot={(relPath) => dispatch({ type: "toggleTreeRoot", relPath })}
+                  onOpenFile={(relPath) => openInSplit(relPath)}
+                  onOpenDiff={(relPath) => openDiffTab(relPath)}
+                  activePath={activePath}
+                  sessionOnly={sessionOnly}
+                />
+              </div>
+            </div>
+            <SplitDivider
+              orientation="h"
+              onResize={(clientX) => {
+                if (railRef.current) railRef.current.style.width = `${clampRailWidth(clientX - railLeft())}px`;
+              }}
+              onResizeEnd={(clientX) => {
+                if (clientX !== null) setRailWidth(clientX - railLeft());
+              }}
+              data-testid="rail-divider"
+              title={t("editor.dragResizeRail", undefined, "Drag to resize the browse rail")}
+            />
+          </>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {searchOpen && (
+            <EditorSearchPanel
+              cwd={cwd}
+              fileResults={fileResults}
+              onFilenameSearch={onFilenameSearch}
+              onContentSearch={onContentSearch}
+              onOpen={(relPath, line) => openInSplit(relPath, line)}
+              onClose={() => setSearchOpen(false)}
+            />
+          )}
+          {activePath && changedFiles?.has(activePath) && (
+            <ChangedOnDiskBanner
+              fileName={activePath}
+              onRefresh={() => {
+                if (fh.handlerView) {
+                  // Handler tab: guard, then re-mount the handler from a fresh
+                  // snapshot; the banner clears only once that proceeds (Cancel
+                  // leaves it shown). See change: add-editor-pane-file-handlers (D5).
+                  void fh.refreshHandler().then((ok) => {
+                    if (!ok) return;
+                    clearChanged(activePath);
+                    resyncWatch();
+                  });
+                  return;
+                }
+                setRefreshNonce((n) => n + 1);
+                clearChanged(activePath);
+                // Re-declare the open set so a key the server dropped (a long
+                // delete) is restored. See change: gate-changed-on-disk-by-content (D5).
+                resyncWatch();
+              }}
+              onDismiss={() => clearChanged(activePath)}
+            />
+          )}
+          {activeTab && fh.matching.length > 0 && (
+            <FileModeSwitcher
+              claims={fh.matching}
+              selected={fh.handlerView ? activeTab.handlerMode : undefined}
+              outsideCwd={fh.outsideCwd}
+              onSelect={(m) => void fh.selectMode(m)}
+            />
+          )}
+          {/* File viewer + keep-alive terminal layer share the body region.
+              When a file tab is active the terminals are display:none; when a
+              term tab is active `body` is the null placeholder and the layer's
+              active terminal fills. See change: terminals-in-tabbed-panes. */}
+          <div className="min-h-0 flex-1 flex flex-col">
+            {body}
+            {/* D3: mount the lazy layer only once a terminal tab has been the
+                active tab. The `Suspense` fallback fills the same pane-body
+                region (`min-h-0 flex-1`) so the pane does not collapse while
+                the chunk loads. Once latched it stays mounted, preserving the
+                keep-alive contract on file-tab switches. */}
+            {terminalActivated && (
+              // ErrorBoundary guards the chunk-fetch FETCH phase: a rejected
+              // `import()` throws during render, and without a boundary React
+              // unmounts the whole tree (blank app). Contained here, the shell,
+              // tab strip and chat stay interactive. See change:
+              // add-lazy-terminal-diff-bootstrap.
+              <ErrorBoundary
+                fallback={
+                  <div className="min-h-0 flex-1 p-3 text-xs text-[var(--text-tertiary)]" data-testid="terminal-layer-error">
+                    {t("editor.terminalLoadFailed", undefined, "Terminal failed to load.")}
+                  </div>
+                }
+              >
+                <Suspense fallback={<div className="min-h-0 flex-1" data-testid="terminal-layer-loading" />}>
+                  <TerminalPaneLayer />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Status footer */}
+      {activeTab && activeTab.viewer !== "research" && (
+        <div className="flex shrink-0 items-center gap-3 border-t border-[var(--border-primary)] px-3 py-1 text-xs text-[var(--text-tertiary)]">
+          {activeTab.viewer === "science" ? <span>{scienceTitle}</span> : <>
+            <span>{activeTab.viewer}</span>
+            {language && <span>{language}</span>}
+            <span className="truncate">{activePath}</span>
+          </>}
+        </div>
+      )}
+    </div>
+  );
+}

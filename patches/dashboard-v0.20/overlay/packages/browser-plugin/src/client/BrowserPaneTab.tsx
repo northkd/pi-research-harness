@@ -1,0 +1,248 @@
+/**
+ * Browser pane tab — the `editor-pane-tab` body for `browser:<instanceId>:<tabId>`
+ * (change: add-browser-editor-pane-tab; successor of the `content-view`
+ * LiveViewTile).
+ *
+ *  - subscribes to its relay tab's frames while mounted AND viewable, and
+ *    unsubscribes on unmount / `detached` / the tab leaving the status list;
+ *    leaving `detached` re-subscribes once without a remount;
+ *  - renders the latest `browser_relay_frame` fitted (or 1:1), keeps the last
+ *    frame visible while idle, and hides it when DevTools / no debugger session
+ *    makes the tab non-viewable;
+ *  - forwards Pointer Events (a tap is a click), wheel and keys as allowlisted
+ *    `browser_relay_input`, with positions NORMALIZED to `[0,1]` of the frame;
+ *  - offers a text-entry bridge so a phone's soft keyboard can type into the page;
+ *  - asks the relay to size the remote viewport to the pane (≤ 2 req/s, 16 px
+ *    dead-band) unless the agent owns emulation;
+ *  - shows Done while a `browser-takeover` prompt for this instance is pending
+ *    in the owning session, answering that same prompt;
+ *  - in the Electron window registered as the instance's operator host (the
+ *    carrier's "registered as H" and `instance.host === H`) every subscribe
+ *    carries `local: true` and frames come from `browserHost.onFrame` (the tee
+ *    in main), never from `browser_relay_frame`. A registration that lands (or
+ *    ends) after the pane subscribed re-subscribes ONCE in the new mode, without
+ *    an unsubscribe (the server keeps one subscription per socket+tab, mode =
+ *    the latest subscribe). The server's `browser_host_tee` to the carrier — not
+ *    this pane — drives `browserHost.tee`.
+ *    See change: add-operator-browser-relay (D10).
+ */
+import {
+  usePluginMessage,
+  usePluginSend,
+  useSessionInteractiveRequests,
+  useT,
+} from "@blackbelt-technology/dashboard-plugin-runtime";
+import type { BrowserRelayFrameMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import type React from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { BrowserFrameSurface, type BrowserFrameInput } from "./viewer.js";
+import { getBrowserHost } from "./browser-host.js";
+import { useOperatorHostId } from "./operator-host-store.js";
+import { findRelayTab, useRelayStatus } from "./relay-store.js";
+import { parseBrowserTabPath } from "./tab-path.js";
+
+export interface BrowserPaneTabProps {
+  path: string;
+  session: DashboardSession;
+  isActive: boolean;
+  onClose: () => void;
+}
+
+/** The idle strip shows only after a static page stops repainting for this long. */
+const IDLE_NOTICE_DELAY_MS = 5000;
+
+const BTN =
+  "text-xs px-2 py-1 rounded border border-[var(--border-secondary)] hover:bg-[var(--bg-secondary)] disabled:opacity-50";
+
+export function BrowserPaneTab({ path, session, isActive, onClose }: BrowserPaneTabProps): React.ReactElement {
+  const t = useT();
+  const send = usePluginSend();
+  const status = useRelayStatus();
+
+  const ref = parseBrowserTabPath(path);
+  const found = ref ? findRelayTab(status, ref.instanceId, ref.tabId) : undefined;
+  const tab = found?.tab;
+  const registeredHostId = useOperatorHostId();
+  const browserHost = registeredHostId !== null ? getBrowserHost() : undefined;
+  const local = !!browserHost && !!found && found.instance.host === registeredHostId;
+  const localRef = useRef(local);
+  localRef.current = local;
+  const instanceId = ref?.instanceId ?? "";
+  const tabId = ref?.tabId ?? -1;
+
+  const [jpeg, setJpeg] = useState<string | null>(null);
+  const [inputOn, setInputOn] = useState(true);
+  const [fit, setFit] = useState(true);
+
+  usePluginMessage<BrowserRelayFrameMessage>("browser_relay_frame", (msg) => {
+    if (!localRef.current && msg.instanceId === instanceId && msg.tabId === tabId) setJpeg(msg.jpegBase64);
+  });
+
+  // Local mode: frames arrive from main's tee, filtered to this (instance, tab).
+  useEffect(() => {
+    if (!local || !browserHost) return;
+    return browserHost.onFrame((f) => {
+      if (f.instanceId === instanceId && f.tabId === tabId && typeof f.jpegBase64 === "string") setJpeg(f.jpegBase64);
+    });
+  }, [local, browserHost, instanceId, tabId]);
+
+  // Idle strip: shown only once `no-frames` has persisted; hidden at once on any other state.
+  const noFrames = tab?.state === "no-frames";
+  const [idle, setIdle] = useState(false);
+  useEffect(() => {
+    if (!noFrames) {
+      setIdle(false);
+      return;
+    }
+    const id = setTimeout(() => setIdle(true), IDLE_NOTICE_DELAY_MS);
+    return () => clearTimeout(id);
+  }, [noFrames]);
+
+  const detached = tab?.state === "detached";
+  const viewable = !!tab && !detached;
+  const canInput = inputOn && viewable;
+  const agentEmulation = tab?.agentEmulation === true;
+
+  // Subscribe while active + viewable; cleanup = unsubscribe (unmount, detach,
+  // tab gone). Leaving `detached` flips `viewable` → exactly one new subscribe.
+  // `local` is read at subscribe time (ref) so a mode flip does not unsubscribe;
+  // `subscribedLocal` is the mode of the live subscription (null = none).
+  const subscribedLocal = useRef<boolean | null>(null);
+  const subscribe = useCallback(
+    (asLocal: boolean) => {
+      subscribedLocal.current = asLocal;
+      void send({ type: "browser_relay_subscribe", instanceId, tabId, ...(asLocal ? { local: true } : {}) });
+    },
+    [send, instanceId, tabId],
+  );
+  useEffect(() => {
+    if (!viewable || !isActive) return;
+    subscribe(localRef.current);
+    return () => {
+      subscribedLocal.current = null;
+      void send({ type: "browser_relay_unsubscribe", instanceId, tabId });
+    };
+  }, [send, subscribe, instanceId, tabId, viewable, isActive]);
+  // The carrier's registration ack landed (or ended) after we subscribed: once
+  // more in the new mode, converging; never on mount (the effect above did it).
+  useEffect(() => {
+    if (subscribedLocal.current !== null && subscribedLocal.current !== local) subscribe(local);
+  }, [local, subscribe]);
+
+  const sendInput = useCallback(
+    (payload: BrowserFrameInput) => {
+      void send({ type: "browser_relay_input", instanceId, tabId, ...payload });
+    },
+    [send, instanceId, tabId],
+  );
+
+  // ── viewport follows the pane ────────────────────────────────────────────
+  const resizeEnabled = canInput && !agentEmulation;
+  // The viewport only follows the pane while resize is in effect; otherwise the
+  // frame is scaled to the pane (Fit), whatever the 1:1 toggle says.
+  const effectiveFit = fit || !resizeEnabled;
+  // ── takeover Done ────────────────────────────────────────────────────────
+  const requests = useSessionInteractiveRequests(session.id);
+  const takeover = requests.find((r) => {
+    const meta = r.params._pluginMeta;
+    return r.status === "pending" && meta?.kind === "browser-takeover" && meta.instanceId === instanceId;
+  });
+  const [doneSent, setDoneSent] = useState<string | null>(null);
+  const onDone = () => {
+    if (!takeover || doneSent === takeover.requestId) return;
+    setDoneSent(takeover.requestId);
+    void send({
+      type: "prompt_response",
+      sessionId: session.id,
+      promptId: takeover.requestId,
+      answer: "true",
+      source: "dashboard-browser-takeover",
+    });
+  };
+
+  // ── render ───────────────────────────────────────────────────────────────
+  if (!ref || (status !== null && !tab)) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm text-[var(--text-tertiary)]" data-testid="browser-pane-gone">
+        <span>{t("paneTabGone", undefined, "This browser tab is no longer available")}</span>
+        <button type="button" className={BTN} onClick={onClose}>
+          {t("close", undefined, "Close")}
+        </button>
+      </div>
+    );
+  }
+
+  const bringToFront = () => sendInput({ kind: "bringToFront" });
+
+  return (
+    <div className="flex h-full min-h-0 flex-col" data-testid="browser-pane-tab" data-instance={instanceId} data-tab={tabId}>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-primary)] px-2 py-1">
+        <input
+          readOnly
+          aria-label={t("paneUrl", undefined, "Page address")}
+          data-testid="browser-pane-url"
+          value={tab?.url ?? ""}
+          className="min-w-0 flex-1 rounded border border-[var(--border-secondary)] bg-transparent px-2 py-1 text-xs text-[var(--text-secondary)]"
+        />
+        <button type="button" data-testid="browser-pane-input-toggle" aria-pressed={inputOn} className={BTN} onClick={() => setInputOn((v) => !v)}>
+          {inputOn ? t("inputOn", undefined, "Input: on") : t("inputOff", undefined, "Input: off")}
+        </button>
+        <button type="button" data-testid="browser-pane-fit-toggle" aria-pressed={effectiveFit} className={BTN} onClick={() => setFit((v) => !v)}>
+          {effectiveFit ? t("fit", undefined, "Fit") : t("oneToOne", undefined, "1:1")}
+        </button>
+        <button type="button" data-testid="browser-pane-bring-to-front" className={BTN} disabled={!tab || detached} onClick={bringToFront}>
+          {t("bringToFront", undefined, "Bring to front")}
+        </button>
+        {takeover && (
+          <button
+            type="button"
+            data-testid="browser-pane-done"
+            className="text-xs px-2 py-1 rounded bg-[var(--accent-soft)] text-[var(--accent-text)] font-medium disabled:opacity-50"
+            disabled={doneSent === takeover.requestId}
+            onClick={onDone}
+          >
+            {t("done", undefined, "Done ✓")}
+          </button>
+        )}
+      </div>
+
+      {idle && noFrames && (
+        <div data-testid="browser-pane-idle" className="flex shrink-0 items-center gap-2 border-b border-[var(--border-primary)] px-2 py-0.5 text-[11px] text-[var(--text-tertiary)]">
+          <span>{t("noFramesOverlay", undefined, "No repaints — tab may be idle or in the background")}</span>
+          <button type="button" className={BTN} onClick={bringToFront}>
+            {t("bringToFront", undefined, "Bring to front")}
+          </button>
+        </div>
+      )}
+
+      <BrowserFrameSurface
+        jpeg={viewable ? jpeg : null}
+        canInput={canInput}
+        fit={effectiveFit}
+        resizeEnabled={resizeEnabled}
+        onInput={sendInput}
+        frameAlt={t("frameAlt", undefined, "Live browser frame")}
+        textBridgeLabel={t("textBridge", undefined, "Type into the page")}
+        empty={viewable ? (
+          tab?.state === "client-screencast-active" ? (
+            <div data-testid="browser-pane-agent-screencast" className="p-3 text-[11px] text-[var(--text-tertiary)]">
+              {t("clientScreencast", undefined, "The agent is capturing this tab — no live view")}
+            </div>
+          ) : (
+            <div data-testid="browser-pane-waiting" className="p-3 text-[11px] text-[var(--text-tertiary)]">
+              {t("waitingFrame", undefined, "Waiting for frames…")}
+            </div>
+          )
+        ) : null}
+        overlay={detached ? (
+          <div data-testid={tab?.reason === "no-session" ? "browser-pane-nosession" : "browser-pane-devtools"} className="absolute inset-0 flex items-center justify-center bg-[var(--bg-primary)]/90 p-3 text-center text-[11px] text-[var(--text-secondary)]">
+            {tab?.reason === "no-session"
+              ? t("noSessionOverlay", undefined, "Tab not viewable yet — the agent has not attached to it (extension pages cannot be viewed)")
+              : t("devtoolsOverlay", undefined, "DevTools open on this tab — close it to resume")}
+          </div>
+        ) : null}
+      />
+    </div>
+  );
+}

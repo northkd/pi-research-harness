@@ -21,3 +21,9 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 .DS_Store
+
+# The research workbench here is application source, not project data.
+!patches/dashboard-v0.20/overlay/packages/client/src/components/research/
+!patches/dashboard-v0.20/overlay/packages/client/src/components/research/**
+# Generated machine-local skill indexes must never be committed.
+/extensions/research-loop/generated/

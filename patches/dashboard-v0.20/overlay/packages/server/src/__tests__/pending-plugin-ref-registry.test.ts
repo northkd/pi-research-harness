@@ -1,0 +1,82 @@
+/**
+ * Unit tests for the unified token-keyed pending store
+ * (`createPendingPluginRefRegistry`).
+ *
+ * Covers test-plan #E16 (relocate-goal-product-to-plugin): the
+ * non-destructive `has(token)` probe — `has` never consumes, `resolve` does,
+ * and TTL expiry drops the entry for both.
+ *
+ * See change: detach-automation-goal-from-core (registry),
+ * relocate-goal-product-to-plugin (has()).
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPendingPluginRefRegistry,
+  PENDING_PLUGIN_REF_TTL_MS,
+} from "../pending/pending-plugin-ref-registry.js";
+
+describe("pending-plugin-ref-registry has()", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("E16: has → resolve → has — has is non-destructive, resolve consumes", () => {
+    const registry = createPendingPluginRefRegistry();
+    const lifecycle = { recover: false };
+    expect(registry.file("tok-A", { goalId: "g1" }, "goal", lifecycle)).toBe(true);
+
+    expect(registry.has("tok-A")).toBe(true);
+    const resolved = registry.resolve("tok-A");
+    expect(resolved).not.toBeNull();
+    expect(resolved!.ref).toEqual({ goalId: "g1" });
+    expect(resolved!.ownerId).toBe("goal");
+    expect(resolved!.lifecycle).toEqual(lifecycle);
+    // has() did not consume; resolve() did.
+    expect(registry.has("tok-A")).toBe(false);
+    expect(registry.resolve("tok-A")).toBeNull();
+  });
+
+  it("E16: has() reports false once PENDING_PLUGIN_REF_TTL_MS has elapsed", () => {
+    const registry = createPendingPluginRefRegistry();
+    registry.file("tok-A", { goalId: "g1" }, "goal");
+    expect(registry.has("tok-A")).toBe(true);
+
+    vi.advanceTimersByTime(PENDING_PLUGIN_REF_TTL_MS + 1);
+    expect(registry.has("tok-A")).toBe(false);
+    expect(registry.resolve("tok-A")).toBeNull();
+  });
+
+  it("a provisional identity can defer one owner without consuming or extending its token TTL", () => {
+    const registry = createPendingPluginRefRegistry();
+    registry.file("research", { resWorkflow: { canonicalCwd: "/w" } }, "res-workflow");
+    registry.file("other", { demoKey: "keep" }, "demo");
+    expect(registry.has("research", "res-workflow")).toBe(true);
+    expect(registry.has("research", "demo")).toBe(false);
+    expect(registry.has("other", "res-workflow")).toBe(false);
+    expect(registry.has("research")).toBe(true);
+    expect(registry.resolve("other")?.ownerId).toBe("demo");
+    vi.advanceTimersByTime(PENDING_PLUGIN_REF_TTL_MS + 1);
+    expect(registry.resolve("research")).toBeNull();
+  });
+
+  it("E16: has() on an unknown / empty token is false", () => {
+    const registry = createPendingPluginRefRegistry();
+    expect(registry.has("tok-never-filed")).toBe(false);
+    expect(registry.has("")).toBe(false);
+  });
+});
+
+// A plugin may declare its owned session hidden at spawn (e.g. chat-gateway's
+// Discord sessions). A hidden-only declaration must be STORED — the filer used
+// to keep a lifecycle only when recover/finalizeOnSocketClose was set.
+describe("pending-plugin-ref-registry lifecycle.hidden", () => {
+  it("a hidden-only lifecycle is stored and returned on resolve", () => {
+    const registry = createPendingPluginRefRegistry();
+    expect(registry.file("tok-H", {}, "chat-gateway", { hidden: true })).toBe(true);
+    expect(registry.resolve("tok-H")?.lifecycle).toEqual({ hidden: true });
+  });
+});

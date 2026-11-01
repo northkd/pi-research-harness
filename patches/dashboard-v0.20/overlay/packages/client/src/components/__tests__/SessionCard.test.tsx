@@ -1,0 +1,2185 @@
+import { createSlotRegistry, PluginContextProvider } from "@blackbelt-technology/dashboard-plugin-runtime";
+import { DISPLAY_PRESETS } from "@blackbelt-technology/pi-dashboard-shared/display-prefs.js";
+import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import type React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Router } from "wouter";
+import { memoryLocation } from "wouter/memory-location";
+import { useSessionActions } from "../../hooks/useSessionActions.js";
+import { DisplayPrefsProvider } from "../../lib/state/DisplayPrefsContext.js";
+import { encodeFolderPath } from "../../lib/util/folder-encoding.js";
+import { absentData, archiveEntry, knownData, makeChange, stubArchiveApi, withOpenSpecMap } from "../../test-support/attachmentHarness.js";
+import { branchCache, GroupGitInfo, SessionCard } from "../session/SessionCard.js";
+
+vi.mock("../../hooks/useMobile.js", () => ({
+  useMobile: vi.fn(() => false),
+}));
+
+vi.mock("@blackbelt-technology/pi-dashboard-speed-plugin", () => ({
+  SessionBillingCost: ({ sessionId }: { sessionId: string }) => <span data-testid={`session-billing-${sessionId}`}>¥0.42</span>,
+}));
+
+afterEach(() => cleanup());
+
+function makeSession(overrides: Partial<DashboardSession> = {}): DashboardSession {
+  return {
+    id: "test-session",
+    cwd: "/home/user/project",
+    source: "tui",
+    status: "active",
+    startedAt: Date.now() - 60000,
+    tokensIn: 0,
+    tokensOut: 0,
+    cost: 0,
+    ...overrides,
+  };
+}
+
+const defaultProps = {
+  selectedId: undefined,
+  onSelect: () => {},
+  now: Date.now(),
+  showGitInfo: false,
+  isHidden: false,
+  onArchive: () => {},
+};
+
+/** Open the session actions menu of the (default) test session. */
+function openMenu(id = "test-session") {
+  fireEvent.click(screen.getByTestId(`session-actions-trigger-${id}`));
+}
+
+// worktree-card-section slot: KB row is rendered ONLY for worktree sessions,
+// scoped to the worktree's own cwd. See change: kb-row-on-worktree-session-card.
+describe("SessionCard worktree-card-section slot", () => {
+  function registryWithWorktreeClaim() {
+    const registry = createSlotRegistry();
+    registry.addClaim({
+      pluginId: "kb",
+      priority: 100,
+      slot: "worktree-card-section",
+      Component: ({ folder }: { folder: { cwd: string } }) => (
+        <span data-testid="wt-section">{folder.cwd}</span>
+      ),
+    });
+    return registry;
+  }
+
+  it("renders the folder-scoped section for a worktree session, scoped to its cwd", () => {
+    const session = makeSession({
+      cwd: "/repo/.worktrees/feat",
+      gitWorktree: { mainPath: "/repo", name: "feat" },
+    });
+    render(
+      <PluginContextProvider registry={registryWithWorktreeClaim()}>
+        <SessionCard session={session} {...defaultProps} />
+      </PluginContextProvider>,
+    );
+    expect(screen.getByTestId("wt-section").textContent).toBe("/repo/.worktrees/feat");
+  });
+
+  it("does NOT render the section for a non-worktree session", () => {
+    const session = makeSession({ cwd: "/repo" }); // no gitWorktree
+    render(
+      <PluginContextProvider registry={registryWithWorktreeClaim()}>
+        <SessionCard session={session} {...defaultProps} />
+      </PluginContextProvider>,
+    );
+    expect(screen.queryByTestId("wt-section")).toBeNull();
+  });
+});
+
+describe("SessionCard", () => {
+  it("should render session name or fallback to cwd", () => {
+    const session = makeSession({ name: "My Session" });
+    render(<SessionCard session={session} {...defaultProps} />);
+    expect(screen.getByText("My Session")).toBeTruthy();
+  });
+
+  it("should show active status indicator", () => {
+    const session = makeSession({ status: "active" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    // Status indicator is the source icon colored by the idle status token.
+    const statusIcon = container.querySelector('[class*="status-idle"]');
+    expect(statusIcon).toBeTruthy();
+  });
+
+  it("should highlight when selected", () => {
+    const session = makeSession();
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} selectedId="test-session" />
+    );
+    const card = container.firstChild as HTMLElement;
+    // Current selected-state styling uses a full blue-tint border + tint bg
+    // + ring (`--tint-blue-*`), not the older `border-l-blue-500` left-accent.
+    // See change: align-ui-with-theme-tokens (D2).
+    expect(card.className).toContain("border-[var(--tint-blue-border)]");
+  });
+
+  it("should call onSelect when clicked", () => {
+    const onSelect = vi.fn();
+    const session = makeSession();
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} onSelect={onSelect} />
+    );
+    fireEvent.click(container.firstChild as HTMLElement);
+    expect(onSelect).toHaveBeenCalledWith("test-session");
+  });
+
+  it("shows CNY billing even when legacy usage and cost are zero", () => {
+    const session = makeSession({ cost: 0, tokensIn: 0, tokensOut: 0 });
+    render(<SessionCard session={session} {...defaultProps} />);
+    expect(screen.getByTestId("session-billing-test-session").textContent).toBe("¥0.42");
+    expect(screen.queryByText(/\$/)).toBeNull();
+  });
+
+  it("should show source badge via gutter title (TUI prefix)", () => {
+    const session = makeSession({ source: "tui" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const titled = container.querySelector('[title^="TUI"]');
+    expect(titled).toBeTruthy();
+  });
+
+  it("should show git branch when showGitInfo is true", () => {
+    const session = makeSession({ gitBranch: "feature/test" });
+    render(
+      <SessionCard session={session} {...defaultProps} showGitInfo={true} />
+    );
+    expect(screen.getByText("feature/test")).toBeTruthy();
+  });
+
+  it("should hide git branch when showGitInfo is false", () => {
+    const session = makeSession({ gitBranch: "feature/test" });
+    render(
+      <SessionCard session={session} {...defaultProps} showGitInfo={false} />
+    );
+    expect(screen.queryByText("feature/test")).toBeNull();
+  });
+
+  it("shows red dot when hasError", () => {
+    const session = makeSession({ status: "active" });
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} hasError={true} />,
+    );
+    expect(container.querySelector('[class*="status-error"]')).toBeTruthy();
+  });
+
+  it("shows working-token pulsing icon when isRetrying without lastError", () => {
+    const session = makeSession({ status: "active" });
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} isRetrying={true} />,
+    );
+    const icon = container.querySelector('[data-testid="session-status-icon"]') as HTMLElement;
+    expect(icon.className).toContain("status-working");
+    expect(icon.className).toContain("animate-pulse");
+  });
+
+  it("error icon wins over retry icon", () => {
+    const session = makeSession({ status: "active" });
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} hasError={true} isRetrying={true} />,
+    );
+    expect(container.querySelector('[class*="status-error"]')).toBeTruthy();
+    expect(container.querySelector('[class*="status-working"]')).toBeNull();
+  });
+
+  it("should show ended status for ended sessions", () => {
+    const session = makeSession({ status: "ended" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    // Ended sessions render the source icon via the status-icon span using
+    // a muted text color (rather than the active green/yellow/red palette).
+    const statusIcon = container.querySelector('[data-testid="session-status-icon"]');
+    expect(statusIcon).toBeTruthy();
+    expect(statusIcon!.className).toContain("text-[var(--text-muted)]");
+  });
+
+  it("should show shutdown button when session is active and selected", () => {
+    const onShutdown = vi.fn();
+    const session = makeSession({ status: "active" });
+    render(
+      <SessionCard session={session} {...defaultProps} selectedId="test-session" onShutdown={onShutdown} />
+    );
+    const shutdownBtn = screen.queryByTestId("session-close-btn");
+    expect(shutdownBtn).toBeTruthy();
+  });
+
+  it("should NOT show shutdown button when session is ended", () => {
+    const onShutdown = vi.fn();
+    const session = makeSession({ status: "ended" });
+    render(
+      <SessionCard session={session} {...defaultProps} selectedId="test-session" onShutdown={onShutdown} />
+    );
+    const shutdownBtn = screen.queryByTestId("shutdown-button");
+    // Ended sessions should not have shutdown button
+    expect(onShutdown).not.toHaveBeenCalled();
+  });
+
+  it("should show the attached change's OpenSpec status when selected and has changes", () => {
+    const session = makeSession({ attachedProposal: "feat-a" });
+    const changes = [{ name: "feat-a", status: "in-progress" as const, completedTasks: 1, totalTasks: 3, artifacts: [] }];
+    render(
+      <SessionCard session={session} {...defaultProps} selectedId="test-session" openspecChanges={changes}
+        onSendPrompt={() => {}} onAttachProposal={() => {}} onDetachProposal={() => {}} />
+    );
+    expect(screen.getByTestId("session-openspec-actions")).toBeTruthy();
+  });
+
+  it("should show the attached change's OpenSpec status even when not selected (renders on all cards with changes)", () => {
+    const session = makeSession({ attachedProposal: "feat-a" });
+    const changes = [{ name: "feat-a", status: "in-progress" as const, completedTasks: 1, totalTasks: 3, artifacts: [] }];
+    render(
+      <SessionCard session={session} {...defaultProps} selectedId="other" openspecChanges={changes}
+        onSendPrompt={() => {}} onAttachProposal={() => {}} onDetachProposal={() => {}} />
+    );
+    expect(screen.getByTestId("session-openspec-actions")).toBeTruthy();
+  });
+
+  it("should NOT show OpenSpec actions when no changes", () => {
+    const session = makeSession();
+    render(
+      <SessionCard session={session} {...defaultProps} selectedId="test-session" />
+    );
+    expect(screen.queryByTestId("session-openspec-actions")).toBeNull();
+  });
+
+  it("should apply card-working-pulse animation when streaming", () => {
+    const session = makeSession({ status: "streaming" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-working-pulse");
+  });
+
+  it("should apply card-working-pulse animation when resuming", () => {
+    const session = makeSession({ status: "idle", resuming: true });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-working-pulse");
+  });
+
+  it("should NOT apply card-working-pulse animation when idle", () => {
+    const session = makeSession({ status: "idle" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).not.toContain("card-working-pulse");
+  });
+
+  it("should NOT apply card-working-pulse animation when ended", () => {
+    const session = makeSession({ status: "ended" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).not.toContain("card-working-pulse");
+  });
+
+  it("should apply card-input-stripes when currentTool is ask_user", () => {
+    const session = makeSession({ status: "streaming", currentTool: "ask_user" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-input-stripes");
+    expect(card.className).not.toContain("card-working-pulse");
+  });
+
+  it("should apply card-working-pulse when streaming with a non-ask_user tool", () => {
+    const session = makeSession({ status: "streaming", currentTool: "Read" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-working-pulse");
+    expect(card.className).not.toContain("card-input-stripes");
+  });
+
+  // Unread / gray stripes — see change: session-card-unread-stripes.
+  it("should apply card-unread-pulse when unread and idle", () => {
+    const session = makeSession({ status: "idle", unread: true });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-unread-pulse");
+    expect(card.className).not.toContain("card-working-pulse");
+    expect(card.className).not.toContain("card-input-stripes");
+  });
+
+  it("should NOT apply card-unread-pulse when unread is false", () => {
+    const session = makeSession({ status: "idle", unread: false });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).not.toContain("card-unread-pulse");
+  });
+
+  it("should NOT apply card-unread-pulse when unread is undefined", () => {
+    const session = makeSession({ status: "idle" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).not.toContain("card-unread-pulse");
+  });
+
+  it("streaming wins over unread (yellow takes precedence over gray)", () => {
+    const session = makeSession({ status: "streaming", unread: true });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-working-pulse");
+    expect(card.className).not.toContain("card-unread-pulse");
+  });
+
+  it("ask_user wins over unread (purple takes precedence over gray)", () => {
+    const session = makeSession({ status: "streaming", currentTool: "ask_user", unread: true });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-input-stripes");
+    expect(card.className).not.toContain("card-unread-pulse");
+    expect(card.className).not.toContain("card-working-pulse");
+  });
+
+  it("ended-and-unread session still shows gray stripes", () => {
+    const session = makeSession({ status: "ended", unread: true });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-unread-pulse");
+  });
+
+  it("should show 'Needs you' (not 'Waiting for input') when currentTool is ask_user", () => {
+    const session = makeSession({ status: "streaming", currentTool: "ask_user" });
+    render(<SessionCard session={session} {...defaultProps} />);
+    expect(screen.getByText("Needs you")).toBeTruthy();
+    expect(screen.queryByText("ask_user")).toBeNull();
+    expect(screen.queryByText("Waiting for input")).toBeNull();
+  });
+
+  it("should show 'Idle' (not 'Waiting for input') for an idle, no-tool session", () => {
+    const session = makeSession({ status: "idle" });
+    render(<SessionCard session={session} {...defaultProps} />);
+    expect(screen.getByText("Idle")).toBeTruthy();
+    expect(screen.queryByText("Waiting for input")).toBeNull();
+  });
+
+  it("blocked (ask_user) and idle labels are distinct strings", () => {
+    const blocked = makeSession({ id: "b1", status: "streaming", currentTool: "ask_user" });
+    const { unmount } = render(<SessionCard session={blocked} {...defaultProps} />);
+    expect(screen.getByText("Needs you")).toBeTruthy();
+    unmount();
+    const idle = makeSession({ id: "i1", status: "idle" });
+    render(<SessionCard session={idle} {...defaultProps} />);
+    expect(screen.getByText("Idle")).toBeTruthy();
+  });
+
+  it("renders a distinct status-shape per state (needs-you filled vs idle ring)", () => {
+    const blocked = makeSession({ id: "b2", status: "streaming", currentTool: "ask_user" });
+    const { container: c1, unmount } = render(<SessionCard session={blocked} {...defaultProps} />);
+    const blockedIcon = c1.querySelector('[data-testid="session-status-icon"]') as HTMLElement;
+    expect(blockedIcon.getAttribute("data-status-shape")).toBe("needs-you");
+    unmount();
+    const idle = makeSession({ id: "i2", status: "idle" });
+    const { container: c2 } = render(<SessionCard session={idle} {...defaultProps} />);
+    const idleIcon = c2.querySelector('[data-testid="session-status-icon"]') as HTMLElement;
+    expect(idleIcon.getAttribute("data-status-shape")).toBe("idle");
+  });
+
+  it("should render compact context bar inline with activity and cost", () => {
+    const session = makeSession({ status: "streaming", currentTool: "Read", cost: 1.5 });
+    render(
+      <SessionCard
+        session={session}
+        {...defaultProps}
+        contextUsage={{ tokens: 5000, contextWindow: 10000 }}
+      />
+    );
+    // Context bar and cost share the meta row; the activity indicator (tool
+    // name) sits in the status row above it. See change: compact-session-card-header.
+    const bar = screen.getByTestId("context-usage-bar");
+    const row = screen.getByTestId("session-card-meta-row");
+    expect(row.contains(bar)).toBe(true);
+    // Cost is in the same row
+    expect(row.textContent).toContain("¥0.42");
+    // Activity indicator (tool name) is in the status row, before the meta row
+    const statusRow = screen.getByTestId("session-card-status-row");
+    expect(statusRow.textContent).toContain("Read");
+    expect(statusRow.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Bar is compact (w-16, no percentage text)
+    expect(bar.className).toContain("w-16");
+    expect(screen.queryByTestId("context-usage-pct")).toBeNull();
+  });
+
+  it("should render compact context bar inline on mobile card", async () => {
+    const { useMobile } = await import("../../hooks/useMobile.js");
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const session = makeSession({ status: "streaming", cost: 2.0, model: "claude-4" });
+    render(
+      <SessionCard
+        session={session}
+        {...defaultProps}
+        contextUsage={{ tokens: 3000, contextWindow: 10000 }}
+      />
+    );
+
+    const bar = screen.getByTestId("context-usage-bar");
+    const row = bar.parentElement!;
+    // Cost and model in the same row
+    expect(row.textContent).toContain("¥0.42");
+    expect(row.textContent).toContain("claude-4");
+    // Bar is compact
+    expect(bar.className).toContain("w-16");
+    expect(screen.queryByTestId("context-usage-pct")).toBeNull();
+
+    // Restore
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
+
+  // ── mobile attached-proposal chip ───────────────────────────────
+  // See change: fix-mobile-attach-proposal-display.
+
+  it("renders mobile-card-attached-chip on mobile when attachedProposal is set", async () => {
+    const { useMobile } = await import("../../hooks/useMobile.js");
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const session = makeSession({ attachedProposal: "add-auth" });
+    render(<SessionCard session={session} {...defaultProps} />);
+
+    const chip = screen.getByTestId("mobile-card-attached-chip");
+    expect(chip.textContent).toContain("add-auth");
+
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
+
+  // ── mobile PROCESS subcard ─────────────────────────────────────────────────────────
+  // See change: redesign-process-list-activity-bar (task 4).
+
+  it("mobile: activity bar full-width rows; drawer collapses to a chip", async () => {
+    const { useMobile } = await import("../../hooks/useMobile.js");
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const session = makeSession();
+    const proc = { pid: 1, pgid: 1, command: "vitest --watch", elapsedMs: 60_000 } as any;
+    const bashTool = { toolCallId: "tc-1", command: "npm test", startedAt: Date.now() - 5000 };
+    const { getByTestId } = render(
+      <SessionCard
+        session={session}
+        {...defaultProps}
+        processes={[proc]}
+        onKillProcess={() => {}}
+        inflightBashTools={[bashTool]}
+        onAbortTool={() => {}}
+      />,
+    );
+    expect(getByTestId("session-activity-bar")).toBeTruthy();
+    const chip = getByTestId("background-drawer-chip");
+    expect(chip.textContent).toContain("1");
+
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
+
+  it("mobile: tapping chip opens sheet with full process list", async () => {
+    const { useMobile } = await import("../../hooks/useMobile.js");
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const session = makeSession();
+    const proc = { pid: 1, pgid: 1, command: "vitest --watch", elapsedMs: 60_000 } as any;
+    const { getByTestId, queryByTestId } = render(
+      <SessionCard
+        session={session}
+        {...defaultProps}
+        processes={[proc]}
+        onKillProcess={() => {}}
+        inflightBashTools={[]}
+        onAbortTool={() => {}}
+      />,
+    );
+    expect(queryByTestId("background-drawer-sheet")).toBeNull();
+    fireEvent.click(getByTestId("background-drawer-chip"));
+    const sheet = getByTestId("background-drawer-sheet");
+    expect(sheet.textContent).toContain("vitest --watch");
+
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
+
+  it("does NOT render mobile-card-attached-chip when attachedProposal is null/undefined", async () => {
+    const { useMobile } = await import("../../hooks/useMobile.js");
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const sessionA = makeSession({ attachedProposal: null });
+    const { unmount } = render(<SessionCard session={sessionA} {...defaultProps} />);
+    expect(screen.queryByTestId("mobile-card-attached-chip")).toBeNull();
+    unmount();
+
+    const sessionB = makeSession({ attachedProposal: undefined });
+    render(<SessionCard session={sessionB} {...defaultProps} />);
+    expect(screen.queryByTestId("mobile-card-attached-chip")).toBeNull();
+
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
+
+  it("renders mobile attached chip and OpenSpecActivityBadge simultaneously (different facts)", async () => {
+    const { useMobile } = await import("../../hooks/useMobile.js");
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const session = makeSession({
+      attachedProposal: "add-auth",
+      openspecPhase: "apply",
+      openspecChange: "fix-bug",
+    } as Partial<DashboardSession>);
+    render(<SessionCard session={session} {...defaultProps} />);
+
+    expect(screen.getByTestId("mobile-card-attached-chip").textContent).toContain("add-auth");
+    // OpenSpecActivityBadge renders its phase + change name; assert it's distinct.
+    expect(screen.getByText(/fix-bug/)).toBeDefined();
+
+    (useMobile as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
+});
+
+// Mock fetch for GroupGitInfo server-side branch lookup
+const origFetch = globalThis.fetch;
+
+describe("GroupGitInfo", () => {
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+  });
+
+  // `cwd` matches `makeSession`'s default cwd so the child is ELIGIBLE for the
+  // fallback. See change: fix-folder-header-worktree-branch-leak.
+  const OWN_CWD = "/home/user/project";
+
+  it("renders branch icon as clickable button", () => {
+    const onClick = vi.fn();
+    const sessions = [makeSession({ gitBranch: "main" })];
+    render(<GroupGitInfo sessions={sessions} cwd={OWN_CWD} onBranchClick={onClick} />);
+    const btn = screen.getByTestId("git-branch-btn");
+    fireEvent.click(btn);
+    expect(onClick).toHaveBeenCalled();
+  });
+
+  it("renders branch name for normal branch", () => {
+    const sessions = [makeSession({ gitBranch: "feature/new" })];
+    render(<GroupGitInfo sessions={sessions} cwd={OWN_CWD} />);
+    expect(screen.getByText("feature/new")).toBeTruthy();
+  });
+
+  it("renders detached HEAD (short SHA)", () => {
+    const sessions = [makeSession({ gitBranch: "abc1234" })];
+    render(<GroupGitInfo sessions={sessions} cwd={OWN_CWD} />);
+    expect(screen.getByText("abc1234")).toBeTruthy();
+  });
+
+  it("shows dimmed icon when no git branch info and fetch fails", () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("fail"));
+    const onClick = vi.fn();
+    const sessions = [makeSession()];
+    render(<GroupGitInfo sessions={sessions} cwd="/test" onBranchClick={onClick} />);
+    const btn = screen.getByTestId("git-init-btn");
+    fireEvent.click(btn);
+    expect(onClick).toHaveBeenCalled();
+  });
+
+  // ── folder-head precedence (refresh-folder-header-branch) ───────────────
+
+  it("git_head_update overwrites a stale branchCache REST seed", () => {
+    // Seed the module-level REST cache so first paint shows os/foo.
+    branchCache.set("/seed", { branch: "os/foo", noGit: false });
+    const sessions = [makeSession()]; // no gitBranch → uses seed
+    const { rerender } = render(<GroupGitInfo sessions={sessions} cwd="/seed" />);
+    expect(screen.getByText("os/foo")).toBeTruthy();
+    // git_head_update arrives → folderBranch develop overrides the seed.
+    rerender(<GroupGitInfo sessions={sessions} cwd="/seed" folderBranch="develop" />);
+    expect(screen.getByText("develop")).toBeTruthy();
+    expect(screen.queryByText("os/foo")).toBeNull();
+    branchCache.delete("/seed");
+  });
+
+  it("folder HEAD outranks a leaked child-worktree branch", () => {
+    const sessions = [makeSession({ gitBranch: "os/foo" })];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" folderBranch="develop" />);
+    expect(screen.getByText("develop")).toBeTruthy();
+    expect(screen.queryByText("os/foo")).toBeNull();
+  });
+
+  it("with no folderBranch entry, falls back to a child rooted AT the folder", () => {
+    // Eligibility is cwd identity: this child's own cwd IS the folder cwd.
+    // See change: fix-folder-header-worktree-branch-leak.
+    const sessions = [makeSession({ cwd: "/repo", gitBranch: "os/foo" })];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" />);
+    expect(screen.getByText("os/foo")).toBeTruthy();
+  });
+
+  // ── eligible-child fallback (fix-folder-header-worktree-branch-leak) ─────
+  //
+  // Only a session ROOTED AT the folder can report the folder's HEAD. A
+  // worktree child folded in via `gitWorktree.mainPath` is deterministically
+  // ordered FIRST by `maybeRekeyOrder`'s `toFront`, so a positional `find`
+  // leaked its branch into the parent folder header.
+
+  /** Stub `GET /api/git/branches` so the REST seed is deterministic. */
+  function seedBranches(current: string | null): void {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      json: async () => (current === null
+        ? { success: false }
+        : { success: true, data: { current } }),
+    }) as unknown as typeof fetch;
+  }
+
+  it("eligible child wins over a front-ordered worktree child (#E1)", () => {
+    const sessions = [
+      makeSession({ id: "wt", cwd: "/repo/.worktrees/os-foo", gitBranch: "os/foo" }),
+      makeSession({ id: "main", cwd: "/repo", gitBranch: "develop" }),
+    ];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" />);
+    expect(screen.getByText("develop")).toBeTruthy();
+    expect(screen.queryByText("os/foo")).toBeNull();
+  });
+
+  it("no eligible child falls through to the REST seed (#E2)", async () => {
+    branchCache.delete("/repo-e2");
+    seedBranches("develop");
+    const sessions = [
+      makeSession({ id: "wt1", cwd: "/repo-e2/.worktrees/os-foo", gitBranch: "os/foo" }),
+      makeSession({ id: "wt2", cwd: "/repo-e2/.worktrees/os-bar", gitBranch: "os/bar" }),
+    ];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo-e2" />);
+    expect(screen.queryByText("os/foo")).toBeNull();
+    expect(screen.queryByText("os/bar")).toBeNull();
+    expect(await screen.findByText("develop")).toBeTruthy();
+    branchCache.delete("/repo-e2");
+  });
+
+  it("pinned worktree folder renders its own session's branch (#E3)", () => {
+    // Pin wins in `resolveSessionGroupPath`, so the group cwd IS the worktree
+    // path — cwd identity holds and the session stays eligible.
+    const sessions = [makeSession({ cwd: "/repo/.worktrees/os-foo", gitBranch: "os/foo" })];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo/.worktrees/os-foo" />);
+    expect(screen.getByText("os/foo")).toBeTruthy();
+  });
+
+  it("git-identity tuple never mixes sessions (#E4)", () => {
+    const sessions = [
+      makeSession({
+        id: "wt",
+        cwd: "/repo/.worktrees/os-foo",
+        gitBranch: "os/foo",
+        gitBranchUrl: "https://example.test/tree/os-foo",
+        gitPrNumber: 42,
+        gitPrUrl: "https://example.test/pull/42",
+      }),
+      makeSession({ id: "main", cwd: "/repo", gitBranch: "develop" }),
+    ];
+    const { container } = render(<GroupGitInfo sessions={sessions} cwd="/repo" />);
+    expect(screen.getByText("develop")).toBeTruthy();
+    expect(screen.queryByText("#42")).toBeNull();
+    expect(container.querySelector('a[href="https://example.test/pull/42"]')).toBeNull();
+    expect(container.querySelector('a[href="https://example.test/tree/os-foo"]')).toBeNull();
+  });
+
+  it("folder-HEAD entry still outranks a front-ordered worktree child (#E5)", () => {
+    const sessions = [
+      makeSession({ id: "wt", cwd: "/repo/.worktrees/os-foo", gitBranch: "os/foo" }),
+    ];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" folderBranch="develop" />);
+    expect(screen.getByText("develop")).toBeTruthy();
+    expect(screen.queryByText("os/foo")).toBeNull();
+  });
+
+  it("null folder-HEAD entry still renders the non-git state (#E6)", () => {
+    const sessions = [
+      makeSession({ id: "wt", cwd: "/repo/.worktrees/os-foo", gitBranch: "os/foo" }),
+    ];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" folderBranch={null} />);
+    expect(screen.getByTestId("git-init-btn")).toBeTruthy();
+    expect(screen.getByText("Init git")).toBeTruthy();
+    expect(screen.queryByText("os/foo")).toBeNull();
+  });
+
+  it("eligibility uses pathKey, not raw string equality (#E7)", () => {
+    // Trailing separator is cosmetic drift `pathKey` collapses.
+    const sessions = [makeSession({ cwd: "/repo/", gitBranch: "develop" })];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" />);
+    expect(screen.getByText("develop")).toBeTruthy();
+  });
+
+  it("REST-seed failure must not resurrect an ineligible branch (#X1)", async () => {
+    branchCache.delete("/repo-x1");
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("boom")) as unknown as typeof fetch;
+    const sessions = [
+      makeSession({ id: "wt", cwd: "/repo-x1/.worktrees/os-foo", gitBranch: "os/foo" }),
+    ];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo-x1" />);
+    expect(await screen.findByTestId("git-init-btn")).toBeTruthy();
+    expect(screen.queryByText("os/foo")).toBeNull();
+    branchCache.delete("/repo-x1");
+  });
+
+  it("folderBranch null renders the Init git non-git state", () => {
+    const sessions = [makeSession({ gitBranch: "os/foo" })];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" folderBranch={null} />);
+    expect(screen.getByTestId("git-init-btn")).toBeTruthy();
+    expect(screen.getByText("Init git")).toBeTruthy();
+  });
+
+  // ── dirty pill gate: header pill ONLY for grouped (2+) sessions ──────────
+  // See change: add-session-uncommitted-indicator-and-commit.
+  const dirty = { dirtyCount: 3, staged: 1, unstaged: 2, untracked: 0, ahead: 0, behind: 0 };
+
+  it("solo session: no dirty pill on the folder header (pill lives on the card)", () => {
+    const sessions = [makeSession({ gitBranch: "main", gitStatus: dirty })];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" folderBranch="main" />);
+    expect(screen.queryByTestId("git-dirty-pill")).toBeNull();
+    expect(screen.queryByTestId("group-commit-btn")).toBeNull();
+  });
+
+  it("grouped (2+) sessions: ONE dirty pill + Commit in the folder header", () => {
+    const sessions = [
+      makeSession({ id: "a", gitBranch: "main", gitStatus: dirty }),
+      makeSession({ id: "b", gitBranch: "main", gitStatus: dirty }),
+    ];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" folderBranch="main" />);
+    expect(screen.getAllByTestId("git-dirty-pill")).toHaveLength(1);
+    expect(screen.getByTestId("group-commit-btn")).toBeTruthy();
+  });
+
+  it("grouped but clean+in-sync: no pill, no Commit", () => {
+    const clean = { dirtyCount: 0, staged: 0, unstaged: 0, untracked: 0, ahead: 0, behind: 0 };
+    const sessions = [
+      makeSession({ id: "a", gitBranch: "main", gitStatus: clean }),
+      makeSession({ id: "b", gitBranch: "main", gitStatus: clean }),
+    ];
+    render(<GroupGitInfo sessions={sessions} cwd="/repo" folderBranch="main" />);
+    expect(screen.queryByTestId("git-dirty-pill")).toBeNull();
+    expect(screen.queryByTestId("group-commit-btn")).toBeNull();
+  });
+});
+
+// ── Subcard structure (redesign-session-card-subcards) ────────────────────────
+
+describe("SessionCard subcard structure", () => {
+  it("renders OPENSPEC, PROCESS subcard titles in order when populated (GIT subcard removed)", () => {
+    // An UNATTACHED READY session renders no OPENSPEC subcard any more (its
+    // actions are menu items), so the session is attached to show one.
+    const session = makeSession({ gitBranch: "feature/test", attachedProposal: "feat-a" });
+    const changes = [{ name: "feat-a", status: "in-progress" as const, completedTasks: 1, totalTasks: 3, artifacts: [] }];
+    const { container } = render(
+      <SessionCard
+        session={session}
+        {...defaultProps}
+        showGitInfo={true}
+        openspecChanges={changes}
+        onSendPrompt={() => {}}
+        onAttachProposal={() => {}}
+        onDetachProposal={() => {}}
+        commands={[{ name: "flows:new" } as any]}
+        processes={[{ pid: 123, pgid: 123, command: "node", elapsedMs: 1000 } as any]}
+        onKillProcess={() => {}}
+      />,
+    );
+    // Subcard titles are rendered as capsule legends (uppercase, rounded-full).
+    const titles = Array.from(container.querySelectorAll(".uppercase.rounded-full")).map(
+      (el) => el.textContent,
+    );
+    // MEMORY and FLOWS are intentionally absent (no plugin contributes in this
+    // test — the plugin registry is not populated). See change:
+    // add-flows-subcard for the new FLOWS subcard's wiring.
+    // The STATUS subcard (session-card-badge slot) is absent here because no
+    // plugin claims session-card-badge in this test.
+    const filtered = titles.filter((t) => t && /^(OPENSPEC|GIT|STATUS|PROCESS|FLOWS|MEMORY)$/.test(t));
+    expect(filtered).toEqual(["OPENSPEC", "PROCESS"]);
+  });
+
+  it("hides FLOWS subcard when no plugin claims session-card-flows", () => {
+    const session = makeSession();
+    render(<SessionCard session={session} {...defaultProps} />);
+    expect(screen.queryByText("FLOWS")).toBeNull();
+  });
+
+  it("hides PROCESS subcard when processes array is empty", () => {
+    const session = makeSession();
+    render(
+      <SessionCard
+        session={session}
+        {...defaultProps}
+        processes={[]}
+        onKillProcess={() => {}}
+      />,
+    );
+    expect(screen.queryByText("PROCESS")).toBeNull();
+  });
+
+  // ── PROCESS subcard unified summary line (stable-process-line) ──────────
+  // The activity bar + background-process drawer fold into ONE fixed-height
+  // line. Collapsed height is invariant across tool count (the core goal).
+  describe("PROCESS subcard unified line (stable-process-line)", () => {
+    const proc = { pid: 123, pgid: 123, command: "vitest --watch", elapsedMs: 60_000 } as any;
+    const bashTool = { toolCallId: "tc-1", command: "npm test", startedAt: Date.now() - 5000 };
+
+    /** Render inside a DisplayPrefsProvider with an explicit reserve-at-idle. */
+    function renderCard(ui: React.ReactElement, reserveAtIdle = false) {
+      return render(
+        <DisplayPrefsProvider
+          value={{
+            global: { ...DISPLAY_PRESETS.standard, reserveProcessLineAtIdle: reserveAtIdle },
+            getSessionOverride: () => undefined,
+          }}
+        >
+          {ui}
+        </DisplayPrefsProvider>,
+      );
+    }
+
+    it("Hidden: empty activity + empty drawer + reserve OFF → no PROCESS subcard", () => {
+      renderCard(
+        <SessionCard
+          session={makeSession()}
+          {...defaultProps}
+          processes={[]}
+          onKillProcess={() => {}}
+          inflightBashTools={[]}
+          onAbortTool={() => {}}
+        />,
+      );
+      expect(screen.queryByText("PROCESS")).toBeNull();
+    });
+
+    it("ActiveOnly collapsed: one summary line with the running command + pill, no expanded rows", () => {
+      const { getByTestId, queryByTestId } = renderCard(
+        <SessionCard
+          session={makeSession()}
+          {...defaultProps}
+          processes={[]}
+          onKillProcess={() => {}}
+          inflightBashTools={[bashTool]}
+          onAbortTool={() => {}}
+        />,
+      );
+      expect(screen.getByText("PROCESS")).toBeTruthy();
+      const line = getByTestId("process-summary-line");
+      expect(line.getAttribute("aria-expanded")).toBe("false");
+      expect(line.textContent).toContain("npm test");
+      expect(getByTestId("process-counts-pill").textContent).toContain("1 running");
+      // Collapsed → no expanded body, no per-tool rows.
+      expect(queryByTestId("process-expanded-body")).toBeNull();
+      expect(queryByTestId("session-activity-bar")).toBeNull();
+    });
+
+    it("OrphansOnly collapsed: line reads N background processes, no pill", () => {
+      const { getByTestId, queryByTestId } = renderCard(
+        <SessionCard
+          session={makeSession()}
+          {...defaultProps}
+          processes={[proc]}
+          onKillProcess={() => {}}
+          inflightBashTools={[]}
+          onAbortTool={() => {}}
+        />,
+      );
+      const line = getByTestId("process-summary-line");
+      expect(line.getAttribute("aria-expanded")).toBe("false");
+      expect(line.textContent).toContain("1 background process");
+      // bg-only: the line text carries the count, so no separate pill.
+      expect(queryByTestId("process-counts-pill")).toBeNull();
+      expect(queryByTestId("background-drawer")).toBeNull();
+    });
+
+    it("Both collapsed: pill shows running AND background counts", () => {
+      const { getByTestId } = renderCard(
+        <SessionCard
+          session={makeSession()}
+          {...defaultProps}
+          processes={[proc]}
+          onKillProcess={() => {}}
+          inflightBashTools={[bashTool]}
+          onAbortTool={() => {}}
+        />,
+      );
+      const pill = getByTestId("process-counts-pill").textContent ?? "";
+      expect(pill).toContain("1 running");
+      expect(pill).toContain("⚠1");
+    });
+
+    it("expanded (processDrawerCollapsed=false): reveals activity rows + bg drawer", () => {
+      const { getByTestId } = renderCard(
+        <SessionCard
+          session={makeSession({ processDrawerCollapsed: false })}
+          {...defaultProps}
+          processes={[proc]}
+          onKillProcess={() => {}}
+          inflightBashTools={[bashTool]}
+          onAbortTool={() => {}}
+        />,
+      );
+      expect(getByTestId("process-summary-line").getAttribute("aria-expanded")).toBe("true");
+      expect(getByTestId("process-expanded-body")).toBeTruthy();
+      expect(getByTestId("session-activity-bar")).toBeTruthy();
+      expect(getByTestId("background-drawer")).toBeTruthy();
+    });
+
+    it("toggle flips optimistically AND persists via onSetProcessDrawerCollapsed", () => {
+      const onSetProcessDrawerCollapsed = vi.fn();
+      const { getByTestId } = renderCard(
+        <SessionCard
+          session={makeSession({ processDrawerCollapsed: false })}
+          {...defaultProps}
+          processes={[proc]}
+          onKillProcess={() => {}}
+          onSetProcessDrawerCollapsed={onSetProcessDrawerCollapsed}
+          inflightBashTools={[]}
+          onAbortTool={() => {}}
+        />,
+      );
+      expect(getByTestId("process-summary-line").getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(getByTestId("process-summary-line"));
+      expect(getByTestId("process-summary-line").getAttribute("aria-expanded")).toBe("false");
+      expect(onSetProcessDrawerCollapsed).toHaveBeenCalledWith(true);
+    });
+
+    it("reconciles when the authoritative processDrawerCollapsed changes (other client)", () => {
+      const { getByTestId, rerender } = renderCard(
+        <SessionCard
+          session={makeSession({ processDrawerCollapsed: true })}
+          {...defaultProps}
+          processes={[proc]}
+          onKillProcess={() => {}}
+          inflightBashTools={[]}
+          onAbortTool={() => {}}
+        />,
+      );
+      expect(getByTestId("process-summary-line").getAttribute("aria-expanded")).toBe("false");
+      rerender(
+        <DisplayPrefsProvider
+          value={{ global: { ...DISPLAY_PRESETS.standard }, getSessionOverride: () => undefined }}
+        >
+          <SessionCard
+            session={makeSession({ processDrawerCollapsed: false })}
+            {...defaultProps}
+            processes={[proc]}
+            onKillProcess={() => {}}
+            inflightBashTools={[]}
+            onAbortTool={() => {}}
+          />
+        </DisplayPrefsProvider>,
+      );
+      expect(getByTestId("process-summary-line").getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("stop button (in the expanded body) invokes onAbortTool with toolCallId", () => {
+      const onAbortTool = vi.fn();
+      const { getByTestId } = renderCard(
+        <SessionCard
+          session={makeSession({ processDrawerCollapsed: false })}
+          {...defaultProps}
+          inflightBashTools={[bashTool]}
+          onAbortTool={onAbortTool}
+        />,
+      );
+      fireEvent.click(getByTestId("session-activity-stop"));
+      expect(onAbortTool).toHaveBeenCalledWith("tc-1");
+    });
+
+    // ── Core-goal regression (task 5.4) ──────────────────────────────────
+    // Collapsed subcard structure MUST NOT depend on the in-flight tool
+    // count: exactly one summary line, zero per-tool rows, for 0/1/3 tools.
+    // reserve-at-idle ON so the 0-tool case still renders (else it unmounts).
+    it.each([
+      ["zero tools", [] as any[]],
+      ["one tool", [{ toolCallId: "t0", command: "cmd-0", startedAt: Date.now() }]],
+      [
+        "three tools",
+        [
+          { toolCallId: "t0", command: "cmd-0", startedAt: Date.now() },
+          { toolCallId: "t1", command: "cmd-1", startedAt: Date.now() },
+          { toolCallId: "t2", command: "cmd-2", startedAt: Date.now() },
+        ],
+      ],
+    ])("collapsed height invariant — %s → 1 line, 0 rows", (_label, tools) => {
+      const { getByTestId, queryAllByTestId, queryByTestId } = renderCard(
+        <SessionCard
+          session={makeSession()}
+          {...defaultProps}
+          processes={[]}
+          onKillProcess={() => {}}
+          inflightBashTools={tools as any}
+          onAbortTool={() => {}}
+        />,
+        true,
+      );
+      // Exactly one collapsed line; no expanded body; no per-tool rows.
+      expect(getByTestId("process-summary-line")).toBeTruthy();
+      expect(queryByTestId("process-expanded-body")).toBeNull();
+      expect(queryAllByTestId("session-activity-row").length).toBe(0);
+    });
+
+    // ── Idle-reservation pref gating (task 5.5) ──────────────────────────
+    it("reserve OFF + both empty → subcard is null (unmounts, may reflow)", () => {
+      renderCard(
+        <SessionCard
+          session={makeSession()}
+          {...defaultProps}
+          processes={[]}
+          onKillProcess={() => {}}
+          inflightBashTools={[]}
+          onAbortTool={() => {}}
+        />,
+        false,
+      );
+      expect(screen.queryByTestId("process-summary-line")).toBeNull();
+      expect(screen.queryByText("PROCESS")).toBeNull();
+    });
+
+    it("reserve ON + both empty → reserved idle line renders", () => {
+      const { getByTestId } = renderCard(
+        <SessionCard
+          session={makeSession()}
+          {...defaultProps}
+          processes={[]}
+          onKillProcess={() => {}}
+          inflightBashTools={[]}
+          onAbortTool={() => {}}
+        />,
+        true,
+      );
+      expect(screen.getByText("PROCESS")).toBeTruthy();
+      expect(getByTestId("process-summary-line").textContent).toContain("idle");
+    });
+  });
+
+  it("hides MEMORY subcard when no plugin claims session-card-memory", () => {
+    const session = makeSession();
+    render(<SessionCard session={session} {...defaultProps} />);
+    expect(screen.queryByText("MEMORY")).toBeNull();
+  });
+
+  it("hides OPENSPEC subcard when handlers are absent", () => {
+    const session = makeSession();
+    render(<SessionCard session={session} {...defaultProps} />);
+    expect(screen.queryByText("OPENSPEC")).toBeNull();
+  });
+
+  it("hides WORKSPACE subcard when showGitInfo is false and no badge plugin", () => {
+    const session = makeSession();
+    render(<SessionCard session={session} {...defaultProps} showGitInfo={false} />);
+    expect(screen.queryByText("WORKSPACE")).toBeNull();
+  });
+
+  it("selected card retains blue accent ring after subcard refactor", () => {
+    const session = makeSession();
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} selectedId="test-session" />,
+    );
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("border-[var(--tint-blue-border)]");
+    expect(card.className).toContain("ring-1");
+    expect(card.className).toContain("ring-[var(--tint-blue-border)]");
+  });
+
+  // §7 pauses ALL animations while the dashboard is visible but idle, so the
+  // selected session must stay identified by STATIC styling alone. Pinning the
+  // ring/border pair the CSS selectors read — and the absence of any
+  // animation-class dependency — stops a rename from silently dropping that
+  // affordance when motion is off. (test-plan #F21)
+  // See change: fix-long-session-ux-degradation (design D8).
+  it("selected card's static selection affordance does not depend on an animation class (F21)", () => {
+    const session = makeSession();
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} selectedId="test-session" />,
+    );
+    const card = container.querySelector("[data-testid='session-card-desktop']") as HTMLElement;
+    expect(card.className).toContain("ring-1");
+    expect(card.className).toContain("ring-[var(--tint-blue-border)]");
+    expect(card.className).toContain("border-[var(--tint-blue-border)]");
+    expect(card.className).not.toMatch(/\banimate-[a-z]/);
+  });
+
+  it("streaming session retains card-working-pulse on outer li", () => {
+    const session = makeSession({ status: "streaming" });
+    const { container } = render(<SessionCard session={session} {...defaultProps} />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("card-working-pulse");
+  });
+});
+
+// ── Directory rail replaces the per-card status gutter ──────────────────
+// The 20px left gutter (status capsule + icon chip + drag zone) is GONE; the
+// folder now owns one gray rail and each card ticks into it. Status survives
+// only on the inline chip. The rail-tint derivation itself is still unit
+// tested in lib/__tests__/session-status-visuals.test.ts (deriveRailBgColor
+// is retained there but no longer rendered).
+// See change: session-card-directory-rail.
+
+describe("SessionCard directory rail", () => {
+  it("renders NO left status gutter (no data-rail-bg element)", () => {
+    const { container } = render(
+      <SessionCard session={makeSession({ status: "streaming" })} {...defaultProps} />,
+    );
+    expect(container.querySelector("[data-rail-bg]")).toBeNull();
+  });
+
+  it("status chip is the sole status carrier and sits inline in the name row", () => {
+    const { container } = render(
+      <SessionCard session={makeSession({ status: "idle" })} {...defaultProps} />,
+    );
+    const icon = container.querySelector("[data-testid='session-status-icon']") as HTMLElement | null;
+    expect(icon).toBeTruthy();
+    expect(icon!.className).toContain("bg-[var(--bg-tertiary)]");
+    expect(icon!.className).toContain("rounded-full");
+    expect(icon!.className).toMatch(/w-4/);
+    expect(icon!.className).toMatch(/h-4/);
+    // Must not shrink when the session name is long.
+    expect(icon!.className).toMatch(/flex-shrink-0/);
+    // Source + status moved onto the chip when the gutter was deleted.
+    expect(icon!.getAttribute("title")).toContain("idle");
+  });
+
+  it("card draws a 9px tick into the folder rail and slims its left padding", () => {
+    const { container } = render(
+      <SessionCard session={makeSession({ status: "idle" })} {...defaultProps} />,
+    );
+    const card = container.querySelector("[data-testid='session-card-desktop']") as HTMLElement | null;
+    expect(card).toBeTruthy();
+    // Tick connector into the directory rail.
+    expect(card!.className).toContain("before:-left-[11px]");
+    expect(card!.className).toContain("before:w-[9px]");
+    expect(card!.className).toContain("before:bg-[var(--rail-directory)]");
+    // Left padding slimmed 8px -> 6px; right padding widened 8px -> 18px: the
+    // reserved gutter for the edge-mounted actions trigger.
+    // See change: move-session-actions-trigger-to-card-edge (E3).
+    expect(card!.className).toMatch(/pl-1\.5/);
+    expect(card!.className).toContain("pr-[18px]");
+    expect(card!.className).not.toMatch(/(^|\s)pr-2(\s|$)/);
+    // Hover group drives the drag bead reveal.
+    expect(card!.className).toContain("group/card");
+  });
+
+  it("renders no drag bead when the card is not inside a sortable wrapper", () => {
+    const { container } = render(
+      <SessionCard session={makeSession({ status: "idle" })} {...defaultProps} />,
+    );
+    expect(container.querySelector("[data-testid='drag-handle-session']")).toBeNull();
+  });
+});
+
+// ── Mobile parity ────────────────────────────────────────────────────────────
+
+describe("SessionCard mobile branch unchanged by subcard refactor", () => {
+  it("mobile card renders no subcard panels", async () => {
+    const useMobileMod = await import("../../hooks/useMobile.js");
+    (useMobileMod.useMobile as any).mockReturnValueOnce(true);
+    const session = makeSession({ gitBranch: "main" });
+    const changes = [{ name: "x", status: "in-progress" as const, completedTasks: 0, totalTasks: 1, artifacts: [] }];
+    const { container } = render(
+      <SessionCard
+        session={session}
+        {...defaultProps}
+        showGitInfo={true}
+        openspecChanges={changes}
+        onSendPrompt={() => {}}
+        onAttachProposal={() => {}}
+        onDetachProposal={() => {}}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).toBeNull();
+    expect(screen.queryByText("WORKSPACE")).toBeNull();
+    expect(screen.queryByText("FLOWS")).toBeNull();
+    // No inset subcard panels rendered (subcards use color-mix bg + rounded-lg).
+    expect(container.querySelector("[class*='color-mix'].rounded-lg")).toBeNull();
+  });
+});
+
+describe("SessionCard — OPENSPEC subcard visibility (auto-hide-empty-session-subcards)", () => {
+  const baseProps = {
+    ...defaultProps,
+    onSendPrompt: () => {},
+    onAttachProposal: () => {},
+    onDetachProposal: () => {},
+  };
+
+  it("hides OPENSPEC subcard when openspecInitialized=false and pending=false (no openspec/ dir)", () => {
+    const session = makeSession();
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecInitialized={false}
+        openspecPending={false}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).toBeNull();
+  });
+
+  it("hides OPENSPEC subcard when openspecInitialized=false and pending=false (also covers globally disabled — same payload)", () => {
+    // Server broadcasts the same cleared shape for both "no openspec dir" and
+    // "openspec.enabled === false". This scenario covers the disabled case.
+    const session = makeSession();
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecInitialized={false}
+        openspecPending={false}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).toBeNull();
+  });
+
+  it("shows OPENSPEC subcard when pending=true (cold-boot)", () => {
+    const session = makeSession({ attachedProposal: "feat-a" });
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecInitialized={false}
+        openspecPending={true}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).not.toBeNull();
+  });
+
+  it("shows OPENSPEC subcard when openspecInitialized=true even with empty changes (attach CTA)", () => {
+    const session = makeSession({ attachedProposal: "feat-a" });
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecInitialized={true}
+        openspecPending={false}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).not.toBeNull();
+  });
+
+  it("shows OPENSPEC subcard for legacy callers (openspecInitialized undefined preserves visibility)", () => {
+    const session = makeSession({ attachedProposal: "feat-a" });
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        // openspecInitialized + openspecPending omitted — legacy parent
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).not.toBeNull();
+  });
+});
+
+describe("SessionCard — openspecHasDir (auto-hide-empty-session-subcards)", () => {
+  const baseProps = {
+    ...defaultProps,
+    onSendPrompt: () => {},
+    onAttachProposal: () => {},
+    onDetachProposal: () => {},
+  };
+
+  it("shows OPENSPEC subcard when openspecHasDir=true even with initialized=false and no changes", () => {
+    // Fresh `openspec init` project: openspec/ exists, openspec/changes/ does
+    // not, openspec list errors out. The subcard must still render as an
+    // init/attach affordance.
+    const session = makeSession({ attachedProposal: "feat-a" });
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecInitialized={false}
+        openspecPending={false}
+        openspecHasDir={true}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).not.toBeNull();
+  });
+
+  it("hides OPENSPEC subcard when openspecHasDir=false (truly not an OpenSpec project)", () => {
+    const session = makeSession();
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecInitialized={false}
+        openspecPending={false}
+        openspecHasDir={false}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).toBeNull();
+  });
+
+  it("shows OPENSPEC subcard when openspecHasDir=false but pending=true (cold-boot)", () => {
+    // Edge case: openspecHasDir was probed before changes/ existed, but the
+    // poll is still in flight. Keep the subcard visible so it doesn't blink.
+    const session = makeSession({ attachedProposal: "feat-a" });
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecHasDir={false}
+        openspecPending={true}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).not.toBeNull();
+  });
+
+  it("openspecHasDir takes precedence over openspecInitialized when both present", () => {
+    // openspecHasDir=true wins even if openspecInitialized=false.
+    const session = makeSession({ attachedProposal: "feat-a" });
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecInitialized={false}
+        openspecPending={false}
+        openspecHasDir={true}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).not.toBeNull();
+  });
+
+  it("falls back to legacy (initialized||pending) when openspecHasDir undefined", () => {
+    // Old broadcast or legacy parent — backwards-compat check.
+    const session = makeSession({ attachedProposal: "feat-a" });
+    render(
+      <SessionCard
+        session={session}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecInitialized={true}
+        openspecPending={false}
+        // openspecHasDir intentionally omitted
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).not.toBeNull();
+  });
+});
+
+describe("SessionCard — New session menu item (session-card-plus-session-button → add-session-actions-flyout)", () => {
+  const spawnProps = { ...defaultProps, onSpawnSibling: () => {} };
+
+  it("2.1 renders for a live session (status !== ended)", () => {
+    const session = makeSession({ status: "streaming" });
+    render(<SessionCard session={session} {...spawnProps} />);
+    openMenu();
+    expect(screen.getByTestId("session-card-spawn-sibling")).toBeTruthy();
+  });
+
+  it("2.2 renders for an ended session alongside Fork (and Resume)", () => {
+    const session = makeSession({ status: "ended", sessionFile: "/sess/x.jsonl" });
+    render(<SessionCard session={session} {...spawnProps} onResume={() => {}} />);
+    openMenu();
+    expect(screen.getByTestId("session-card-spawn-sibling")).toBeTruthy();
+    expect(screen.getByTestId("session-menu-item-fork")).toBeTruthy();
+    expect(screen.getByTestId("session-menu-item-resume")).toBeTruthy();
+  });
+
+  it("2.3 renders even when sessionFile is absent (no Fork-style gating)", () => {
+    const session = makeSession({ status: "ended", sessionFile: undefined });
+    render(<SessionCard session={session} {...spawnProps} onResume={() => {}} />);
+    openMenu();
+    // Fork is gated on sessionFile; New session is not.
+    expect(screen.queryByTestId("session-menu-item-fork")).toBeNull();
+    expect(screen.getByTestId("session-card-spawn-sibling")).toBeTruthy();
+  });
+
+  it("2.4 activation invokes the handler with the session, closes the menu and does not select the card", () => {
+    const onSpawnSibling = vi.fn();
+    const onSelect = vi.fn();
+    const session = makeSession();
+    render(<SessionCard session={session} {...defaultProps} onSelect={onSelect} onSpawnSibling={onSpawnSibling} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("session-card-spawn-sibling"));
+    expect(onSpawnSibling).toHaveBeenCalledWith(session);
+    expect(screen.queryByTestId("session-actions-menu-test-session")).toBeNull();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("2.5 cwdMissing → aria-disabled + reason text", () => {
+    const session = makeSession({ cwdMissing: true });
+    render(<SessionCard session={session} {...spawnProps} />);
+    openMenu();
+    const item = screen.getByTestId("session-card-spawn-sibling");
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("title")).toBe("session's directory no longer exists");
+  });
+
+  it("2.6 no handler → item absent", () => {
+    const session = makeSession();
+    render(<SessionCard session={session} {...defaultProps} />);
+    openMenu();
+    expect(screen.queryByTestId("session-card-spawn-sibling")).toBeNull();
+  });
+
+  it("2.7 hiding the `spawn` section removes the item", () => {
+    const session = makeSession();
+    render(<SessionCard session={session} {...spawnProps} />);
+    // The default (no prefs) shows it; the section gate itself is covered in
+    // session-menu-items.test.ts (E12).
+    openMenu();
+    expect(screen.getByTestId("session-card-spawn-sibling")).toBeTruthy();
+  });
+});
+
+describe("SessionCard — +Session wiring through handleSpawnSession (session-card-plus-session-button)", () => {
+  // Build a real handleSpawnSession from useSessionActions with stubbed deps,
+  // then wire onSpawnSibling exactly as SessionList does:
+  //   onSpawnSibling={(s) => onSpawnSession(s.cwd, s.attachedProposal || undefined)}
+  // This exercises the full click → ws.send payload path (cwd, attachProposal
+  // omission, requestId minting).
+  //
+  // NOTE: worktree sessions inherit the parent cwd unconditionally — a
+  // worktree session's `cwd` is the worktree dir, so +Session spawns INSIDE
+  // the worktree, never the main repo. Do not add gitWorktreeBase here; that
+  // would change the clean-sibling semantic. See change:
+  // session-card-plus-session-button (task 6.5).
+  function setup() {
+    const send = vi.fn();
+    const { result } = renderHook(() =>
+      useSessionActions({
+        selectedId: undefined,
+        send,
+        navigate: () => {},
+        setMobileOpen: () => {},
+        sessions: new Map(),
+        setSessions: () => {},
+        setSessionStates: () => {},
+        setSpawningCwds: () => {},
+        setTerminals: () => {},
+        clearSpawningCwd: () => {},
+        spawnTimeoutsRef: { current: new Map() },
+        pendingTerminalCwdRef: { current: null },
+        terminals: new Map(),
+        pendingSpawnsRef: { current: new Map() },
+      } as any),
+    );
+    const onSpawnSession = result.current.handleSpawnSession;
+    const onSpawnSibling = (s: any) => onSpawnSession(s.cwd, s.attachedProposal || undefined);
+    return { send, onSpawnSibling };
+  }
+
+  it("4.1 activation sends spawn_session with cwd + attachProposal + requestId", () => {
+    const { send, onSpawnSibling } = setup();
+    const session = makeSession({ cwd: "/project/foo", attachedProposal: "add-dark-mode" });
+    render(<SessionCard session={session} {...defaultProps} onSpawnSibling={onSpawnSibling} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("session-card-spawn-sibling"));
+    expect(send).toHaveBeenCalledTimes(1);
+    const payload = send.mock.calls[0][0];
+    expect(payload.type).toBe("spawn_session");
+    expect(payload.cwd).toBe("/project/foo");
+    expect(payload.attachProposal).toBe("add-dark-mode");
+    expect(typeof payload.requestId).toBe("string");
+    expect(payload.requestId.length).toBeGreaterThan(0);
+  });
+
+  it("4.2 click omits attachProposal key when parent has none", () => {
+    const { send, onSpawnSibling } = setup();
+    const session = makeSession({ cwd: "/project/bar", attachedProposal: undefined });
+    render(<SessionCard session={session} {...defaultProps} onSpawnSibling={onSpawnSibling} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("session-card-spawn-sibling"));
+    const payload = send.mock.calls[0][0];
+    expect(payload.cwd).toBe("/project/bar");
+    expect("attachProposal" in payload).toBe(false);
+    // Also true for empty-string proposal.
+    send.mockClear();
+    cleanup();
+    const session2 = makeSession({ cwd: "/project/baz", attachedProposal: "" });
+    render(<SessionCard session={session2} {...defaultProps} onSpawnSibling={onSpawnSibling} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("session-card-spawn-sibling"));
+    expect("attachProposal" in send.mock.calls[0][0]).toBe(false);
+  });
+
+  it("4.3 cwdMissing → item disabled, activation does NOT send", () => {
+    const { send, onSpawnSibling } = setup();
+    const session = makeSession({ cwd: "/project/gone", cwdMissing: true });
+    render(<SessionCard session={session} {...defaultProps} onSpawnSibling={onSpawnSibling} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("session-card-spawn-sibling"));
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionCard — New worktree session menu item (session-card-plus-session-button → add-session-actions-flyout)", () => {
+  const wtProps = { ...defaultProps, onSpawnWorktree: () => {} };
+
+  it("7.x renders when onSpawnWorktree supplied", () => {
+    render(<SessionCard session={makeSession()} {...wtProps} />);
+    openMenu();
+    const item = screen.getByTestId("session-card-spawn-worktree");
+    expect(item).toBeTruthy();
+    expect(item.textContent).toContain("New worktree session");
+  });
+
+  it("7.x absent when no handler", () => {
+    render(<SessionCard session={makeSession()} {...defaultProps} />);
+    openMenu();
+    expect(screen.queryByTestId("session-card-spawn-worktree")).toBeNull();
+  });
+
+  it("7.x absent when session is already a worktree session; New session is unaffected", () => {
+    const session = makeSession({ gitWorktree: { name: "wt-x", base: "main" } as any });
+    render(<SessionCard session={session} {...wtProps} onSpawnSibling={() => {}} />);
+    openMenu();
+    expect(screen.queryByTestId("session-card-spawn-worktree")).toBeNull();
+    expect(screen.getByTestId("session-card-spawn-sibling")).toBeTruthy();
+  });
+
+  it("7.x activation invokes handler with the session", () => {
+    const onSpawnWorktree = vi.fn();
+    const session = makeSession();
+    render(<SessionCard session={session} {...defaultProps} onSpawnWorktree={onSpawnWorktree} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("session-card-spawn-worktree"));
+    expect(onSpawnWorktree).toHaveBeenCalledWith(session);
+  });
+
+  it("7.x cwdMissing → aria-disabled + reason, activation does nothing", () => {
+    const onSpawnWorktree = vi.fn();
+    const session = makeSession({ cwdMissing: true });
+    render(<SessionCard session={session} {...defaultProps} onSpawnWorktree={onSpawnWorktree} />);
+    openMenu();
+    const item = screen.getByTestId("session-card-spawn-worktree");
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("title")).toBe("session's directory no longer exists");
+    fireEvent.click(item);
+    expect(onSpawnWorktree).not.toHaveBeenCalled();
+    // the menu stays open
+    expect(screen.getByTestId("session-actions-menu-test-session")).toBeTruthy();
+  });
+
+  it("7.x coexists with New session", () => {
+    render(<SessionCard session={makeSession()} {...defaultProps} onSpawnSibling={() => {}} onSpawnWorktree={() => {}} />);
+    openMenu();
+    expect(screen.getByTestId("session-card-spawn-sibling")).toBeTruthy();
+    expect(screen.getByTestId("session-card-spawn-worktree")).toBeTruthy();
+  });
+});
+
+/**
+ * D7 — a prompt raised WITHOUT an `ask_user` tool call (flow adapter, plugin)
+ * now sets `currentTool`. `ActivityIndicator` suppresses the "Needs you" label
+ * for widget-bar-placed prompts and then falls through to the generic
+ * `currentTool` branch, so the card reads `⚡ ask_user` — deliberately, because
+ * the session IS blocked on the user and "Idle" was a lie.
+ *
+ * Delivered with no client code change; this pins the accepted outcome.
+ *
+ * See change: restore-ask-user-tool-state-on-reconnect, test-plan #F7.
+ */
+describe("SessionCard — widget-bar-placed prompt (test-plan #F7)", () => {
+  it("#F7 shows the ask_user tool label, never 'Idle', when a widget-bar prompt owns the prompt", async () => {
+    const runtime = await import("@blackbelt-technology/dashboard-plugin-runtime");
+    const spy = vi.spyOn(runtime, "useHasWidgetBarPrompt").mockReturnValue(true);
+    try {
+      // `status: "idle"` is the exact pair the change makes newly legal: an
+      // agent_end landed while a prompt is still pending. Pre-change this
+      // session rendered "Idle".
+      const session = makeSession({ status: "idle", currentTool: "ask_user" });
+      render(<SessionCard session={session} {...defaultProps} />);
+
+      expect(screen.getByText("ask_user")).toBeTruthy();
+      expect(screen.queryByText("Idle")).toBeNull();
+      // The chat-routed "Needs you" label stays suppressed — the widget bar
+      // owns the affordance.
+      expect(screen.queryByText("Needs you")).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("#F7 keeps the 'Needs you' label when no widget-bar slot owns the prompt", () => {
+    const session = makeSession({ status: "idle", currentTool: "ask_user" });
+    render(<SessionCard session={session} {...defaultProps} />);
+    expect(screen.getByText("Needs you")).toBeTruthy();
+    expect(screen.queryByText("Idle")).toBeNull();
+  });
+});
+
+/**
+ * Defect 4 — the card could not express a retry at all. The retry branch is one
+ * additional case in the existing `ActivityIndicator` precedence chain; the
+ * dot / shape / rail / capsule channels are deliberately untouched.
+ * See change: unify-retry-visibility (design D3/D4).
+ */
+describe("SessionCard — retry in the activity slot", () => {
+  it("renders '↻ Retry N' when retryAttempt is set", () => {
+    render(<SessionCard session={makeSession({ status: "idle" })} {...defaultProps} retryAttempt={2} />);
+    expect(screen.getAllByText(/Retry 2/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Idle")).toBeNull();
+  });
+
+  it("renders NO retry label when retryAttempt is absent", () => {
+    render(<SessionCard session={makeSession({ status: "idle" })} {...defaultProps} />);
+    expect(screen.queryByText(/Retry \d/)).toBeNull();
+    expect(screen.getAllByText("Idle").length).toBeGreaterThan(0);
+  });
+
+  it("retry BEATS currentTool and streaming (no 'Thinking…' during a backoff)", () => {
+    const { unmount } = render(
+      <SessionCard session={makeSession({ status: "streaming", currentTool: "bash" })} {...defaultProps} retryAttempt={3} />,
+    );
+    expect(screen.getAllByText(/Retry 3/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("bash")).toBeNull();
+    expect(screen.queryByText("Thinking…")).toBeNull();
+    unmount();
+  });
+
+  it("ask_user BEATS retry — blocked-on-you stays the most urgent signal", () => {
+    render(<SessionCard session={makeSession({ status: "idle", currentTool: "ask_user" })} {...defaultProps} retryAttempt={4} />);
+    expect(screen.getAllByText("Needs you").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Retry 4/)).toBeNull();
+  });
+
+  it("an ENDED session still renders no activity label, retry or not", () => {
+    render(<SessionCard session={makeSession({ status: "ended" })} {...defaultProps} retryAttempt={2} />);
+    expect(screen.queryByText(/Retry 2/)).toBeNull();
+  });
+
+  it("the retry label uses --severity-warning-fg, never raw --status-working", () => {
+    const { container } = render(
+      <SessionCard session={makeSession({ status: "idle" })} {...defaultProps} retryAttempt={2} />,
+    );
+    const label = [...container.querySelectorAll("span")].find((s) => /Retry 2/.test(s.textContent ?? ""));
+    expect(label).toBeTruthy();
+    expect(label!.className).toContain("text-[var(--severity-warning-fg)]");
+    expect(label!.className).not.toContain("--status-working");
+  });
+});
+
+describe("SessionCard — OPENSPEC subcard readiness (add-openspec-init-affordances)", () => {
+  const baseProps = {
+    ...defaultProps,
+    onSendPrompt: () => {},
+    onAttachProposal: () => {},
+    onDetachProposal: () => {},
+  };
+
+  it("ABSENT hides the OPENSPEC subcard entirely", () => {
+    render(
+      <SessionCard
+        session={makeSession()}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecHasDir={false}
+        openspecInitialized={false}
+        openspecPending={false}
+        openspecReadiness={{ state: "ABSENT" }}
+      />,
+    );
+    expect(screen.queryByText("OPENSPEC")).toBeNull();
+  });
+
+  it("BROKEN renders a disabled panel: title OPENSPEC, no action controls in the DOM, exactly one focusable control", () => {
+    const { container } = render(
+      <SessionCard
+        session={makeSession()}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecHasDir={true}
+        openspecInitialized={false}
+        openspecPending={false}
+        openspecReadiness={{ state: "BROKEN", reason: "missing-changes-dir" }}
+        onSeekToFolderOpenSpec={() => {}}
+      />,
+    );
+    // Title still renders (empty-subcard exemption).
+    expect(screen.getByText("OPENSPEC")).toBeTruthy();
+    // The live control set is REMOVED from the DOM, not dimmed.
+    expect(screen.queryByTestId("session-openspec-actions")).toBeNull();
+    expect(screen.queryByTestId("explore-btn")).toBeNull();
+    expect(screen.queryByTestId("propose-btn")).toBeNull();
+    expect(screen.queryByTestId("attach-combo")).toBeNull();
+    expect(screen.queryByTestId("archive-btn")).toBeNull();
+    // Exactly one focusable control inside the disabled panel.
+    const panel = screen.getByTestId("session-openspec-disabled");
+    const focusable = panel.querySelectorAll(
+      "button, a, [role='button'], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+    );
+    expect(focusable.length).toBe(1);
+    void container;
+  });
+
+  it("BROKEN reason text differs from the STALE reason texts", () => {
+    const broken = render(
+      <SessionCard
+        session={makeSession()}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecReadiness={{ state: "BROKEN", reason: "missing-changes-dir" }}
+        onSeekToFolderOpenSpec={() => {}}
+      />,
+    );
+    const brokenText = screen.getByTestId("session-openspec-disabled-reason").textContent;
+    broken.unmount();
+
+    render(
+      <SessionCard
+        session={makeSession()}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecReadiness={{ state: "STALE", reason: "missing-skills" }}
+        onSeekToFolderOpenSpec={() => {}}
+      />,
+    );
+    const staleText = screen.getByTestId("session-openspec-disabled-reason").textContent;
+    expect(brokenText).not.toBe(staleText);
+  });
+
+  it("STALE·missing-skills reason text says the project's OpenSpec skills are missing", () => {
+    render(
+      <SessionCard
+        session={makeSession()}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecReadiness={{ state: "STALE", reason: "missing-skills" }}
+        onSeekToFolderOpenSpec={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("session-openspec-disabled-reason").textContent).toContain("skills");
+  });
+
+  it("BROKEN routes its single control to the folder OpenSpec section, never to Settings", () => {
+    const onSeekToFolderOpenSpec = vi.fn();
+    const onOpenOpenSpecSettings = vi.fn();
+    render(
+      <SessionCard
+        session={makeSession()}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecReadiness={{ state: "BROKEN", reason: "cli-failed" }}
+        onSeekToFolderOpenSpec={onSeekToFolderOpenSpec}
+        onOpenOpenSpecSettings={onOpenOpenSpecSettings}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("session-openspec-remediate"));
+    expect(onSeekToFolderOpenSpec).toHaveBeenCalledWith("/home/user/project");
+    expect(onOpenOpenSpecSettings).not.toHaveBeenCalled();
+  });
+
+  it("STALE·profile-stale routes its single control to Settings, never to the folder", () => {
+    const onSeekToFolderOpenSpec = vi.fn();
+    const onOpenOpenSpecSettings = vi.fn();
+    render(
+      <SessionCard
+        session={makeSession()}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecReadiness={{ state: "STALE", reason: "profile-stale" }}
+        onSeekToFolderOpenSpec={onSeekToFolderOpenSpec}
+        onOpenOpenSpecSettings={onOpenOpenSpecSettings}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("session-openspec-remediate"));
+    expect(onOpenOpenSpecSettings).toHaveBeenCalledTimes(1);
+    expect(onSeekToFolderOpenSpec).not.toHaveBeenCalled();
+  });
+
+  it("legacy payload (readiness undefined) renders the live subcard exactly as before — never disabled", () => {
+    render(
+      <SessionCard
+        session={makeSession({ attachedProposal: "feat-a" })}
+        {...baseProps}
+        openspecChanges={[]}
+        openspecHasDir={true}
+        openspecInitialized={false}
+        openspecPending={false}
+      />,
+    );
+    expect(screen.getByText("OPENSPEC")).toBeTruthy();
+    expect(screen.getByTestId("session-openspec-actions")).toBeTruthy();
+    expect(screen.queryByTestId("session-openspec-disabled")).toBeNull();
+  });
+
+  it("legacy payload with no signals preserves visibility (older parent default)", () => {
+    render(
+      <SessionCard
+        session={makeSession({ attachedProposal: "feat-a" })}
+        {...baseProps}
+        openspecChanges={[]}
+      />,
+    );
+    expect(screen.getByTestId("session-openspec-actions")).toBeTruthy();
+    expect(screen.queryByTestId("session-openspec-disabled")).toBeNull();
+  });
+});
+
+/**
+ * fix-connect-snapshot-frame-loss F5: the snapshot strips `notifyLog` from
+ * unsubscribed rows, so the active card's DOM must not depend on it — with vs
+ * without a populated log renders byte-identical markup.
+ */
+describe("SessionCard notifyLog invariance (fix-connect-snapshot-frame-loss F5)", () => {
+  it("renders identical DOM with and without a populated notifyLog", () => {
+    // Pin startedAt: makeSession() reads Date.now() per call, so a second
+    // boundary between the two renders flipped the uptime label (59s→58s).
+    const startedAt = Date.now() - 60000;
+    const withLog = render(
+      <SessionCard
+        session={makeSession({
+          startedAt,
+          notifyLog: [
+            { notifyId: "n1", message: "provider rate limited", level: "warning" },
+            { notifyId: "n2", message: "retrying in 4s" },
+          ],
+        })}
+        {...defaultProps}
+      />,
+    );
+    const htmlWithLog = withLog.container.innerHTML;
+    withLog.unmount();
+
+    const withoutLog = render(<SessionCard session={makeSession({ startedAt })} {...defaultProps} />);
+    expect(withoutLog.container.innerHTML).toBe(htmlWithLog);
+  });
+});
+
+// ── archive-sessions-lazy-load: per-card archive affordance ──────────────
+// Manual hide is REMOVED (hide_session/unhide_session verbs deleted server
+// side). The archive button replaces it: shown on ended and idle-alive
+// cards, never while running. Idle-alive asks for confirmation (archiving
+// ends the pi process); ended archives immediately.
+// See change: archive-sessions-lazy-load (test-plan #F1, #F2, #F3).
+describe("SessionCard — archive affordance (archive-sessions-lazy-load)", () => {
+  // #F1 decision table: ended / idle-alive / running / hidden worker →
+  // archive btn yes / yes / no / yes-if-shown; hide/unhide never.
+  it("F1: renders the archive button on an ended session; no hide/unhide buttons", () => {
+    render(<SessionCard session={makeSession({ status: "ended", endedAt: 1 })} {...defaultProps} />);
+    expect(screen.getByTestId("session-archive-btn")).toBeTruthy();
+    expect(screen.queryByTestId("session-hide-btn")).toBeNull();
+    expect(screen.queryByTestId("session-unhide-btn")).toBeNull();
+  });
+
+  it("F1: renders the archive button on an idle alive session", () => {
+    render(<SessionCard session={makeSession({ status: "idle" })} {...defaultProps} />);
+    expect(screen.getByTestId("session-archive-btn")).toBeTruthy();
+  });
+
+  it("F1: never renders the archive button while running (streaming)", () => {
+    render(<SessionCard session={makeSession({ status: "streaming" })} {...defaultProps} />);
+    expect(screen.queryByTestId("session-archive-btn")).toBeNull();
+  });
+
+  it("F1: never renders the archive button while a tool call is in flight", () => {
+    render(<SessionCard session={makeSession({ status: "active", currentTool: "bash" })} {...defaultProps} />);
+    expect(screen.queryByTestId("session-archive-btn")).toBeNull();
+  });
+
+  it("F1: hidden worker (revealed via Show hidden) still offers archive", () => {
+    render(
+      <SessionCard session={makeSession({ status: "idle", hidden: true })} {...defaultProps} isHidden />,
+    );
+    expect(screen.getByTestId("session-archive-btn")).toBeTruthy();
+    expect(screen.queryByTestId("session-hide-btn")).toBeNull();
+    expect(screen.queryByTestId("session-unhide-btn")).toBeNull();
+  });
+
+  // #F2: idle-alive needs a confirmation — archiving ends the pi process.
+  it("F2: idle-alive opens a confirm dialog; cancel sends nothing, confirm archives once", () => {
+    const onArchive = vi.fn();
+    render(<SessionCard session={makeSession({ status: "idle" })} {...defaultProps} onArchive={onArchive} />);
+
+    fireEvent.click(screen.getByTestId("session-archive-btn"));
+    expect(screen.getByTestId("session-archive-confirm")).toBeTruthy();
+    expect(onArchive).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("session-archive-confirm-cancel"));
+    expect(onArchive).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("session-archive-confirm")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("session-archive-btn"));
+    fireEvent.click(screen.getByTestId("session-archive-confirm-action"));
+    expect(onArchive).toHaveBeenCalledTimes(1);
+    expect(onArchive).toHaveBeenCalledWith("test-session");
+  });
+
+  // #F3: ended sessions archive immediately — no dialog.
+  it("F3: ended session archives immediately without a dialog", () => {
+    const onArchive = vi.fn();
+    render(
+      <SessionCard session={makeSession({ status: "ended", endedAt: 1 })} {...defaultProps} onArchive={onArchive} />,
+    );
+    fireEvent.click(screen.getByTestId("session-archive-btn"));
+    expect(onArchive).toHaveBeenCalledTimes(1);
+    expect(onArchive).toHaveBeenCalledWith("test-session");
+    expect(screen.queryByTestId("session-archive-confirm")).toBeNull();
+  });
+
+  // Wire-level: the session actions send the NEW verbs.
+  it("handleArchiveSession / handleUnarchiveSession send archive_session / unarchive_session", () => {
+    const send = vi.fn();
+    const { result } = renderHook(() =>
+      useSessionActions({
+        selectedId: undefined,
+        send,
+        navigate: () => {},
+        setMobileOpen: () => {},
+        sessions: new Map(),
+        setSessions: () => {},
+        setSessionStates: () => {},
+        setSpawningCwds: () => {},
+        setTerminals: () => {},
+        clearSpawningCwd: () => {},
+        spawnTimeoutsRef: { current: new Map() },
+        pendingTerminalCwdRef: { current: null },
+        terminals: new Map(),
+        pendingSpawnsRef: { current: new Map() },
+      } as any),
+    );
+    act(() => result.current.handleArchiveSession("s1"));
+    expect(send).toHaveBeenCalledWith({ type: "archive_session", sessionId: "s1" });
+    act(() => result.current.handleUnarchiveSession("s1"));
+    expect(send).toHaveBeenCalledWith({ type: "unarchive_session", sessionId: "s1" });
+  });
+});
+
+// Portal bubbling: React events from the body-portalled `⋯` Popover bubble
+// through the React tree to the card's `onClick={onSelect}`. Menu items stop
+// propagation. See change: compact-openspec-lifecycle-bar (test-plan F4).
+describe("SessionCard session actions menu — OpenSpec items", () => {
+  it("selecting Explore… opens the dialog without selecting the card (F4, X4)", async () => {
+    const { makeRunConfig, RunConfigHarness } = await import("../../test-support/runConfigHarness.js");
+    const onSelect = vi.fn();
+    const session = makeSession({ attachedProposal: "add-auth", status: "idle" });
+    const changes = [{
+      name: "add-auth",
+      status: "in-progress" as const,
+      completedTasks: 12,
+      totalTasks: 39,
+      artifacts: [
+        { id: "proposal", status: "done" as const },
+        { id: "design", status: "done" as const },
+        { id: "specs", status: "done" as const },
+      ],
+    }];
+    render(
+      <RunConfigHarness value={makeRunConfig()}>
+        <SessionCard session={session} {...defaultProps} selectedId="other" onSelect={onSelect}
+          openspecChanges={changes} openspecInitialized
+          onSendPrompt={() => {}} onAttachProposal={() => {}} onDetachProposal={() => {}} />
+      </RunConfigHarness>,
+    );
+    openMenu();
+    // Explore… is a rare item folded behind the OPENSPEC group's More… expander.
+    fireEvent.click(screen.getByTestId("session-menu-more-openspec"));
+    fireEvent.click(screen.getByTestId("session-menu-item-openspec-explore"));
+    expect(await screen.findByTestId("explore-textarea")).toBeTruthy();
+    expect(onSelect).toHaveBeenCalledTimes(0);
+  });
+});
+
+// ── redesign-composer-session-strip: one filled primary + working gate ────────
+// test-plan #E13 (task 8.13), #F7 card half (task 8.30), tasks 3.4 / 5.3.
+
+describe("SessionCard — Merge emphasis + working (#E13, #F7)", () => {
+  const done = [
+    { id: "proposal" as const, status: "done" as const },
+    { id: "design" as const, status: "done" as const },
+    { id: "specs" as const, status: "done" as const },
+  ];
+  const COMPLETE = { name: "add-auth", status: "complete" as const, completedTasks: 3, totalTasks: 3, artifacts: done };
+  const IMPLEMENTING = { name: "add-auth", status: "in-progress" as const, completedTasks: 1, totalTasks: 3, artifacts: done };
+  const wtSession = (checks: "passing" | "failing", over: Partial<DashboardSession> = {}) =>
+    makeSession({
+      cwd: "/repo/.worktrees/feat",
+      gitWorktree: { mainPath: "/repo", name: "feat" },
+      attachedProposal: "add-auth",
+      gitPrNumber: 747,
+      gitPrUrl: "https://gh/pr/747",
+      gitPrState: "open",
+      gitPrDraft: false,
+      gitPrChecks: checks,
+      gitPrCheckedAt: Date.now() - 60_000,
+      ...over,
+    });
+  const renderCard = (session: DashboardSession, change: typeof COMPLETE | typeof IMPLEMENTING, isRetrying = false) =>
+    render(
+      <SessionCard
+        session={session}
+        {...defaultProps}
+        openspecChanges={[change]}
+        onSendPrompt={() => {}}
+        onAttachProposal={() => {}}
+        onDetachProposal={() => {}}
+        isRetrying={isRetrying}
+      />,
+    );
+  /** Open the menu, then list the emphasised (primary) items — exactly one NEXT item at most. */
+  const primaries = () => {
+    openMenu();
+    return Array.from(document.querySelectorAll("[data-emphasis='primary']")).map((e) => e.getAttribute("data-testid"));
+  };
+
+  it.each([
+    ["COMPLETE + passing", COMPLETE, "passing", "session-menu-item-merge"],
+    ["IMPLEMENTING + passing", IMPLEMENTING, "passing", "session-menu-item-openspec-apply"],
+    ["COMPLETE + failing", COMPLETE, "failing", "session-menu-item-openspec-archive"],
+  ] as const)("%s → exactly one emphasised primary: %s", (_n, change, checks, expected) => {
+    renderCard(wtSession(checks), change);
+    expect(primaries()).toEqual([expected]);
+  });
+
+  it("COMPLETE + passing: the OpenSpec primary stays reachable, un-emphasised, as 'Archive change'", () => {
+    renderCard(wtSession("passing"), COMPLETE);
+    openMenu();
+    const archive = screen.getByTestId("session-menu-item-openspec-archive");
+    expect(archive.textContent).toContain("Archive change");
+    expect(archive.getAttribute("data-emphasis")).toBeNull();
+  });
+
+  it.each([
+    ["streaming", "streaming", false],
+    ["retrying", "active", true],
+  ] as const)("%s → OpenSpec primary, Push and Merge gated (aria-disabled, focusable, reason)", (_n, status, retrying) => {
+    renderCard(wtSession("passing", { status }), COMPLETE, retrying);
+    openMenu();
+    for (const id of ["session-menu-item-openspec-archive", "session-menu-item-push", "session-menu-item-merge"]) {
+      const el = screen.getByTestId(id) as HTMLButtonElement;
+      expect(el.getAttribute("aria-disabled"), id).toBe("true");
+      expect(el.disabled, id).toBe(false);
+      expect(el.getAttribute("title"), id).toBe("Session is streaming");
+    }
+    expect(document.querySelector("[data-emphasis='primary']")).toBeNull();
+  });
+
+  // See change: fix-composer-liveness-on-reload (D7, test-plan #E13): card `working`
+  // uses the shared predicate — a recorded retry on an ENDED session is not working.
+  it.each([
+    ["ended + retrying", "ended", true, null],
+    ["idle + retrying", "idle", true, "true"],
+    ["active + retrying", "active", true, "true"],
+  ] as const)("%s → worktree actions gated=%s (retry never makes a terminal session working)", (_n, status, retrying, gated) => {
+    renderCard(wtSession("passing", { status }), COMPLETE, retrying);
+    openMenu();
+    for (const id of ["session-menu-item-push", "session-menu-item-merge"]) {
+      expect(screen.getByTestId(id).getAttribute("aria-disabled"), id).toBe(gated);
+    }
+  });
+
+  it("idle → nothing gated", () => {
+    renderCard(wtSession("passing"), COMPLETE);
+    openMenu();
+    for (const id of ["session-menu-item-openspec-archive", "session-menu-item-push", "session-menu-item-merge"]) {
+      expect(screen.getByTestId(id).getAttribute("aria-disabled"), id).toBeNull();
+    }
+  });
+});
+
+// --- attachment resolution on the card (resolve-archived-attached-proposal) ---
+describe("SessionCard attachment resolution", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const cardProps = { onSendPrompt: () => {}, onAttachProposal: () => {}, onDetachProposal: () => {} };
+
+  it("F4 active elsewhere: ended removed-worktree session is read-only with In main checkout", () => {
+    const session = makeSession({
+      id: "ended-1",
+      status: "ended",
+      cwd: "/repo/.worktrees/os-x",
+      attachedProposal: "x",
+      gitWorktree: { mainPath: "/repo", name: "os-x" } as never,
+    });
+    const mem = memoryLocation({ path: "/", record: true });
+    stubArchiveApi({});
+    render(
+      <Router hook={mem.hook}>
+        {withOpenSpecMap(
+          { "/repo/.worktrees/os-x": absentData(), "/repo": knownData(makeChange("x", ["proposal", "design"])) },
+          <SessionCard
+            session={session}
+            {...defaultProps}
+            openspecChanges={[]}
+            openspecReadiness={{ state: "ABSENT" }}
+            {...cardProps}
+          />,
+        )}
+      </Router>,
+    );
+    expect(screen.getByTestId("attachment-main-checkout-badge").textContent).toBe("In main checkout");
+    for (const id of ["apply-btn", "continue-btn", "archive-btn", "openspec-stepper"]) expect(screen.queryByTestId(id)).toBeNull();
+    fireEvent.click(screen.getAllByTestId("artifact-letter")[1]); // D
+    expect(mem.history?.at(-1)).toBe(`/folder/${encodeFolderPath("/repo")}/openspec/x/design`);
+  });
+
+  it("F5 archive letter pushes the archive deep link and does not select the card", async () => {
+    stubArchiveApi({ "/home/user/project": [archiveEntry("2026-09-30-add-auth")] });
+    const onSelect = vi.fn();
+    const mem = memoryLocation({ path: "/", record: true });
+    render(
+      <Router hook={mem.hook}>
+        {withOpenSpecMap(
+          { "/home/user/project": knownData() },
+          <SessionCard
+            session={makeSession({ status: "ended", attachedProposal: "add-auth" })}
+            {...defaultProps}
+            onSelect={onSelect}
+            openspecChanges={[]}
+            {...cardProps}
+          />,
+        )}
+      </Router>,
+    );
+    await screen.findByTestId("attachment-archived-badge");
+    const letters = screen.getAllByTestId("artifact-letter");
+    fireEvent.click(letters[1]); // D
+    expect(mem.history?.at(-1)).toBe(`/folder/${encodeFolderPath("/home/user/project")}/openspec/archive/2026-09-30-add-auth/design`);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["BROKEN", { state: "BROKEN", reason: "cli-failed" }],
+    ["STALE", { state: "STALE", reason: "missing-skills" }],
+  ] as const)("B3 %s readiness: an archived attachment keeps its badge, letters and Detach (not the disabled panel)", async (_n, readiness) => {
+    stubArchiveApi({ "/home/user/project": [archiveEntry("2026-09-30-add-auth")] });
+    const mem = memoryLocation({ path: "/", record: true });
+    render(
+      <Router hook={mem.hook}>
+        {withOpenSpecMap(
+          { "/home/user/project": { initialized: false, changes: [], readiness } as never },
+          <SessionCard
+            session={makeSession({ status: "ended", attachedProposal: "add-auth" })}
+            {...defaultProps}
+            openspecChanges={[]}
+            openspecReadiness={readiness}
+            {...cardProps}
+          />,
+        )}
+      </Router>,
+    );
+    expect((await screen.findByTestId("attachment-archived-badge")).textContent).toBe("Archived 2026-09-30");
+    expect(screen.getAllByTestId("artifact-letter").length).toBe(3);
+    openMenu();
+    expect(screen.getByTestId("session-menu-item-openspec-detach")).toBeTruthy();
+  });
+
+  it.each([
+    ["loading", {}, {}],
+    ["error", { "/home/user/project": { initialized: false, changes: [], readiness: { state: "BROKEN", reason: "cli-failed" } } }, { "/home/user/project": "error" as const }],
+  ])("B3/r2 BROKEN + unresolved (%s): bare attached name + Detach stay reachable", async (_n, map, archives) => {
+    stubArchiveApi(archives as never);
+    render(
+      <Router hook={memoryLocation({ path: "/" }).hook}>
+        {withOpenSpecMap(
+          map as never,
+          <SessionCard
+            session={makeSession({ status: "ended", attachedProposal: "add-auth" })}
+            {...defaultProps}
+            openspecChanges={[]}
+            openspecReadiness={{ state: "BROKEN", reason: "cli-failed" }}
+            {...cardProps}
+          />,
+        )}
+      </Router>,
+    );
+    await waitFor(() => expect(screen.getByText(/add-auth/)).toBeTruthy());
+    openMenu();
+    expect(screen.getByTestId("session-menu-item-openspec-detach")).toBeTruthy();
+    expect(screen.queryByTestId("attachment-not-found-badge")).toBeNull();
+  });
+
+  it("B3 BROKEN with no attachment still renders the disabled panel", () => {
+    stubArchiveApi({});
+    render(
+      <SessionCard
+        session={makeSession({ status: "idle" })}
+        {...defaultProps}
+        openspecChanges={[]}
+        openspecReadiness={{ state: "BROKEN", reason: "cli-failed" }}
+        {...cardProps}
+      />,
+    );
+    expect(screen.queryByTestId("openspec-overflow-btn")).toBeNull();
+  });
+});

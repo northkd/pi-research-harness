@@ -2,7 +2,7 @@
   "name": "pi-research-extensions",
   "private": true,
   "dependencies": {
-    "pi-subagents": "0.76.1",
+    "pi-subagents": "0.79.2",
     "pi-background-tasks": "2.6.9",
     "@companion-ai/feynman": "0.5.22",
     "pi-web-access": "0.35.0",

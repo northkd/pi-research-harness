@@ -1,0 +1,17 @@
+{
+  "package": "pi-subagents",
+  "version": "0.79.2",
+  "license": "MIT",
+  "patch": "patches/subagents/0002-research-budget-0792.patch",
+  "patchSha256": "84edbd4590c2a68939c7f9d7051b9606ee6c48865feca0afb34be4e96955019b",
+  "files": {
+    "src/extension/rpc.js": {
+      "beforeSha256": "f1ccc4ffbc3d59058fbaed1c3e6777402e1e048c40ac31068611743fe48f0b2e",
+      "afterSha256": "2a4f20c9ec25c025f963c6d45719ead62cb7cb39499531d4c6e473dea51e2f03"
+    },
+    "src/runs/shared/child-session.js": {
+      "beforeSha256": "7e4f6bd53b6d09668b70738e69537db12b34292f2481dcc215e87db69895d1b3",
+      "afterSha256": "b7ca8b7046208bb8d51c696d18c301af1334aa035b5c3f123dfc93b567312787"
+    }
+  }
+}

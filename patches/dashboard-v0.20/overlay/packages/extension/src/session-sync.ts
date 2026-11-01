@@ -1,0 +1,358 @@
+/**
+ * Session sync: register, replay, and handle session changes.
+ * Extracted from bridge.ts for clarity.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { matchesPattern, stripThinkingLevel } from "@blackbelt-technology/pi-dashboard-shared/enabled-models-match.js";
+import { replayEntriesAsEvents } from "@blackbelt-technology/pi-dashboard-shared/state-replay.js";
+import type { FlowInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import type { UsageTotals } from "@blackbelt-technology/pi-dashboard-shared/usage-totals.js";
+import type { BridgeContext } from "./bridge-context.js";
+import { extractFirstMessage, filterHiddenCommands, getCurrentModelString, safeCwd } from "./bridge-context.js";
+import { bridgeExtensionIdentity } from "./extension-identity.js";
+import { buildProviderCatalogue, toModelInfo } from "./provider-register.js";
+import { detectSessionSource } from "./source-detector.js";
+import { consumeSpawnToken } from "./spawn-token.js";
+import { detectIsGitRepo } from "./vcs-info.js";
+
+/**
+ * Filter a models array to only include models matching the `enabledModels`
+ * patterns from `~/.pi/agent/settings.json`. When `enabledModels` is absent or
+ * empty the full list is returned unchanged.
+ *
+ * Matching mirrors pi core's `resolveModelScope`: each pattern is tested with
+ * minimatch (case-insensitive) against both the canonical `provider/id` and the
+ * bare `id`, so exact refs (`anthropic/claude-sonnet-4-6`), provider wildcards
+ * (`anthropic/*`), and bare globs (`*sonnet*`) all work. A trailing
+ * `:<thinkingLevel>` suffix is stripped before matching.
+ */
+/**
+ * Consume the server-minted spawn correlation token (kept by `spawn-token.ts` since
+ * activation, where it was already SCRUBBED from the env — mirror-dashboard-trust-to-pi).
+ *
+ * Single-use by construction: a pi this pi later spawns (subagent, nested `pi`,
+ * reload) must not inherit and re-report a consumed token
+ * (change: fix-spawn-token-env-leak).
+ *
+ * Shared because there is more than one first-register path. `bridge.ts`'s
+ * `session_start` register — the first register a FRESH session sends — omitted
+ * the token entirely, so tier-1 token correlation never fired for a
+ * dashboard-spawned session and the spawn watchdog could not tell which spawn
+ * had registered. Keeping the read+scrub in one place is what stops the two
+ * paths from drifting again.
+ *
+ * See change: spawn-correlation-token (Decision 3),
+ * fix-tmux-session-shutdown-leak.
+ */
+export { consumeSpawnToken } from "./spawn-token.js";
+
+export function filterByEnabledModels<T extends { provider: string; id: string }>(models: T[]): T[] {
+  try {
+    const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
+    if (!existsSync(settingsPath)) return models;
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const rawPatterns: unknown[] | undefined = settings.enabledModels;
+    if (!Array.isArray(rawPatterns) || rawPatterns.length === 0) return models;
+
+    const patterns: string[] = [];
+    for (let i = 0; i < rawPatterns.length; i++) {
+      const entry = rawPatterns[i];
+      if (typeof entry === "string") {
+        patterns.push(stripThinkingLevel(entry));
+      } else {
+        console.warn(
+          `[pi-dashboard] enabledModels[${i}]: expected string, got ${typeof entry}. Skipping.`,
+        );
+      }
+    }
+    if (patterns.length === 0) return models;
+
+    return models.filter((m) => patterns.some((p) => matchesPattern(m, p)));
+  } catch {
+    return models; // fall back to full list on any error
+  }
+}
+
+/**
+ * Branch fingerprint carried on `session_register`: `eventCount` (branch length)
+ * and `leafEntryId` (id of its last entry). With `liveTailOpen` it lets the
+ * server skip the wipe when it already holds this exact branch. Never throws.
+ * See change: fix-large-session-resume-replay (D5, D7).
+ */
+export function branchFingerprint(
+  sessionManager: { getBranch?: () => Array<{ id?: unknown }> } | undefined,
+): { eventCount?: number; leafEntryId?: string } {
+  try {
+    const entries = sessionManager?.getBranch?.();
+    if (!entries) return {};
+    const last = entries.length > 0 ? entries[entries.length - 1].id : undefined;
+    return {
+      eventCount: entries.length,
+      ...(typeof last === "string" && last.length > 0 ? { leafEntryId: last } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Send full state sync to the server (session_register, commands, flows, models).
+ * Called on initial connect and reconnect.
+ *
+ * `opts.liveTailOpen` is computed ONCE by the caller and shared with the replay
+ * that follows, so the register and the replay agree.
+ * See change: fix-large-session-resume-replay (D7).
+ */
+export function sendStateSync(
+  bc: BridgeContext,
+  getFlowsList: () => FlowInfo[],
+  opts?: { liveTailOpen?: boolean },
+): void {
+  const model = getCurrentModelString(bc);
+  const thinkingLevel = (bc.pi as any).getThinkingLevel?.() ?? undefined;
+  bc.lastModel = model;
+  bc.lastThinkingLevel = thinkingLevel;
+
+  const sessionFile = bc.lastSessionFile ?? bc.cachedCtx?.sessionManager?.getSessionFile?.() ?? undefined;
+  const sessionDir = bc.lastSessionDir ?? bc.cachedCtx?.sessionManager?.getSessionDir?.() ?? undefined;
+  const firstMessage = extractFirstMessage(bc.cachedCtx);
+
+  // Include eventCount (+ leaf id, liveTailOpen) so server can skip event wipe on reconnect
+  const { eventCount, leafEntryId } = branchFingerprint(bc.cachedCtx?.sessionManager);
+
+  // Tag the very first sendStateSync after process boot as "spawn";
+  // every subsequent invocation (driven by WebSocket reconnect after a
+  // dashboard restart) is a "reattach". Server applies the configured
+  // `reattachPlacement` policy on "reattach".
+  // See change: reattach-move-to-front.
+  const isFirstRegister = !bc.hasRegisteredOnce;
+  const registerReason: "spawn" | "reattach" = isFirstRegister ? "spawn" : "reattach";
+
+  // Include the spawn correlation token (server-minted UUID injected via
+  // env var at spawn time) ONLY on the first register. Subsequent
+  // registers (reattach after dashboard restart, in-process Ctrl+F fork)
+  // omit it because the sessionId is already known to the server.
+  // See change: spawn-correlation-token (Decision 3).
+  //
+  // The token is SINGLE-USE. After reading it on the first register we scrub
+  // `process.env.PI_DASHBOARD_SPAWN_TOKEN` so any pi process this pi later
+  // spawns (subagent, nested `pi`, reload) does NOT inherit and re-report the
+  // consumed token. See change: fix-spawn-token-env-leak.
+  const spawnToken = isFirstRegister ? consumeSpawnToken() : undefined;
+
+  // Strong, restart-survival flag, derived from the capture-once boolean
+  // (captured at bridge startup BEFORE the token was scrubbed), not a live
+  // env read — the token is intentionally removed after first register.
+  // Sent on every register (unlike spawnToken which fires only on the first).
+  // See change: fix-spawn-token-env-leak.
+  const dashboardSpawned = bc.dashboardSpawned;
+
+  bc.connection.send({
+    type: "session_register",
+    extensionIdentity: bridgeExtensionIdentity(),
+    sessionId: bc.sessionId,
+    cwd: process.cwd(),
+    name: bc.pi.getSessionName() ?? undefined,
+    source: detectSessionSource(bc.cachedHasUI, sessionFile),
+    model,
+    thinkingLevel,
+    sessionFile,
+    sessionDir,
+    firstMessage,
+    eventCount,
+    ...(leafEntryId !== undefined ? { leafEntryId } : {}),
+    ...(opts?.liveTailOpen !== undefined ? { liveTailOpen: opts.liveTailOpen } : {}),
+    pid: process.pid,
+    registerReason,
+    // Tri-state git-repo signal computed synchronously (no git_info_update
+    // arrival race). See change: gate-session-worktree-button-on-git.
+    isGitRepo: detectIsGitRepo(process.cwd()),
+    ...(spawnToken ? { spawnToken } : {}),
+    ...(dashboardSpawned ? { dashboardSpawned: true } : {}),
+  });
+
+  bc.hasRegisteredOnce = true;
+
+  const commands = filterHiddenCommands(bc.pi.getCommands());
+  bc.connection.send({ type: "commands_list", sessionId: bc.sessionId, commands });
+
+  // Send flows list
+  const flows = getFlowsList();
+  bc.connection.send({ type: "flows_list", sessionId: bc.sessionId, flows });
+
+  if (bc.cachedModelRegistry) {
+    try {
+      const models = filterByEnabledModels(bc.cachedModelRegistry.getAvailable().map(toModelInfo));
+      bc.connection.send({ type: "models_list", sessionId: bc.sessionId, models });
+      // See change: replace-hardcoded-provider-lists.
+      bc.connection.send({ type: "providers_list", sessionId: bc.sessionId, providers: buildProviderCatalogue() });
+    } catch { /* ignore */ }
+  }
+
+  // D3: re-mint after EVERY re-register — this is the path a dashboard
+  // restart actually takes (onReconnect → sendStateSync, registerReason
+  // "reattach"): the server's in-memory token registry died with the old
+  // process, so without this the registration keeps a stale credential
+  // forever. Ordered after session_register on the SAME socket, so the
+  // gateway's connection-key attribution is established; the reply
+  // (mcp_token_minted) re-registers pi-dashboard with pi's MCP and the server-side re-mint
+  // invalidates the stale row (D4). Idempotent with the session_start-driven
+  // mint — last mint wins. See change: wire-mcp-session-token (D3/D6;
+  // CodeRabbit round 1).
+  bc.connection.send({
+    type: "plugin_pi_message",
+    sessionId: bc.sessionId,
+    pluginId: "mcp-server",
+    messageType: "mcp/mint-token",
+    payload: {},
+  });
+}
+
+/**
+ * Whether the live process may still be executing tool calls. Conservative OR:
+ * the bridge's own streaming flag (cleared on `session_shutdown`, so false right
+ * after a `/reload`) OR pi's runtime `ctx.isIdle() === false` (survives reload).
+ * A missing / throwing `isIdle` (stale ctx) counts as idle. Never throws.
+ * See change: fix-replay-fabricates-orphan-end-for-live-calls (D3).
+ */
+export function isLive(ctx: { isIdle?: unknown } | undefined, isAgentStreaming: boolean | undefined): boolean {
+  if (isAgentStreaming === true) return true;
+  try {
+    return typeof ctx?.isIdle === "function" && (ctx.isIdle as () => boolean)() === false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Replay all session entries as protocol events. `opts.liveTailOpen` (decided
+ * by the caller via {@link isLive}) leaves the in-flight calls of the last
+ * assistant message open instead of fabricating a `session_ended` end.
+ * See change: fix-replay-fabricates-orphan-end-for-live-calls (D1, D3).
+ */
+export function replaySessionEntries(bc: BridgeContext, opts?: { liveTailOpen?: boolean }): void {
+  try {
+    const entries = bc.cachedCtx?.sessionManager?.getBranch?.();
+    if (!entries || entries.length === 0) return;
+    const events = replayEntriesAsEvents(bc.sessionId, entries, undefined, opts);
+    for (const msg of events) {
+      // Mark every replayed forward so the server never treats it as live,
+      // whatever its replay timers say. See change: fix-large-session-resume-replay (D1).
+      bc.connection.send({ ...msg, replay: true });
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * Handle session change (new/fork/resume): unregister old, register new, replay, sync.
+ * Called from session_start when event.reason indicates a session switch.
+ */
+export function handleSessionChange(
+  bc: BridgeContext,
+  ctx: any,
+  getFlowsList: () => FlowInfo[],
+  /**
+   * Full usage totals of the incoming session's baseline snapshot — the same
+   * snapshot the bridge's usage drain cursor was set from (`UsageDrain.baseline`).
+   * See change: count-non-message-usage.
+   */
+  usageSeed?: UsageTotals,
+): void {
+  bc.connection.send({ type: "session_unregister", sessionId: bc.sessionId });
+
+  bc.sessionId = ctx.sessionManager.getSessionId();
+  bc.lastSessionFile = ctx.sessionManager.getSessionFile?.() ?? undefined;
+  bc.lastSessionDir = ctx.sessionManager.getSessionDir?.() ?? undefined;
+  const firstMessage = extractFirstMessage(ctx);
+
+  bc.lastFirstMessage = firstMessage;
+  bc.lastGitBranch = undefined;
+  bc.lastGitPrJson = undefined;
+  bc.lastGitWorktreeJson = undefined;
+  bc.lastGitStatusJson = undefined;
+  bc.lastSessionName = bc.pi.getSessionName() ?? "";
+  bc.lastModel = getCurrentModelString(bc);
+  bc.lastThinkingLevel = (bc.pi as any).getThinkingLevel?.() ?? undefined;
+
+  // Include eventCount for consistency (session switch/fork changes sessionId,
+  // so the server will wipe regardless, but include for completeness)
+  const { eventCount, leafEntryId } = branchFingerprint(ctx.sessionManager);
+
+  // handleSessionChange always mints a fresh sessionId (new/fork/resume),
+  // so registerReason is unconditionally "spawn" — even after the bridge
+  // has previously reattached. See change: reattach-move-to-front.
+  // dashboardSpawned from the capture-once boolean (token already scrubbed).
+  // See change: fix-spawn-token-env-leak.
+  const dashboardSpawned = bc.dashboardSpawned;
+  // ctx.cwd is a guarded getter that throws once the session is replaced
+  // (new/fork/resume). Reading it un-guarded here would abort session_start
+  // before connection.connect() runs — the #393 permanent disconnect.
+  // See change: fix-bridge-resume-disconnect.
+  const cwd = safeCwd(ctx);
+  bc.connection.send({
+    type: "session_register",
+    extensionIdentity: bridgeExtensionIdentity(),
+    sessionId: bc.sessionId,
+    cwd,
+    name: bc.lastSessionName || undefined,
+    source: detectSessionSource(bc.cachedHasUI, bc.lastSessionFile),
+    model: bc.lastModel,
+    thinkingLevel: bc.lastThinkingLevel,
+    sessionFile: bc.lastSessionFile,
+    sessionDir: bc.lastSessionDir,
+    ...(dashboardSpawned ? { dashboardSpawned: true } : {}),
+    firstMessage,
+    eventCount,
+    ...(leafEntryId !== undefined ? { leafEntryId } : {}),
+    // The switch path never leaves the tail open (see replaySessionEntries below).
+    liveTailOpen: false,
+    pid: process.pid,
+    registerReason: "spawn",
+    // See change: gate-session-worktree-button-on-git.
+    isGitRepo: detectIsGitRepo(cwd),
+    ...(usageSeed ? { usageSeed } : {}),
+  });
+
+  // New / fork / resume: no turn in flight, and bc.cachedCtx is still the
+  // OUTGOING session's ctx here — never leave the tail open.
+  replaySessionEntries(bc);
+  bc.connection.send({ type: "replay_complete", sessionId: bc.sessionId });
+
+  // Git info: the tracker's synchronous FIRST evaluation (cached facts + HEAD
+  // branch, status omitted), then a fast-lane probe for status. A new sessionId
+  // is a new PR generation (tuple resets to unknown, probed async) and the
+  // status diff cache is reset so the resumed session's first status is never
+  // diffed away against the previous session's. See changes:
+  // redesign-composer-session-strip (D5), optimize-polling-hot-paths (D4).
+  bc.gitTracker?.evaluateFirst(bc, cwd);
+
+  const commands = filterHiddenCommands(bc.pi.getCommands());
+  bc.connection.send({ type: "commands_list", sessionId: bc.sessionId, commands });
+
+  const flows = getFlowsList();
+  bc.connection.send({ type: "flows_list", sessionId: bc.sessionId, flows });
+
+  if (bc.cachedModelRegistry) {
+    try {
+      const models = filterByEnabledModels(bc.cachedModelRegistry.getAvailable().map(toModelInfo));
+      bc.connection.send({ type: "models_list", sessionId: bc.sessionId, models });
+      // See change: replace-hardcoded-provider-lists.
+      bc.connection.send({ type: "providers_list", sessionId: bc.sessionId, providers: buildProviderCatalogue() });
+    } catch { /* ignore */ }
+  }
+
+  // D3: a new/forked/resumed session identity needs its own credential.
+  // Same contract as sendStateSync's re-mint: after this function's
+  // session_register, same socket; server-side re-mint replaces the row.
+  // See change: wire-mcp-session-token (D3/D4).
+  bc.connection.send({
+    type: "plugin_pi_message",
+    sessionId: bc.sessionId,
+    pluginId: "mcp-server",
+    messageType: "mcp/mint-token",
+    payload: {},
+  });
+}

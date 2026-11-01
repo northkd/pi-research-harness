@@ -4,12 +4,14 @@ umask 077
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 export PI_CODING_AGENT_DIR="${PI_RESEARCH_AGENT_DIR:-$HOME/.local/share/pi-research-harness/agent}"
 export PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
+export PI_RESEARCH_LOOP_ROOT="${PI_RESEARCH_LOOP_ROOT:-$ROOT/extensions/research-loop}"
 export PI_DASHBOARD_HOST="${PI_DASHBOARD_HOST:-127.0.0.1}"
 export PI_DASHBOARD_PORT="${PI_DASHBOARD_PORT:-8000}"
 export PI_DASHBOARD_PI_PORT="${PI_DASHBOARD_PI_PORT:-9999}"
 export PI_GATEWAY_TCP="${PI_GATEWAY_TCP:-0}"
 export PATH="$ROOT/bin:$ROOT/.runtime/pi/node_modules/.bin:$PATH"
-DASHBOARD_BIN="${PI_RESEARCH_DASHBOARD_BIN:-$ROOT/.runtime/dashboard-source/packages/server/bin/pi-dashboard.mjs}"
+DASHBOARD_ROOT="${PI_RESEARCH_DASHBOARD_SOURCE:-$ROOT/.runtime/dashboard-source}"
+DASHBOARD_BIN="${PI_RESEARCH_DASHBOARD_BIN:-$DASHBOARD_ROOT/packages/server/bin/pi-dashboard.mjs}"
 if [[ ! -f "$DASHBOARD_BIN" ]]; then
   printf 'Dashboard source not prepared. Run scripts/prepare-dashboard.sh.\n' >&2
   exit 1

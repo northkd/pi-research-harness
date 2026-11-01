@@ -1,0 +1,7 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import zlib from 'node:zlib';import {installDemoEntry} from '../scripts/install-demo-entry.mjs';
+test('installs the opt-in simulator before the application and is idempotent',t=>{
+ const dir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'demo-entry-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const index=path.join(dir,'index.html');fs.writeFileSync(index,'<html><head><script type="module" src="/assets/app.js"></script></head></html>');fs.writeFileSync(index+'.gz',zlib.gzipSync('old html'));
+ installDemoEntry(dir);installDemoEntry(dir);const html=fs.readFileSync(index,'utf8');assert.equal((html.match(/res-workflow-demo-simulator\.js/g)||[]).length,1);assert.ok(html.indexOf('res-workflow-demo-simulator.js')<html.indexOf('type="module"'));assert.equal(fs.readFileSync(path.join(dir,'res-workflow-demo.html'),'utf8'),html);assert.equal(zlib.gunzipSync(fs.readFileSync(index+'.gz')).toString(),html);assert.ok(fs.statSync(path.join(dir,'res-workflow-demo-simulator.js')).isFile());
+});
+test('refuses to alter an unexpected application entry',t=>{const dir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'demo-entry-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));fs.writeFileSync(path.join(dir,'index.html'),'<html></html>');assert.throws(()=>installDemoEntry(dir),/module entry/);});

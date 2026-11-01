@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +46,23 @@ const json = bytes => {
   try { return JSON.parse(utf8(bytes)); }
   catch (error) { throw new Error('Malformed bounded source JSON; capture refused', { cause: error }); }
 };
+
+/** Resource snapshots are observations, not an execution admission. */
+export function captureResourceSnapshot({platform = process.platform, totalmem = os.totalmem, freemem = os.freemem, readMeminfo = () => utf8(boundedFile('/proc/meminfo', 64 * 1024))} = {}) {
+  if (platform === 'darwin') {
+    const total = totalmem(), free = freemem();
+    if (![total, free].every(n => Number.isFinite(n) && n >= 0)) throw new Error('Memory snapshot unavailable');
+    return { source: 'node:os', values: { MemTotalKiB: Math.floor(total / 1024), MemFreeKiB: Math.floor(free / 1024) } };
+  }
+  if (platform !== 'linux') throw new Error('Resource snapshot unavailable on this platform');
+  const mem = readMeminfo(), values = {};
+  for (const key of ['MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree']) {
+    const match = new RegExp(`^${key}:\\s+(\\d+)\\s+kB$`, 'm').exec(mem);
+    if (!match) throw new Error('Required resource field unavailable');
+    values[key + 'KiB'] = Number(match[1]);
+  }
+  return { source: '/proc/meminfo', values };
+}
 
 /** Preparation is local only. The UI sees a frozen source/output/operation preview before
  * any publication or external scope grant. There is deliberately no shell or command input. */
@@ -187,15 +205,10 @@ export function prepareCapture(store, request, { clock = Date.now } = {}) {
       }
     }
   }
-  const mem = utf8(boundedFile('/proc/meminfo', 64 * 1024));
-  const resource = { capturedAt, nodeVersion: process.version, nodeExecutable: process.execPath, snapshotNotReservation: true };
-  for (const key of ['MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree']) {
-    const match = new RegExp(`^${key}:\\s+(\\d+)\\s+kB$`, 'm').exec(mem);
-    if (!match) throw new Error('Required resource field unavailable');
-    resource[key + 'KiB'] = Number(match[1]);
-  }
-  add('capture-resource', Buffer.from(JSON.stringify(resource)), { kind: 'direct-host-resource-projection', path: '/proc/meminfo', capturedAt,
-    omissions: ['not a subsequent execution admission; Python/dependency versions not queried'] });
+  const snapshot = captureResourceSnapshot();
+  const resource = { capturedAt, nodeVersion: process.version, nodeExecutable: process.execPath, snapshotNotReservation: true, ...snapshot.values };
+  add('capture-resource', Buffer.from(JSON.stringify(resource)), { kind: 'direct-host-resource-projection', path: snapshot.source, capturedAt,
+    omissions: ['not a subsequent execution admission; available memory and swap are not inferred on macOS; Python/dependency versions not queried'] });
   const directory = outputRoot + 'capture-' + crypto.randomUUID();
   const parts = [];
   const inventory = [];

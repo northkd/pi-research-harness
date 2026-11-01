@@ -1,16 +1,16 @@
 Pi Research Harness
 Copyright 2026 northkd and contributors
 
-Original integration and mainline-supervision code, role configurations, launch scripts and documentation
+Original integration, research-loop and mainline-supervision code, role configurations, launch scripts and documentation
 are distributed under Apache License 2.0.
 
-Dashboard patch files contain modifications and contextual source excerpts from
+Dashboard patch files and the 0.20 source overlay contain modifications and source excerpts from
 pi-agent-dashboard, Copyright (c) 2026 Robert Csakany, licensed under MIT.
 The original license is preserved at vendor/licenses/pi-agent-dashboard.MIT.txt.
 Those upstream portions retain their MIT terms; this repository does not
 relicense third-party code or claim ownership of the dashboard.
 
-The nested-route source patch contains pi-subagents context, Copyright (c) 2026
+The nested-route and research-budget source patches contain pi-subagents context, Copyright (c) 2026
 Nico Bailon, MIT; its license is preserved at vendor/licenses/pi-subagents.MIT.txt.
 
 The Goal engine patch contains pi-goal-hermes source context under MIT.

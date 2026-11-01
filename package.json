@@ -1,6 +1,6 @@
 {
   "name": "pi-research-harness",
-  "version": "0.1.0",
+  "version": "0.20.0",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -16,7 +16,8 @@
     "extensions": [
       "./integration/index.mjs",
       "./extensions/undo-last.ts",
-      "./extensions/mainline-supervision/src/index.ts"
+      "./extensions/mainline-supervision/src/index.ts",
+      "./extensions/research-loop/src/index.ts"
     ],
     "skills": [
       "./integration/skills",
@@ -24,7 +25,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test integration/test/*.test.mjs tests/*.test.mjs && npm run test:supervision",
+    "test": "node scripts/run-tests.mjs",
     "test:supervision": "node extensions/mainline-supervision/scripts/run-checks.mjs offline",
     "test:supervision:host": "node extensions/mainline-supervision/scripts/run-checks.mjs host",
     "test:supervision:sdk": "node extensions/mainline-supervision/scripts/run-checks.mjs sdk",

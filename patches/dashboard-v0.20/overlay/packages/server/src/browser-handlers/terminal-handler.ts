@@ -1,0 +1,179 @@
+/**
+ * Terminal message handlers: create, kill, rename.
+ */
+import type { BrowserToServerMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import { canAccessSession } from "../identity/session-access.js";
+import { TerminalLimitError } from "../terminal/terminal-manager.js";
+import type { BrowserHandlerContext } from "./handler-context.js";
+
+type Owner = { iss: string; sub: string };
+
+/** The socket's bound principal (set at the WS upgrade); null in the inert era. */
+const principalOf = (ctx: BrowserHandlerContext): Owner | null =>
+  (ctx.ws as { principal?: Owner } | undefined)?.principal ?? null;
+
+/** Owner to stamp on a new terminal: the creating principal, only while enforced. */
+function ownerForSpawn(ctx: BrowserHandlerContext): Owner | undefined {
+  return ctx.isResolverActive?.() ? (principalOf(ctx) ?? undefined) : undefined;
+}
+
+/**
+ * Session owner gate (review r5 B1). The inline-terminal commands carry a `sessionId`
+ * and WRITE `inline_terminal_open|close` events into that session's transcript, so —
+ * unlike the other terminal commands, where a session id is only context — they are
+ * session mutations: exact owner equality on the supplied session, or the command is
+ * dropped before any PTY is spawned or killed and before any event is written.
+ * Unknown / ownerless sessions are unreachable to humans (same rule as every session
+ * road); the break-glass operator passes; inert plane ⇒ unchanged.
+ */
+function mayWriteSession(ctx: BrowserHandlerContext, sessionId: unknown): boolean {
+  if (!ctx.isResolverActive?.()) return true;
+  const owner = typeof sessionId === "string" ? ctx.sessionManager.get(sessionId)?.principalOwner : undefined;
+  return canAccessSession({ active: true, principal: principalOf(ctx), owner });
+}
+
+/**
+ * Owner gate (18.13): a terminal command from anyone but the owner (or the
+ * break-glass operator) is dropped before it touches the PTY. Inert plane ⇒ allow.
+ * An ownerless terminal is unreachable to humans (same rule as sessions).
+ */
+function mayUseTerminal(ctx: BrowserHandlerContext, terminalId: string): boolean {
+  if (!ctx.isResolverActive?.()) return true;
+  const t = ctx.terminalManager?.get(terminalId);
+  if (!t) return true; // nothing to protect; the manager no-ops on an unknown id
+  return canAccessSession({ active: true, principal: principalOf(ctx), owner: t.principalOwner });
+}
+
+/**
+ * A cap refusal starts nothing and is told ONLY to the requesting socket: no
+ * broadcast, no session-order insert, no inline event. Anything else rethrows
+ * (the gateway logs it). See change: harden-server-capability-bounds (D3).
+ */
+function refuseAtCap(err: unknown, cwd: string, inline: boolean, ctx: BrowserHandlerContext): void {
+  if (!(err instanceof TerminalLimitError)) throw err;
+  console.warn(`[terminal] new terminal refused: ${err.scope} limit ${err.limit} reached (inline=${inline})`);
+  ctx.sendTo(ctx.ws, { type: "terminal_limit_reached", scope: err.scope, limit: err.limit, cwd, inline });
+}
+
+export function handleCreateTerminal(
+  msg: Extract<BrowserToServerMessage, { type: "create_terminal" }>,
+  ctx: BrowserHandlerContext,
+): void {
+  const { terminalManager, sessionOrderManager, broadcast } = ctx;
+  if (terminalManager && sessionOrderManager) {
+    let terminal: ReturnType<typeof terminalManager.spawn>;
+    try {
+      terminal = terminalManager.spawn(msg.cwd, { owner: ownerForSpawn(ctx) });
+    } catch (err) {
+      return refuseAtCap(err, msg.cwd, false, ctx);
+    }
+    sessionOrderManager.insert(msg.cwd, terminal.id);
+    broadcast({ type: "terminal_added", terminal });
+    broadcast({ type: "sessions_reordered", cwd: msg.cwd, sessionIds: sessionOrderManager.getOrder(msg.cwd) });
+  }
+}
+
+/**
+ * Open an inline interactive terminal card: spawn an ephemeral PTY, broadcast
+ * terminal_added (TerminalsView filters ephemeral from tabs), then insert and
+ * broadcast an `inline_terminal_open` event into the session's chat stream so
+ * the card is event-sourced and replays on reload.
+ * See change: add-inline-terminal-card.
+ */
+export function handleOpenInlineTerminal(
+  msg: Extract<BrowserToServerMessage, { type: "open_inline_terminal" }>,
+  ctx: BrowserHandlerContext,
+): void {
+  const { terminalManager, eventStore, broadcast, broadcastEvent } = ctx;
+  if (!terminalManager) return;
+  if (!mayWriteSession(ctx, msg.sessionId)) return;
+  let terminal: ReturnType<typeof terminalManager.spawn>;
+  try {
+    terminal = terminalManager.spawn(msg.cwd, { ephemeral: true, owner: ownerForSpawn(ctx) });
+  } catch (err) {
+    return refuseAtCap(err, msg.cwd, true, ctx);
+  }
+  broadcast({ type: "terminal_added", terminal });
+  const seq = eventStore.insertEvent(msg.sessionId, {
+    eventType: "inline_terminal_open",
+    timestamp: Date.now(),
+    data: { terminalId: terminal.id },
+  });
+  const stored = eventStore.getEvent(msg.sessionId, seq);
+  broadcastEvent?.(msg.sessionId, seq, stored);
+}
+
+/**
+ * Close a live inline terminal card. Captures the final transcript (from the
+ * live PTY buffer or a retained tombstone if the shell already exited), kills
+ * the PTY, then inserts and broadcasts an `inline_terminal_close` event.
+ *
+ * - Idempotent: a released id is a no-op (checked FIRST, before any liveness
+ *   or tombstone lookup), so a double close cannot resurrect or destroy a
+ *   frozen card even under two-browser concurrency. See D1c.
+ * - A close for an id the session never opened emits nothing (no stray empty
+ *   close). An opened-but-evicted terminal emits `transcript:""` so the client
+ *   removes the card gracefully. See D1c / X10 / X11.
+ * - Emits `transcript:""` when the user never interacted (server-side
+ *   `sawInput`), else the capped transcript. The client removes empty rows.
+ * See change: preserve-inline-terminal-transcript.
+ */
+export function handleCloseInlineTerminal(
+  msg: Extract<BrowserToServerMessage, { type: "close_inline_terminal" }>,
+  ctx: BrowserHandlerContext,
+): void {
+  const { terminalManager, eventStore, broadcastEvent } = ctx;
+  if (!terminalManager) return;
+  // Both gates: the SESSION the event is written into AND the terminal being closed.
+  if (!mayWriteSession(ctx, msg.sessionId) || !mayUseTerminal(ctx, msg.terminalId)) return;
+  // Idempotency guard FIRST — a released card never emits again.
+  if (terminalManager.isReleased(msg.terminalId)) return;
+
+  const record = terminalManager.getTerminalRecord(msg.terminalId);
+  // Distinguish "never existed" (emit nothing) from "opened but tombstone
+  // evicted" (emit empty so the client removes the card). The durable proof a
+  // terminal existed in this session is its `inline_terminal_open` event, which
+  // survives per-session trim (essential type).
+  if (!record) {
+    const opened = eventStore
+      .getEvents(msg.sessionId, 0)
+      .some(
+        (e) =>
+          e.event.eventType === "inline_terminal_open" &&
+          (e.event.data as { terminalId?: string } | undefined)?.terminalId === msg.terminalId,
+      );
+    if (!opened) return;
+  }
+
+  try { terminalManager.kill(msg.terminalId); } catch { /* already gone */ }
+  const transcript = record?.sawInput ? record.transcript : "";
+  const seq = eventStore.insertEvent(msg.sessionId, {
+    eventType: "inline_terminal_close",
+    timestamp: Date.now(),
+    data: { terminalId: msg.terminalId, transcript },
+  });
+  const stored = eventStore.getEvent(msg.sessionId, seq);
+  broadcastEvent?.(msg.sessionId, seq, stored);
+  terminalManager.releaseTranscript(msg.terminalId);
+}
+
+export function handleKillTerminal(
+  msg: Extract<BrowserToServerMessage, { type: "kill_terminal" }>,
+  ctx: BrowserHandlerContext,
+): void {
+  if (ctx.terminalManager) {
+    if (!mayUseTerminal(ctx, msg.terminalId)) return;
+    try { ctx.terminalManager.kill(msg.terminalId); } catch { /* ignore */ }
+  }
+}
+
+export function handleRenameTerminal(
+  msg: Extract<BrowserToServerMessage, { type: "rename_terminal" }>,
+  ctx: BrowserHandlerContext,
+): void {
+  if (ctx.terminalManager) {
+    if (!mayUseTerminal(ctx, msg.terminalId)) return;
+    ctx.terminalManager.updateTitle(msg.terminalId, msg.title);
+    ctx.broadcast({ type: "terminal_updated", terminalId: msg.terminalId, updates: { title: msg.title } });
+  }
+}

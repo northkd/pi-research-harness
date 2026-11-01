@@ -1,0 +1,2096 @@
+/**
+ * Hook that handles ServerToBrowserMessage dispatch.
+ * Extracted from App.tsx — maps each message type to the correct state setter.
+ */
+
+import type {
+  PreflightReason,
+  ServerToBrowserMessage,
+  SpawnFailureCode,
+} from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import type { CardSectionPrefs } from "@blackbelt-technology/pi-dashboard-shared/card-sections.js";
+import type { DisplayPrefs } from "@blackbelt-technology/pi-dashboard-shared/display-prefs.js";
+import type { ProviderRefreshError } from "@blackbelt-technology/pi-dashboard-shared/protocol.js";
+import type { TerminalSession } from "@blackbelt-technology/pi-dashboard-shared/terminal-types.js";
+import type { CommandInfo, DashboardSession, FileEntry, ModelInfo, OpenSpecData, OpenSpecGroup, RoleInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import { useCallback, useEffect, useRef } from "react";
+import type { DiscoveredServerInfo } from "../components/connectivity/ServerSelector.js";
+import type { ToastVariant } from "../components/primitives/Toast.js";
+import { filterVisibleModels } from "../lib/api/models-api.js";
+import { EMPTY_CANVAS_STATE, reduceCanvasChip, reduceCanvasIntent } from "../lib/canvas/canvas-gate.js";
+import { foldLiveEvents, type QueuedLiveEvent } from "../lib/chat/coalesce-live-events.js";
+import { addInteractiveRequest, addNotify, applyPromptReceived, carryInteractiveRequests, carryPendingPrompt, createInitialState, dismissInteractiveRequest, finalizeBackfillSegment, reduceEvent, reseatTimedNotifies, retailPendingInteractiveRows, type SessionState } from "../lib/chat/event-reducer.js";
+import {
+  createHistoryGapRow,
+  createHistoryGapState,
+  HISTORY_GAP_ROW_ID,
+  type HistoryGapState,
+  isHeadFree,
+} from "../lib/chat/history-gap.js";
+import { dispatchInitEvent } from "../lib/git/worktree-init-bus.js";
+import { t } from "../lib/i18n/i18n.js";
+import { setQuestions } from "../lib/questions/question-store.js";
+import { clearLoadingHistory, HYDRATE_CEILING_MS, rearmLoadingHistory } from "../lib/replay/loading-history.js";
+import type { ReplayPersister } from "../lib/replay/replay-persist.js";
+import { inferPlatform, pathKey, resolveSessionGroupPath } from "../lib/session/session-grouping.js";
+import { clearRecoveryOffer, setRecoveryOffer } from "../lib/state/recovery-offer-bus.js";
+import { pushSpawnErrorToast } from "../lib/state/spawn-error-toast-bus.js";
+import { clearTerminalLimitNotices, showTerminalLimitNotice } from "../lib/state/terminal-limit-notice-store.js";
+import { isVisibleCwd } from "../lib/util/cwd-visibility.js";
+import type { OpenSpecGetInflight } from "./useOpenSpecReconcile.js";
+import type { PendingSpawnEntry } from "./useSessionActions.js";
+
+/**
+ * Merge `carryInteractiveRequests` output into a rebuilt state: pending
+ * entries + their `ui-<requestId>` rows appended at the TAIL. Returns the
+ * input unchanged when nothing is pending. Used by both reset arms here —
+ * a rebuild must not erase a rendered dialog (design D8 of
+ * fix-pending-prompt-lost-on-replay).
+ */
+function withCarriedInteractiveRequests(
+  rebuilt: SessionState,
+  prev: SessionState | undefined,
+): SessionState {
+  const carried = carryInteractiveRequests(prev);
+  if (carried.interactiveRequests.length === 0) return rebuilt;
+  return {
+    ...rebuilt,
+    interactiveRequests: carried.interactiveRequests,
+    messages: [...rebuilt.messages, ...carried.messages],
+  };
+}
+
+/**
+ * Rich spawn error detail stored per cwd.
+ * `kind: "error"` is a normal spawn failure; `kind: "timeout"` is a
+ * spawn_register_timeout (pi started but never connected).
+ * See change: spawn-failure-diagnostics.
+ */
+export interface SpawnErrorDetail {
+  kind: "error" | "timeout";
+  message: string;
+  code?: SpawnFailureCode;
+  reasons?: PreflightReason[];
+  stderr?: string;
+  strategy?: string;
+  pid?: number;
+  /** Effective watchdog timeout in ms, for rendering "30s" in the timeout banner. */
+  timeoutMs?: number;
+}
+
+import {
+  clearSessionEvents,
+  intentStore,
+  publishSessionData,
+  publishSessionEvent,
+  publishSessionEvents,
+} from "@blackbelt-technology/dashboard-plugin-runtime";
+import { applyPluginConfigUpdate, getPluginConfig } from "@blackbelt-technology/dashboard-plugin-runtime/context";
+
+/**
+ * Group key a session's ended count belongs under (D4/D9): the same
+ * pin > worktree-mainPath > cwd precedence the sidebar groups by and the
+ * snapshot `endedTotals` keys carry. Reads the pinned set from the live
+ * visibility ref when present (optional dependency).
+ * See change: fix-connect-snapshot-frame-loss.
+ */
+function endedTotalsGroupKey(
+  session: Pick<DashboardSession, "cwd" | "gitWorktree">,
+  pinnedDirectories: ReadonlyArray<string> | undefined,
+): string {
+  const platform = inferPlatform([session.cwd, ...(pinnedDirectories ?? [])]);
+  const pinnedKeys = new Set((pinnedDirectories ?? []).map((d) => pathKey(d, platform)));
+  return resolveSessionGroupPath(session, pinnedKeys, platform);
+}
+
+export interface MessageHandlerSetters {
+  setSessions: React.Dispatch<React.SetStateAction<Map<string, DashboardSession>>>;
+  setSessionStates: React.Dispatch<React.SetStateAction<Map<string, SessionState>>>;
+  setSessionCommands: React.Dispatch<React.SetStateAction<Map<string, CommandInfo[]>>>;
+  // Note: setSessionFlows removed. flows-plugin reads `flowsList` from
+  // the per-session-data store directly. See change:
+  // pluginize-flows-via-registry.
+  setFileResults: React.Dispatch<React.SetStateAction<{ query: string; files: FileEntry[] } | null>>;
+  /** Per-session set of rel-paths that changed on disk (editor-pane banner). See change: split-editor-workspace. */
+  setChangedOnDisk: React.Dispatch<React.SetStateAction<Map<string, Map<string, number>>>>;
+  setOpenspecMap: React.Dispatch<React.SetStateAction<Map<string, OpenSpecData>>>;
+  /**
+   * Folder-HEAD branch map (`cwd → branch | null`), fed by `git_head_update`.
+   * `null` = folder confirmed non-git. Outranks child-session branches in
+   * `GroupGitInfo`. See change: refresh-folder-header-branch.
+   */
+  setFolderGitMap: React.Dispatch<React.SetStateAction<Map<string, string | null>>>;
+  setOpenspecGroupsMap: React.Dispatch<React.SetStateAction<Map<string, { groups: OpenSpecGroup[]; assignments: Record<string, string>; changeOrder?: Record<string, string[]> }>>>;
+  setModelsMap: React.Dispatch<React.SetStateAction<Map<string, ModelInfo[]>>>;
+  /**
+   * Per-session provider refresh failures from the latest `models_list`.
+   * A later clean push clears the session's entry.
+   * See change: upgrade-model-selector-primitives.
+   */
+  setModelRefreshErrorsMap: React.Dispatch<React.SetStateAction<Map<string, ProviderRefreshError[]>>>;
+  setRolesMap: React.Dispatch<React.SetStateAction<Map<string, RoleInfo>>>;
+  setSpawnResult: React.Dispatch<React.SetStateAction<{ success: boolean; message: string } | null>>;
+  setSessionOrderMap: React.Dispatch<React.SetStateAction<Map<string, string[]>>>;
+  setPinnedDirectories: React.Dispatch<React.SetStateAction<string[]>>;
+  /** Canonical collapsed folder keys, synced via `collapsed_folders_updated`. See change: persist-folder-collapse-server-side. */
+  setCollapsedFolders: React.Dispatch<React.SetStateAction<string[]>>;
+  /** Accordion pinned-open folders, carried by `collapsed_folders_updated`. See change: add-focus-mode-and-card-block-toggles. */
+  setExpandedFolders?: React.Dispatch<React.SetStateAction<string[]>>;
+  /** Session-list grouping prefs, synced via `group_by_prefs_updated`. See change: session-list-group-by. */
+  setGroupByPrefs?: React.Dispatch<React.SetStateAction<import("@blackbelt-technology/pi-dashboard-shared/session-group-by.js").GroupByPrefs | undefined>>;
+  /** Session-card section visibility snapshot, synced via `card_sections_updated`. Optional so older setter bags stay valid. See change: configurable-session-card-sections. */
+  setCardSections?: React.Dispatch<React.SetStateAction<CardSectionPrefs>>;
+  /** Favorite model labels, synced via `favorite_models_updated`. See change: enrich-model-selector-capabilities-favorites. */
+  setFavoriteModels: React.Dispatch<React.SetStateAction<string[]>>;
+  /** folder-workspaces: full workspace list, kept in sync via `workspaces_updated`. */
+  setWorkspaces: React.Dispatch<React.SetStateAction<import("@blackbelt-technology/pi-dashboard-shared/browser-protocol.js").Workspace[]>>;
+  setTerminals: React.Dispatch<React.SetStateAction<Map<string, TerminalSession>>>;
+  setDiscoveredServers: React.Dispatch<React.SetStateAction<DiscoveredServerInfo[]>>;
+  setSpawnErrors: React.Dispatch<React.SetStateAction<Map<string, SpawnErrorDetail>>>;
+  setResumeErrors: React.Dispatch<React.SetStateAction<Map<string, string>>>;
+  /** Global chat-display prefs (configurable-chat-display). */
+  setDisplayPrefs: React.Dispatch<React.SetStateAction<DisplayPrefs | undefined>>;
+  /**
+   * Per-session dashboard-local `/view` preview rows. Stored separately from
+   * the event-reducer state so the reducer never sees them. Merged into the
+   * rendered chat by timestamp at the App level.
+   * See change: render-file-previews.
+   */
+
+  /**
+   * Per-session "history loading" flag. Cleared on the first content batch,
+   * the terminal `event_replay{isLast:true}`, or `session_updated{dataUnavailable:true}`.
+   * See change: show-chat-history-loading-indicator.
+   */
+  setLoadingHistory: React.Dispatch<React.SetStateAction<Map<string, boolean>>>;
+  /**
+   * Second per-session replay flag. Diverges from `loadingHistory`: it clears
+   * only on the TERMINAL batch, the failure edge, or a safety-net timeout.
+   * See change: show-replay-in-flight-indicator.
+   */
+  setReplayInFlight: React.Dispatch<React.SetStateAction<Map<string, boolean>>>;
+  /**
+   * Per-session auto-canvas state, folded from `canvas_intent` /
+   * `canvas_server_chip` broadcasts. Coexists with the URL-driven preview
+   * routes. See change: auto-canvas (Section 6).
+   */
+  setCanvasMap: React.Dispatch<React.SetStateAction<Map<string, import("../lib/canvas/canvas-gate.js").CanvasState>>>;
+  /**
+   * Per-session windowed-replay gap state, folded from `history_window` /
+   * `history_backfill_result`. Drives the interstitial gap divider.
+   * Optional for back-compat / lean test contexts.
+   * See change: lazy-load-session-history.
+   */
+  setHistoryGaps?: React.Dispatch<React.SetStateAction<Map<string, HistoryGapState>>>;
+  /**
+   * Monotonic counter bumped once per SUCCESSFUL backfill splice. The chat view
+   * keys its scroll-anchor restore on this rather than on `messages.length`:
+   * a live event also changes the length (and would consume the anchor for an
+   * unrelated row), and the FINAL splice inserts rows while removing the
+   * divider, so the net length can be unchanged and the restore would never
+   * run at all. A revision fires exactly once per splice, in both cases.
+   * See change: lazy-load-session-history (task 7.3).
+   */
+  setHistorySpliceRev?: React.Dispatch<React.SetStateAction<number>>;
+  /**
+   * Session group key → ended-session count from the latest
+   * `sessions_snapshot`, kept live via session_updated/removed. Drives stub
+   * groups + expander labels. Optional for lean test contexts.
+   * See change: fix-connect-snapshot-frame-loss (D9).
+   */
+  setEndedTotalsMap?: React.Dispatch<React.SetStateAction<Map<string, number>>>;
+  /**
+   * Folder group key → archived-session count from `sessions_snapshot` +
+   * `session_archived` / `archived_count_updated`. Drives the per-folder
+   * `Archive (N)` fold. Optional for lean test contexts.
+   * See change: archive-sessions-lazy-load.
+   */
+  setArchivedCountMap?: React.Dispatch<React.SetStateAction<Map<string, number>>>;
+  /**
+   * Non-window ended sessions already paged per group key — the next
+   * `sessions_page` offset. Reset by every snapshot.
+   * See change: fix-connect-snapshot-frame-loss (D9).
+   */
+  setPagedCount?: React.Dispatch<React.SetStateAction<Map<string, number>>>;
+  /**
+   * Per-group page-reply generation, bumped on every `sessions_page_result`.
+   * `SessionList` releases its in-flight mark on a generation change (not on
+   * `pagedCount` advancing), so an EMPTY reply still releases it.
+   * See change: close-registry-frame-shed-gaps (D3).
+   */
+  setPageReplyGen?: React.Dispatch<React.SetStateAction<Map<string, number>>>;
+  /**
+   * Per-group "the server has no further ended rows" marks (`hasMore:false`).
+   * Hides the "more" affordance and suppresses `sessions_page`. Cleared when
+   * `endedTotals` changes for the group (diff on the map) or on a snapshot.
+   * See change: close-registry-frame-shed-gaps (D3).
+   */
+  setPageExhausted?: React.Dispatch<React.SetStateAction<Set<string>>>;
+  /**
+   * Bumped once per applied `sessions_snapshot`; `useOpenSpecReconcile`
+   * re-runs on it so a reconnect snapshot re-pulls missing entries.
+   * See change: fix-connect-snapshot-frame-loss (D7/D9).
+   */
+  setSnapshotGeneration?: React.Dispatch<React.SetStateAction<number>>;
+}
+
+export interface MessageHandlerDeps {
+  send: (msg: any) => void;
+  navigate: (to: string) => void;
+  clearSpawningCwd: (cwd: string) => void;
+  spawningCwdsRef: React.MutableRefObject<Set<string>>;
+  subscribedRef: React.MutableRefObject<Set<string>>;
+  pendingTerminalCwdRef: React.MutableRefObject<string | null>;
+  lastCreatedTerminalIdRef: React.MutableRefObject<string | null>;
+  maxSeqMapRef: React.MutableRefObject<Map<string, number>>;
+  selectedSessionIdRef: React.MutableRefObject<string | undefined>;
+  /**
+   * Maps client-minted requestId → originating click metadata. Consumed in
+   * `case "session_added"` (when `msg.spawnRequestId` matches an entry,
+   * navigate to the new session) and in `case "spawn_result"` failure (when
+   * `msg.requestId` matches, drop the entry). See change: spawn-correlation-token.
+   */
+  pendingSpawnsRef: React.MutableRefObject<Map<string, PendingSpawnEntry>>;
+  /**
+   * Notified with the browser `requestId` of a spawn that failed after the
+   * server accepted it: a failed `spawn_result` or a `spawn_register_timeout`
+   * that echoes the id. Lets the folder home re-enable its Start control for
+   * exactly its own spawn. See change: redesign-directory-home-split.
+   */
+  onSpawnFailed?: (requestId: string) => void;
+  /**
+   * Safety-net timers for the per-session loading flag, owned by App.
+   * `clearLoadingHistory` tears the matching timer down on every exit edge.
+   * See change: show-chat-history-loading-indicator.
+   */
+  loadingHistoryTimersRef: React.MutableRefObject<Map<string, ReturnType<typeof setTimeout>>>;
+  /** Safety-net timers for `replayInFlight`. See change: show-replay-in-flight-indicator. */
+  replayInFlightTimersRef: React.MutableRefObject<Map<string, ReturnType<typeof setTimeout>>>;
+  /**
+   * Mark a session's history load failed (content-gated in App). Passed as the
+   * `onTimeout` of the single `loadingHistory` re-arm site, and invoked on
+   * `dataUnavailable` when a load was in flight. Never wired to the
+   * `replayInFlight` re-arm. See change: show-session-history-load-state.
+   */
+  markHistoryLoadFailed?: (sessionId: string) => void;
+  /** Clear the failed mark (non-empty or terminal replay batch). See change: show-session-history-load-state. */
+  clearHistoryLoadFailed?: (sessionId: string) => void;
+  /**
+   * Live snapshot of pinned dirs + workspaces + sessions for the
+   * `isVisibleCwd` check that gates the off-screen spawn_error toast.
+   * Optional for back-compat. See change: harden-worktree-spawn.
+   */
+  cwdVisibilityInputsRef?: React.MutableRefObject<{
+    pinnedDirectories: ReadonlyArray<string>;
+    workspaces: ReadonlyArray<{ folders: ReadonlyArray<string> }>;
+    sessions: ReadonlyArray<{ cwd: string }>;
+  }>;
+  /**
+   * Strategy A durable replay-cache writer. Accumulates raw events from
+   * `event` / `event_replay` and persists (debounced) so a reload can
+   * delta-subscribe. `session_state_reset` drops the entry.
+   * See change: reduce-session-replay-traffic.
+   */
+  replayPersister?: ReplayPersister;
+  /**
+   * Show a global toast. Used for `auto_name_error` (bridge could not
+   * auto-name a session). Optional for back-compat / lean test contexts.
+   * See change: add-auto-session-naming.
+   */
+  showToast?: (text: string, variant?: ToastVariant) => void;
+  /**
+   * Live mirror of the `sessions` map. `sessions_reordered` filtering and the
+   * live `endedTotals` transitions read it synchronously (setState updaters
+   * must stay pure under StrictMode). Optional for lean test contexts.
+   * See change: fix-connect-snapshot-frame-loss (D9).
+   */
+  sessionsRef?: React.MutableRefObject<Map<string, DashboardSession>>;
+  /**
+   * Live mirror of the App-owned `endedTotalsMap`. The D3 diff uses it to
+   * clear `pageExhausted` for every group whose ended total changed. Optional
+   * for lean test contexts. See change: close-registry-frame-shed-gaps (D3).
+   */
+  endedTotalsMap?: Map<string, number>;
+  /**
+   * Shared with `useOpenSpecReconcile` — a `final:true` `openspec_get_result`
+   * resolves the cwd's in-flight entry (timer cleared).
+   * See change: fix-connect-snapshot-frame-loss (D7).
+   */
+  openspecGetInflightRef?: React.MutableRefObject<Map<string, OpenSpecGetInflight>>;
+}
+
+/** Monotonic generation stamped on every `file_changed` candidate. Module-level: never restarts. */
+let fileChangedGeneration = 0;
+
+export function useMessageHandler(
+  setters: MessageHandlerSetters,
+  deps: MessageHandlerDeps,
+): (msg: ServerToBrowserMessage) => void {
+  const {
+    setSessions, setSessionStates, setSessionCommands,
+    setFileResults, setChangedOnDisk, setOpenspecMap, setFolderGitMap, setOpenspecGroupsMap, setModelsMap, setModelRefreshErrorsMap, setRolesMap, setSpawnResult,
+    setSessionOrderMap, setPinnedDirectories, setCollapsedFolders, setExpandedFolders, setCardSections, setGroupByPrefs, setFavoriteModels, setWorkspaces, setTerminals,
+    setDiscoveredServers, setSpawnErrors, setResumeErrors,
+    setDisplayPrefs, setLoadingHistory, setReplayInFlight, setCanvasMap, setHistoryGaps, setHistorySpliceRev,
+    setEndedTotalsMap, setArchivedCountMap, setPagedCount, setSnapshotGeneration,
+    setPageReplyGen, setPageExhausted,
+  } = setters;
+  const { send, navigate, clearSpawningCwd, spawningCwdsRef, subscribedRef, pendingTerminalCwdRef, lastCreatedTerminalIdRef, maxSeqMapRef, selectedSessionIdRef, pendingSpawnsRef, onSpawnFailed, loadingHistoryTimersRef, replayInFlightTimersRef, replayPersister, showToast, sessionsRef, openspecGetInflightRef, endedTotalsMap, markHistoryLoadFailed, clearHistoryLoadFailed } = deps;
+  // One-shot per session: suppress a repeat auto-name toast for the same
+  // session id. See change: add-auto-session-naming.
+  const autoNameToastedRef = useRef<Set<string>>(new Set());
+  /**
+   * Authoritative gap bookkeeping, read SYNCHRONOUSLY inside the `event_replay`
+   * reduce loop to decide where the divider row lands. The React state mirror
+   * (`setHistoryGaps`) is for rendering only — it lags by a commit, which is
+   * one commit too many for a placement decision.
+   * See change: lazy-load-session-history.
+   */
+  const historyGapsRef = useRef<Map<string, HistoryGapState>>(new Map());
+  const publishGap = useCallback((sessionId: string, gap: HistoryGapState | undefined) => {
+    if (gap) historyGapsRef.current.set(sessionId, gap);
+    else historyGapsRef.current.delete(sessionId);
+    setHistoryGaps?.((prev) => {
+      const next = new Map(prev);
+      if (gap) next.set(sessionId, { ...gap });
+      else next.delete(sessionId);
+      return next;
+    });
+  }, [setHistoryGaps]);
+
+  // Phase 3 (change: reduce-chat-render-cpu-umbrella): live `event` bursts
+  // arrive one-per-WS-frame in separate macrotasks, so React 18 automatic
+  // batching does NOT merge their setSessionStates calls — N events cost N
+  // ChatView renders. We queue the (cheap) per-event side effects aside and
+  // coalesce the (expensive) state application into one fold per animation
+  // frame. Per-event side effects (seq tracking, durable replay buffer, plugin
+  // mirror) stay synchronous in `case "event"`, so their timing is unchanged.
+  const liveQueueRef = useRef<Map<string, QueuedLiveEvent[]>>(new Map());
+  const flushRafRef = useRef<number | null>(null);
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushLiveEvents = useCallback(() => {
+    if (flushRafRef.current != null) {
+      cancelAnimationFrame(flushRafRef.current);
+      flushRafRef.current = null;
+    }
+    if (flushTimerRef.current != null) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    const queues = liveQueueRef.current;
+    if (queues.size === 0) return;
+    // Snapshot + clear so events arriving during the flush go to the next frame.
+    const drained = new Map(queues);
+    queues.clear();
+    setSessionStates((prev) => {
+      let next: Map<string, SessionState> | null = null;
+      for (const [sessionId, events] of drained) {
+        if (events.length === 0) continue;
+        const base = next ?? prev;
+        const current = base.get(sessionId) ?? createInitialState();
+        const { state } = foldLiveEvents(current, events);
+        if (!next) next = new Map(prev);
+        next.set(sessionId, state);
+      }
+      return next ?? prev;
+    });
+  }, [setSessionStates]);
+
+  const scheduleLiveFlush = useCallback(() => {
+    if (flushRafRef.current != null || flushTimerRef.current != null) return;
+    // rAF is throttled/suspended on a backgrounded tab — fall back to a
+    // macrotask so events still apply and none is delayed indefinitely.
+    if (typeof document !== "undefined" && document.hidden) {
+      flushTimerRef.current = setTimeout(() => {
+        flushTimerRef.current = null;
+        flushLiveEvents();
+      }, 0);
+    } else if (typeof requestAnimationFrame === "function") {
+      flushRafRef.current = requestAnimationFrame(() => {
+        flushRafRef.current = null;
+        flushLiveEvents();
+      });
+    } else {
+      flushTimerRef.current = setTimeout(() => {
+        flushTimerRef.current = null;
+        flushLiveEvents();
+      }, 0);
+    }
+  }, [flushLiveEvents]);
+
+  useEffect(
+    () => () => {
+      if (flushRafRef.current != null) cancelAnimationFrame(flushRafRef.current);
+      if (flushTimerRef.current != null) clearTimeout(flushTimerRef.current);
+    },
+    [],
+  );
+
+  /**
+   * close-registry-frame-shed-gaps (D3): clear the paging "exhausted" mark for
+   * every group whose `endedTotals` changed. Implemented as a diff on the map
+   * VALUE, not an enumerated list of mutation sites (`session_updated`→ended,
+   * `session_removed`, `session_archived`, `sessions_snapshot`, the App
+   * server-switch/disconnect reset, and `session_added` of a not-previously-held
+   * ended session) — so no future mutation site can be missed. A key that
+   * VANISHED (the App reset to an empty map) clears too. The snapshot arm ALSO
+   * clears unconditionally in its own handler case, because a snapshot resets
+   * the paging offset even when the totals are byte-identical.
+   */
+  const prevEndedTotalsRef = useRef(endedTotalsMap);
+  useEffect(() => {
+    const prev = prevEndedTotalsRef.current;
+    prevEndedTotalsRef.current = endedTotalsMap;
+    if (!setPageExhausted || !endedTotalsMap || prev === endedTotalsMap) return;
+    const changed: string[] = [];
+    for (const [key, value] of endedTotalsMap) {
+      if (prev?.get(key) !== value) changed.push(key);
+    }
+    if (prev) {
+      for (const key of prev.keys()) {
+        if (!endedTotalsMap.has(key)) changed.push(key);
+      }
+    }
+    if (changed.length === 0) return;
+    setPageExhausted((exhausted) => {
+      if (exhausted.size === 0) return exhausted;
+      let hits = false;
+      for (const key of changed) {
+        if (exhausted.has(key)) {
+          hits = true;
+          break;
+        }
+      }
+      if (!hits) return exhausted;
+      const next = new Set(exhausted);
+      for (const key of changed) next.delete(key);
+      return next;
+    });
+  }, [endedTotalsMap, setPageExhausted]);
+
+  return useCallback((msg: ServerToBrowserMessage) => {
+    // Preserve strict ordering: any queued live events must apply before a
+    // non-`event` message can mutate the same session's state (reset, replay,
+    // interactive request, removal). Draining here keeps coalescing on the hot
+    // path (consecutive `event` bursts) while guaranteeing correctness.
+    if (msg.type !== "event" && liveQueueRef.current.size > 0) flushLiveEvents();
+    switch (msg.type) {
+      case "session_added": {
+        const reconciled = msg.reconciled === true;
+        // Previous row, read via the sessions mirror OUTSIDE the updater
+        // (updaters must stay pure under StrictMode). Drives both the
+        // "not previously held" endedTotals guard (D3, E16–E17) and the
+        // held-ended→non-ended reversal below.
+        const prevRow = sessionsRef?.current.get(msg.session.id);
+        const wasHeld = prevRow !== undefined;
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.session.id);
+          // A reconciled add carries the server's FULL CURRENT record, so its
+          // fields — including an ABSENT `currentTool`/`hostPressure` on a
+          // re-registered row — are authoritative: a plain merge would keep a
+          // stale value from the previous incarnation, the exact class of bug
+          // this change exists to kill. Carry over ONLY the client-local /
+          // client-accumulated fields the server record does not own.
+          // The original broadcast replaces wholesale.
+          // See change: close-registry-frame-shed-gaps (D2).
+          next.set(
+            msg.session.id,
+            reconciled && existing
+              ? {
+                  ...msg.session,
+                  ...(existing.resuming !== undefined ? { resuming: existing.resuming } : {}),
+                  ...(existing.closing !== undefined ? { closing: existing.closing } : {}),
+                  ...(existing.assets !== undefined ? { assets: existing.assets } : {}),
+                }
+              : msg.session,
+          );
+          // The sibling `resuming` cleanup is a spawn-correlation side effect
+          // of the ORIGINAL add. A reconciled add is a late repair and must
+          // not disturb siblings. See change: close-registry-frame-shed-gaps (D2).
+          if (!reconciled && msg.session.status !== "ended") {
+            for (const [id, s] of next) {
+              if (id !== msg.session.id && s.cwd === msg.session.cwd && s.resuming) {
+                next.set(id, { ...s, resuming: false });
+              }
+            }
+          }
+          return next;
+        });
+        // Keep the new session in the order map at the tail so a DEFERRED
+        // `sessions_reordered` that omits it cannot evict it: the reorder's
+        // tail-keep only rescues ids already present in the previous order.
+        // See change: close-registry-frame-shed-gaps (D1/F6).
+        setSessionOrderMap?.((prev) => {
+          const groupKey = endedTotalsGroupKey(
+            msg.session,
+            deps.cwdVisibilityInputsRef?.current.pinnedDirectories,
+          );
+          const current = prev.get(groupKey);
+          if (current?.includes(msg.session.id)) return prev;
+          const next = new Map(prev);
+          next.set(groupKey, [...(current ?? []), msg.session.id]);
+          return next;
+        });
+        // endedTotals bookkeeping for this add (D3). Two transitions matter:
+        //  - a NOT-previously-held already-ended session GROWS its group's
+        //    ended total (E16), guarded on not-held so a re-delivered reconcile
+        //    cannot double-count (E17);
+        //  - an add that flips a HELD ended row back to a non-ended status (an
+        //    owed removal superseded by re-registration) REMOVES that
+        //    contribution — otherwise the count stays stale and the expander
+        //    offers a page that can never fill.
+        {
+          const nowEnded = msg.session.status === "ended";
+          const wasEndedHeld = prevRow?.status === "ended";
+          const delta = !wasHeld && nowEnded ? 1 : wasEndedHeld && !nowEnded ? -1 : 0;
+          if (delta !== 0) {
+            const groupKey = endedTotalsGroupKey(
+              msg.session,
+              deps.cwdVisibilityInputsRef?.current.pinnedDirectories,
+            );
+            setEndedTotalsMap?.((prev) => {
+              const next = new Map(prev);
+              next.set(groupKey, Math.max(0, (prev.get(groupKey) ?? 0) + delta));
+              return next;
+            });
+          }
+        }
+        // A hidden session is an auto-hidden headless worker (subagent,
+        // `memory` tool, nested `pi -p`) that shares its parent's cwd. It must
+        // never steal focus OR consume the correlation token minted for the
+        // real visible spawn, so the whole cascade is gated.
+        // See change: suppress-hidden-session-auto-navigation.
+        if (!msg.session.hidden) {
+          if (reconciled) {
+            // D2: gate OFF navigation for EVERY tier; clean up the
+            // pending-spawn record + spawning placeholder ONLY on an exact
+            // `spawnRequestId` match. With no request id this is a pure upsert
+            // that touches no spawn state, so it cannot clear an unrelated
+            // concurrent spawn's placeholder in the same cwd.
+            // See change: close-registry-frame-shed-gaps.
+            if (msg.spawnRequestId && pendingSpawnsRef.current.has(msg.spawnRequestId)) {
+              const entry = pendingSpawnsRef.current.get(msg.spawnRequestId)!;
+              pendingSpawnsRef.current.delete(msg.spawnRequestId);
+              if (entry.kind === "spawn" && entry.cwd) clearSpawningCwd(entry.placeholderCwd ?? entry.cwd);
+            }
+          } else if (msg.spawnRequestId && pendingSpawnsRef.current.has(msg.spawnRequestId)) {
+            // Tier 1: exact correlation by spawnRequestId. Works for both
+            // spawn-from-folder and fork-from-card (closes the no-auto-select-
+            // after-fork UX gap). See change: spawn-correlation-token.
+            const entry = pendingSpawnsRef.current.get(msg.spawnRequestId)!;
+            pendingSpawnsRef.current.delete(msg.spawnRequestId);
+            // Clear the placeholder keyed on the group cwd. For a worktree
+            // spawn `placeholderCwd` is the PARENT repo path (where the
+            // session groups), NOT `entry.cwd` (the worktree path).
+            // See change: add-worktree-spawn-placeholder-card.
+            if (entry.kind === "spawn" && entry.cwd) clearSpawningCwd(entry.placeholderCwd ?? entry.cwd);
+            // A spawn that opted out of focus (OpenSpec board) cleans up but
+            // never navigates. See change: openspec-board-spawn-no-focus.
+            if (entry.focus !== false) navigate(`/session/${msg.session.id}`);
+          } else {
+            // Tiers 2 + 2.5 (fallbacks when no `spawnRequestId` echo): match
+            // pending `spawn` entries on the SESSION's identity
+            // (`entry.cwd`, never `placeholderCwd`, so a parent-cwd session
+            // cannot consume a worktree entry). Navigation is withheld only
+            // when >=1 entry matches and ALL opted out of focus (mixed →
+            // focus, as for a default spawn). Cleanup consumes the first
+            // match. See changes: fix-worktree-spawn-placeholder-and-ordering,
+            // openspec-board-spawn-no-focus.
+            const platform = inferPlatform([msg.session.cwd]);
+            const sessionKey = pathKey(msg.session.cwd, platform);
+            const matches: Array<[string, PendingSpawnEntry]> = [];
+            for (const pending of pendingSpawnsRef.current) {
+              const entry = pending[1];
+              if (entry.kind === "spawn" && entry.cwd && pathKey(entry.cwd, platform) === sessionKey) {
+                matches.push(pending);
+              }
+            }
+            const tier2 = spawningCwdsRef.current.has(msg.session.cwd);
+            // Tier 2 historically consumes no pending entry; keep that for
+            // all-default matches (zero behavior change) and consume only
+            // when a no-focus entry is involved.
+            const consume = matches.length > 0 && (!tier2 || matches.some(([, e]) => e.focus === false));
+            if (consume) {
+              const [requestId, first] = matches[0];
+              pendingSpawnsRef.current.delete(requestId);
+              clearSpawningCwd(first.placeholderCwd ?? first.cwd);
+            } else if (tier2) {
+              // Tier 2 legacy: cwd-based heuristic for older servers that
+              // don't echo spawnRequestId. Only fires for spawn (not fork)
+              // because fork dispatches don't add to spawningCwds today.
+              clearSpawningCwd(msg.session.cwd);
+            }
+            const noFocus = matches.length > 0 && matches.every(([, e]) => e.focus === false);
+            if ((tier2 || matches.length > 0) && !noFocus) {
+              navigate(`/session/${msg.session.id}`);
+            }
+          }
+        }
+        // Commands/models/roles metadata is now requested server-side on subscribe
+        // (see subscription-handler.ts) so it arrives while the browser is subscribed.
+        break;
+      }
+
+      case "session_updated":
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.sessionId);
+          if (existing) {
+            next.set(msg.sessionId, { ...existing, ...msg.updates });
+          }
+          return next;
+        });
+        // Exit LOADING on load failure: the cold branch's `.catch` /
+        // unsuccessful result marks the session `dataUnavailable`.
+        // See change: show-chat-history-loading-indicator.
+        if ((msg.updates as Partial<DashboardSession>).dataUnavailable === true) {
+          // Read BEFORE the clears below delete the timer: timer presence is
+          // the "load in flight" proxy. A never-subscribed / already-loaded
+          // session is not a failure. See change: show-session-history-load-state.
+          const wasLoading = loadingHistoryTimersRef.current.has(msg.sessionId);
+          clearLoadingHistory(setLoadingHistory, loadingHistoryTimersRef, msg.sessionId);
+          // Same failure edge for the in-flight flag: no terminal batch is
+          // coming, so the pill must not hang.
+          // See change: show-replay-in-flight-indicator.
+          clearLoadingHistory(setReplayInFlight, replayInFlightTimersRef, msg.sessionId);
+          if (wasLoading) markHistoryLoadFailed?.(msg.sessionId);
+        }
+        // Live endedTotals (D9): a held session transitioning to ended grows
+        // its group's count between snapshots. Read via the sessions mirror
+        // OUTSIDE the updater — updaters must stay pure under StrictMode.
+        // See change: fix-connect-snapshot-frame-loss.
+        {
+          const updates = msg.updates as Partial<DashboardSession>;
+          const existing = sessionsRef?.current.get(msg.sessionId);
+          if (existing && existing.status !== "ended" && updates.status === "ended") {
+            const groupKey = endedTotalsGroupKey(
+              { ...existing, ...updates },
+              deps.cwdVisibilityInputsRef?.current.pinnedDirectories,
+            );
+            setEndedTotalsMap?.((prev) => {
+              const next = new Map(prev);
+              next.set(groupKey, (prev.get(groupKey) ?? 0) + 1);
+              return next;
+            });
+          }
+        }
+        // Mirror model/thinkingLevel into sessionStates so the bottom StatusBar
+        // (which reads selectedState.thinkingLevel ?? selectedSession.thinkingLevel)
+        // stays in sync with the session card. model_update events from the bridge
+        // go through session_updated — there's no dedicated browser-side
+        // model_update handler, so we propagate here.
+        // See change: enrich-custom-provider-model-metadata.
+        {
+          const updates = msg.updates as Partial<DashboardSession>;
+          if (updates.thinkingLevel !== undefined || updates.model !== undefined) {
+            setSessionStates((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(msg.sessionId) ?? createInitialState();
+              const patched: SessionState = { ...existing };
+              if (updates.thinkingLevel !== undefined) patched.thinkingLevel = updates.thinkingLevel;
+              if (updates.model !== undefined) patched.model = updates.model;
+              next.set(msg.sessionId, patched);
+              return next;
+            });
+          }
+        }
+        break;
+
+      case "session_orphaned":
+        // The session's process outlived SIGTERM → SIGKILL. `session_removed`
+        // follows immediately (the record is released so the session cannot
+        // wedge the UI), so without this the user would see an ordinary,
+        // successful-looking close while a ~127 MB `pi` stayed resident — the
+        // exact indistinguishability that hid #452 for weeks.
+        // See change: fix-tmux-session-shutdown-leak.
+        showToast?.(
+          t(
+            "session.orphanedProcess",
+            { pid: msg.pid },
+            `Session closed, but its process (pid ${msg.pid}) survived and is still running.`,
+          ),
+          "error",
+        );
+        break;
+
+      case "session_removed":
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.sessionId);
+          if (existing) {
+            next.set(msg.sessionId, { ...existing, status: "ended" });
+          }
+          return next;
+        });
+        // `session_removed` is the confirmed clean-shutdown / force-kill
+        // boundary. Preserve transcript/statistics, but no retry or provider
+        // error can remain actionable after the process is gone.
+        setSessionStates((prev) => {
+          const existing = prev.get(msg.sessionId);
+          if (!existing) return prev;
+          const next = new Map(prev);
+          next.set(msg.sessionId, {
+            ...existing,
+            status: "ended",
+            isStreaming: false,
+            currentTool: undefined,
+            retryState: undefined,
+            lastError: undefined,
+            retryCancelled: undefined,
+          });
+          return next;
+        });
+        // Live endedTotals (D9): removing an ended session shrinks its
+        // group's count. Untracked sessions cannot be attributed — skip.
+        // See change: fix-connect-snapshot-frame-loss.
+        {
+          const existing = sessionsRef?.current.get(msg.sessionId);
+          if (existing) {
+            const groupKey = endedTotalsGroupKey(
+              existing,
+              deps.cwdVisibilityInputsRef?.current.pinnedDirectories,
+            );
+            setEndedTotalsMap?.((prev) => {
+              const count = prev.get(groupKey) ?? 0;
+              // A live session removed WITHOUT a prior `session_updated: ended`
+              // (e.g. the ghost-session cleanup) just became ended → +1.
+              if (existing.status !== "ended") {
+                const next = new Map(prev);
+                next.set(groupKey, count + 1);
+                return next;
+              }
+              // An already-ended session removed from the server registry
+              // shrinks the group's ended sequence → −1.
+              if (count <= 0) return prev;
+              const next = new Map(prev);
+              next.set(groupKey, count - 1);
+              return next;
+            });
+          }
+        }
+        break;
+
+      case "session_archived":
+        // archive-sessions-lazy-load: DELETE the id (distinct from
+        // `session_removed`, which keeps the row as ended — the archived
+        // session left the live set entirely and lives in the folder fold).
+        {
+          const existing = sessionsRef?.current.get(msg.sessionId);
+          setSessions((prev) => {
+            if (!prev.has(msg.sessionId)) return prev;
+            const next = new Map(prev);
+            next.delete(msg.sessionId);
+            return next;
+          });
+          setArchivedCountMap?.((prev) => {
+            const next = new Map(prev);
+            next.set(msg.cwd, msg.count);
+            return next;
+          });
+          // An archived session was ended and counted in `endedTotals`; it
+          // just left the live set, so shrink its group's ended count the
+          // same way `session_removed` does for registry removals.
+          if (existing && existing.status === "ended") {
+            const groupKey = endedTotalsGroupKey(
+              existing,
+              deps.cwdVisibilityInputsRef?.current.pinnedDirectories,
+            );
+            setEndedTotalsMap?.((prev) => {
+              const count = prev.get(groupKey) ?? 0;
+              if (count <= 0) return prev;
+              const next = new Map(prev);
+              next.set(groupKey, count - 1);
+              return next;
+            });
+          }
+        }
+        break;
+
+      case "archived_count_updated":
+        // Restore / delete / pin re-key — the count is authoritative.
+        setArchivedCountMap?.((prev) => {
+          if ((prev.get(msg.cwd) ?? 0) === msg.count) return prev;
+          const next = new Map(prev);
+          next.set(msg.cwd, msg.count);
+          return next;
+        });
+        break;
+
+      case "session_state_reset":
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          // Carry `pendingPrompt` across reset: it's optimistic UI state
+          // representing user intent that hasn't round-tripped yet. Reducer
+          // user `message_start` / `agent_start`, the 30s safety timeout, or
+          // explicit cancel are the right paths to clear it. Auto-resume's
+          // bridge re-register triggers this reset, and dropping the bubble
+          // makes the user feel their message vanished.
+          // See change: preserve-pending-prompt-across-replay.
+          // …but a `sending` bubble is NOT carried: nothing in the rebuilt
+          // state can settle it. See change: fix-optimistic-prompt-stuck-sending.
+          const carry = carryPendingPrompt(next.get(msg.sessionId)?.pendingPrompt);
+          // Unanswered interactive requests + their `ui-<requestId>` rows carry
+          // the same way — a server-signalled reset must not erase a rendered
+          // dialog (design D8 of fix-pending-prompt-lost-on-replay).
+          const fresh = withCarriedInteractiveRequests(
+            createInitialState(),
+            next.get(msg.sessionId),
+          );
+          if (carry) fresh.pendingPrompt = carry;
+          next.set(msg.sessionId, fresh);
+          return next;
+        });
+        maxSeqMapRef.current.set(msg.sessionId, 0);
+        // Drop gap bookkeeping and any pending backfill: the transcript this
+        // gap described no longer exists. The server's own generation counter
+        // is the other half of this — belt and braces, not co-dependent.
+        // See change: lazy-load-session-history (D9, 6.5).
+        publishGap(msg.sessionId, undefined);
+        // Strategy A invalidation: purge the durable cache so stale history is
+        // never stitched onto reset sequence numbers; full replay rebuilds it.
+        // See change: reduce-session-replay-traffic.
+        void replayPersister?.drop(msg.sessionId);
+        // Mirror the reset into the plugin-runtime per-session event
+        // store so plugin reducers (e.g. flows-plugin) re-derive from
+        // a clean stream after a replay. See change:
+        // pluginize-flows-via-registry.
+        clearSessionEvents(msg.sessionId);
+        break;
+
+      case "event": {
+        // Per-event side effects stay synchronous — timing identical to the
+        // old per-event path (verified against the replay-cache test):
+        if (msg.seq > (maxSeqMapRef.current.get(msg.sessionId) ?? 0)) {
+          maxSeqMapRef.current.set(msg.sessionId, msg.seq);
+        }
+        // Strategy A: accumulate the live event into the durable replay buffer.
+        // Origin `live`: broadcast fan-out reaches sessions this tab never
+        // subscribed to, so it establishes no provenance on its own.
+        replayPersister?.record(msg.sessionId, [{ seq: msg.seq, event: msg.event }], "live");
+        // Publish to the plugin-runtime per-session event store so
+        // plugin slot consumers calling `useSessionEvents(sessionId)`
+        // re-render with the extended event list. The shell's reducer
+        // and the plugin store consume the same `msg.event`. See
+        // change: pluginize-flows-via-registry.
+        publishSessionEvent(msg.sessionId, msg.event);
+        // Coalesce the expensive part — the ChatView re-render via
+        // setSessionStates — into one fold per frame. See change:
+        // reduce-chat-render-cpu-umbrella (Phase 3).
+        const queued = liveQueueRef.current.get(msg.sessionId);
+        if (queued) queued.push({ seq: msg.seq, event: msg.event });
+        else liveQueueRef.current.set(msg.sessionId, [{ seq: msg.seq, event: msg.event }]);
+        scheduleLiveFlush();
+        break;
+      }
+
+      // Bridge ack for an idle-scoped optimistic send. fresh:true promotes the
+      // pendingPrompt bubble to "sent"; fresh:false drops it (the send raced
+      // into a mid-turn queue entry). See change: optimistic-prompt-progress.
+      case "prompt_received":
+        setSessionStates((prev) => {
+          const current = prev.get(msg.sessionId);
+          if (!current?.pendingPrompt) return prev;
+          const next = new Map(prev);
+          next.set(msg.sessionId, applyPromptReceived(current, msg.fresh));
+          return next;
+        });
+        break;
+
+      // chat-markdown-local-images-and-math: bridge-emitted local-image asset.
+      // Stored on `DashboardSession.assets` so `MarkdownContent`'s
+      // `pi-asset:` resolver (via `SessionAssetsContext`) can render
+      // `data:` URLs without re-fetching. Idempotent on duplicate hashes.
+      case "asset_register":
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.sessionId);
+          if (!existing) return prev;
+          const assets = { ...(existing.assets ?? {}) };
+          assets[msg.hash] = { data: msg.data, mimeType: msg.mimeType };
+          next.set(msg.sessionId, { ...existing, assets });
+          return next;
+        });
+        break;
+
+      // Plugin-emitted intent broadcast — update the IntentStore so slot
+      // consumers re-render via useSlotIntents. Server caches the latest
+      // intent per (pluginId, sessionId, slot) for replay on subscribe.
+      // See change: adopt-server-driven-intent-rendering.
+      case "plugin_intents":
+        intentStore.set(
+          {
+            pluginId: msg.pluginId,
+            sessionId: msg.sessionId,
+            slot: msg.slot,
+          },
+          msg.intent,
+        );
+        break;
+
+      // Generic plugin-emitted dashboard event. Routed into the plugin
+      // per-session event store so `useSessionEvents(sessionId)` consumers
+      // (e.g. goal-plugin GoalChip) re-derive. See change:
+      // add-goal-continuation-plugin.
+      case "plugin_event":
+        publishSessionEvent(msg.sessionId, msg.event);
+        break;
+
+      case "commands_list":
+        setSessionCommands((prev) => {
+          const next = new Map(prev);
+          next.set(msg.sessionId, msg.commands);
+          return next;
+        });
+        // Mirror into the plugin-runtime per-session-data store so
+        // plugins (e.g. flows-plugin's SessionFlowActions claim) can
+        // read the commands list without coupling to shell state.
+        // See change: pluginize-flows-via-registry.
+        publishSessionData(msg.sessionId, "commandsList", msg.commands);
+        break;
+
+      case "flows_list":
+        // Mirrored to the plugin-runtime per-session-data store so
+        // flows-plugin's SessionFlowActionsClaim and FlowsCommandRoutes
+        // can read the flows list. The shell does not retain it.
+        publishSessionData(msg.sessionId, "flowsList", msg.flows);
+        break;
+
+      case "files_list":
+        setFileResults({ query: msg.query, files: msg.files });
+        break;
+
+      case "file_changed":
+        // An open editor-pane file changed on disk. Record it per-session; the
+        // pane surfaces a per-tab banner (no auto-reload).
+        // See change: split-editor-workspace.
+        if (typeof msg.path !== "string" || typeof msg.sessionId !== "string") break;
+        // Every event is a NEW candidate: the generation is unique and monotonic
+        // (module-level, never restarts after a clear), so a later event for a
+        // path whose earlier candidate was verified+cleared is never mistaken for
+        // an already-handled one. See change: gate-changed-on-disk-by-content (D1).
+        {
+          const generation = ++fileChangedGeneration;
+          setChangedOnDisk((prev) => {
+            const next = new Map(prev);
+            const paths = new Map(next.get(msg.sessionId) ?? []);
+            paths.set(msg.path, generation);
+            next.set(msg.sessionId, paths);
+            return next;
+          });
+        }
+        break;
+
+      case "canvas_intent": {
+        // Auto-canvas driver: fold the two-phase intent (eager/settle) into the
+        // session's canvas slot. The CanvasDriver component reacts to the
+        // resulting state (viewport-gated open / chip). See change: auto-canvas.
+        if (typeof msg.sessionId !== "string") break;
+        setCanvasMap((prev) => {
+          const next = new Map(prev);
+          next.set(msg.sessionId, reduceCanvasIntent(prev.get(msg.sessionId) ?? EMPTY_CANVAS_STATE, msg));
+          return next;
+        });
+        break;
+      }
+
+      case "canvas_server_chip": {
+        // Declared-server confirm chip (Decision 4). A normal broadcast surfaces
+        // the chip (no probe here — the probe happens on tap through
+        // LiveServerViewer); an `expire:true` broadcast drops it at the turn
+        // boundary / server-exit so it becomes non-actionable (S32). Both cases
+        // fold through `reduceCanvasChip`.
+        if (typeof msg.sessionId !== "string") break;
+        setCanvasMap((prev) => {
+          const next = new Map(prev);
+          next.set(msg.sessionId, reduceCanvasChip(prev.get(msg.sessionId) ?? EMPTY_CANVAS_STATE, msg));
+          return next;
+        });
+        break;
+      }
+
+      case "models_list": {
+        const models = filterVisibleModels(msg.models);
+        // Models are GLOBAL in pi-coding-agent (single ModelRegistry per pi
+        // process). The bridge emits this on session_start using the same
+        // shared registry; the WS `sessionId` is just the initiator. Mirror
+        // the global semantics by routing through the built-ins plugin
+        // config (merged with any existing roles already there).
+        //
+        // See change: fix-pi-flows-end-to-end (Group 5 — global roles+models).
+        setModelsMap((prev) => {
+          const next = new Map(prev);
+          next.set(msg.sessionId, models);
+          return next;
+        });
+        // Refresh failures are per-message, not sticky: a later clean push for
+        // the same session clears the footer notice.
+        // See change: upgrade-model-selector-primitives.
+        setModelRefreshErrorsMap((prev) => {
+          // Trust boundary: `msg` is bridge-supplied runtime data. Keep only
+          // well-formed entries so a malformed payload cannot reach the footer
+          // (React throws when handed an object as a text child).
+          const errs = Array.isArray(msg.refreshErrors)
+            ? msg.refreshErrors.filter(
+                (e): e is ProviderRefreshError =>
+                  !!e && typeof e.provider === "string" && typeof e.message === "string",
+              )
+            : undefined;
+          if (!errs || errs.length === 0) {
+            if (!prev.has(msg.sessionId)) return prev;
+            const next = new Map(prev);
+            next.delete(msg.sessionId);
+            return next;
+          }
+          const next = new Map(prev);
+          next.set(msg.sessionId, errs);
+          return next;
+        });
+        const prevCfg = getPluginConfig("roles") as Record<string, unknown>;
+        applyPluginConfigUpdate({
+          type: "plugin_config_update",
+          id: "roles",
+          config: { ...prevCfg, models },
+        });
+        break;
+      }
+
+      case "roles_list": {
+        // Roles are GLOBAL in pi-flows (single `~/.pi/agent/providers.json`).
+        // The `sessionId` on this WS message only identifies the session that
+        // *initiated* the change — the data itself has no session dimension.
+        // We mirror the global storage by routing the payload through the
+        // built-ins plugin's config (`usePluginConfig<BuiltinsConfig>` in
+        // BuiltInRolesSettings reads it). This piggybacks on the existing
+        // plugin-config plumbing used by every other plugin’s settings UI.
+        //
+        // See change: fix-pi-flows-end-to-end (Group 5 — global roles+models).
+        const roleInfo = {
+          roles: msg.roles,
+          presets: msg.presets,
+          activePreset: msg.activePreset,
+          // Carry the built-in role-name set into the roles plugin config so
+          // BuiltInRolesSettings renders the Built-in/Custom split and the
+          // "＋ Add custom role" control. Dropping it here (the original defect)
+          // forced the flat back-compat layout.
+          // See change: fix-builtin-role-names-relay.
+          builtinRoleNames: msg.builtinRoleNames,
+        };
+        setRolesMap((prev) => {
+          const next = new Map(prev);
+          next.set(msg.sessionId, roleInfo);
+          return next;
+        });
+        const prevCfg = getPluginConfig("roles") as Record<string, unknown>;
+        applyPluginConfigUpdate({
+          type: "plugin_config_update",
+          id: "roles",
+          config: { ...prevCfg, ...roleInfo },
+        });
+        break;
+      }
+
+      case "process_list_update":
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.sessionId);
+          if (existing) {
+            next.set(msg.sessionId, { ...existing, processes: msg.processes });
+          }
+          return next;
+        });
+        break;
+
+      case "openspec_update":
+        setOpenspecMap((prev) => {
+          const next = new Map(prev);
+          next.set(msg.cwd, msg.data);
+          return next;
+        });
+        break;
+
+      case "git_head_update":
+        // Folder's own HEAD (or `null` for non-git). Authoritative for the
+        // GROUP header, outranks any child-session branch. See change:
+        // refresh-folder-header-branch.
+        setFolderGitMap((prev) => {
+          const next = new Map(prev);
+          next.set(msg.cwd, msg.branch);
+          return next;
+        });
+        break;
+
+      case "openspec_groups_update":
+        setOpenspecGroupsMap((prev) => {
+          const next = new Map(prev);
+          next.set(msg.cwd, { groups: msg.groups, assignments: msg.assignments, changeOrder: msg.changeOrder });
+          return next;
+        });
+        break;
+
+      /**
+       * A windowed replay is about to arrive. Emitted on full-stream paths
+       * ONLY, so a delta reconnect can never reset an in-progress exploration.
+       * See change: lazy-load-session-history (D5).
+       */
+      case "history_window": {
+        if (msg.gapCount > 0) publishGap(msg.sessionId, createHistoryGapState(msg));
+        else publishGap(msg.sessionId, undefined);
+        break;
+      }
+
+      /**
+       * Splice a backfilled segment into the gap. Touches `messages[]` and
+       * NOTHING ELSE (D10): it does not move `maxSeqMapRef` (backfilled seqs
+       * are below the live high-water mark by construction), does not
+       * `publishSessionEvents` (a live-event fan-out — replaying history into
+       * it would double-count plugin state), and does not write to
+       * `replayPersister` (which would cache a sparse array as contiguous).
+       */
+      case "history_backfill_result": {
+        const gap = historyGapsRef.current.get(msg.sessionId);
+        if (!gap) break;
+        if (msg.error) {
+          publishGap(msg.sessionId, { ...gap, pending: false, failed: true });
+          break;
+        }
+        /**
+         * A divider-less splice is a silent no-op that would still advance the
+         * bookkeeping below, desyncing gap state from `messages[]`. Under
+         * click-to-load the divider necessarily existed before the button
+         * could be pressed; an AUTOMATIC trigger firing around a session switch
+         * can reach this. Detect it once, here, and skip the whole response.
+         * See change: add-tail-only-replay-window (D7, test-plan X6).
+         */
+        if (!gap.dividerPlaced) {
+          /**
+           * Clear `pending` on the way out. Dropping the response with a bare
+           * `break` strands `pending: true` forever — nothing else clears it —
+           * which both vetoes the trigger permanently and leaves the divider
+           * rendering its spinner (state A2) for the rest of the session.
+           *
+           * Reachable only via the AUTOMATIC trigger firing around a session
+           * switch: under click-to-load the divider necessarily existed before
+           * the button could be pressed. So this change made a previously
+           * unreachable state reachable.
+           * See change: add-tail-only-replay-window (D7).
+           */
+          publishGap(msg.sessionId, { ...gap, pending: false });
+          break;
+        }
+        if (msg.events.length > 0) {
+          setHistorySpliceRev?.((n) => n + 1);
+          setSessionStates((prev) => {
+            const current = prev.get(msg.sessionId);
+            if (!current) return prev;
+            const at = current.messages.findIndex((m) => m.id === HISTORY_GAP_ROW_ID);
+            if (at < 0) return prev;
+            // Reduce the segment from a FRESH state. It begins mid-conversation,
+            // so an orphan `message_end` / `tool_execution_end` at its leading
+            // edge is expected — the reducer tolerating that is the correctness
+            // guarantee behind the server's best-effort edge snapping (D4).
+            let seg = createInitialState();
+            for (const { event } of msg.events) seg = reduceEvent(seg, event);
+            /**
+             * Tail-anchored events are the NEWEST remaining gap events, so they
+             * belong immediately ABOVE the tail — i.e. after the divider, not
+             * before it. `at + 1`, not `at`.
+             * See change: fix-lazy-history-backfill-ux (D3).
+             */
+            // Re-seat ts-placed notifies so a backfilled row older than a
+            // notify ends above it. See change: collapse-and-order-notify-rows (D5).
+            const messages = reseatTimedNotifies([
+              ...current.messages.slice(0, at + 1),
+              // Correctness floor before merge: no orphaned spinner, no
+              // permanently-streaming bubble (D5).
+              ...finalizeBackfillSegment(seg.messages),
+              ...current.messages.slice(at + 1),
+            ]);
+            const next = new Map(prev);
+            next.set(msg.sessionId, { ...current, messages });
+            return next;
+          });
+        }
+        /**
+         * Termination keys on `remainingGapCount` ONLY. An empty slice with a
+         * positive count — a fully-superseded compaction result, or a sparse
+         * sub-range of a holey store — is NOT exhaustion: the tail still
+         * retreats, so the next request covers a strictly smaller range and
+         * the walk cannot livelock. `events.length === 0` as a second
+         * exhaustion trigger is the reported bug: on a holey store it ends
+         * the walk at the FIRST sparse step.
+         * See change: fix-history-backfill-holey-store (D4).
+         */
+        const exhausted = msg.remainingGapCount === 0;
+        /**
+         * A HEAD-FREE gap resolves to a TERMINUS rather than disappearing.
+         * With no head above it, splicing the row out would leave a transcript
+         * that silently starts mid-conversation — and an empty final response
+         * must be read as "the walk REACHED THE FLOOR", never as a failure.
+         * See change: add-tail-only-replay-window (D6).
+         */
+        if (exhausted && isHeadFree(gap)) {
+          publishGap(msg.sessionId, {
+            ...gap,
+            tailMinSeq: msg.servedFrom > 0 ? msg.servedFrom : gap.tailMinSeq,
+            gapCount: msg.remainingGapCount,
+            pending: false,
+            failed: false,
+            atFloor: true,
+          });
+          break;
+        }
+        if (exhausted && gap.holey) {
+          /**
+           * A HOLEY two-sided gap resolves to the not-retained terminus
+           * instead of being removed: the announced gap held fewer events
+           * than its seq span, so retention elided its MIDDLE — removing the
+           * row would render head and tail as if they were adjacent. A
+           * dedicated flag, never a reuse of `atFloor` (that is the head-free
+           * floor bound).
+           * See change: fix-history-backfill-holey-store (D6).
+           */
+          publishGap(msg.sessionId, {
+            ...gap,
+            tailMinSeq: msg.servedFrom > 0 ? msg.servedFrom : gap.tailMinSeq,
+            gapCount: msg.remainingGapCount,
+            pending: false,
+            failed: false,
+            twoSidedTerminus: true,
+            // The walk is OVER — disarm, so no trigger (auto or manual) can
+            // ever issue a further request against a resolved gap. The
+            // head-free terminus is already fully guarded by `!t.atFloor` in
+            // `shouldAutoLoadHistory`; the two-sided analog is this disarm.
+            // See change: fix-history-backfill-holey-store (CodeRabbit round 1).
+            armed: false,
+          });
+          break;
+        }
+        if (exhausted) {
+          // A6 — CONTIGUOUS two-sided gap, fully filled: remove the divider
+          // entirely. The head above it already explains where the transcript
+          // begins, and nothing was elided from the middle.
+          setSessionStates((prev) => {
+            const current = prev.get(msg.sessionId);
+            if (!current) return prev;
+            const next = new Map(prev);
+            next.set(msg.sessionId, {
+              ...current,
+              messages: current.messages.filter((m) => m.id !== HISTORY_GAP_ROW_ID),
+            });
+            return next;
+          });
+          publishGap(msg.sessionId, undefined);
+          break;
+        }
+        // Not exhausted: retreat the tail, keep the affordance armed and idle.
+        // Nothing sets a mid-walk dead end any more — the retired state's
+        // triggers are now either a continued walk (sparse slice) or a
+        // classified terminus above; server refusals use the separate `failed`
+        // state, handled FIRST.
+        publishGap(msg.sessionId, {
+          ...gap,
+          /**
+           * Retreat the TAIL edge only. Moving both edges from one response
+           * would double-shrink a gap the server credited exactly once.
+           * See change: fix-lazy-history-backfill-ux (D2).
+           */
+          tailMinSeq: msg.servedFrom > 0 ? msg.servedFrom : gap.tailMinSeq,
+          gapCount: msg.remainingGapCount,
+          pending: false,
+          failed: false,
+        });
+        break;
+      }
+
+      case "event_replay": {
+        const firstSeq = msg.events.length > 0 ? msg.events[0].seq : null;
+        // Reset on every full replay sweep: firstSeq===1 (cold start) OR
+        // firstSeq <= maxSeq for this session (server is re-replaying events
+        // the client has already accounted for, e.g. paginated reconnect
+        // re-replay where the first batch may not start at seq=1).
+        // See change: fix-replay-duplicates-tool-and-flushed-rows.
+        const maxSeq = maxSeqMapRef.current.get(msg.sessionId) ?? 0;
+        const shouldReset = firstSeq != null && (firstSeq === 1 || firstSeq <= maxSeq);
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          // Same rationale as session_state_reset: preserve optimistic
+          // pendingPrompt across the full-replay reset branch.
+          // See change: preserve-pending-prompt-across-replay.
+          const carry = shouldReset ? carryPendingPrompt(next.get(msg.sessionId)?.pendingPrompt) : undefined;
+          let current = shouldReset ? createInitialState() : (next.get(msg.sessionId) ?? createInitialState());
+          if (carry) current.pendingPrompt = carry;
+          // Place the gap divider at the head→tail boundary: immediately before
+          // the first event whose seq belongs to the tail segment. Placement
+          // must happen DURING the fold — after it, the rows carry no seq and
+          // the boundary is unrecoverable.
+          const gap = historyGapsRef.current.get(msg.sessionId);
+          for (const { seq, event } of msg.events) {
+            if (gap && !gap.dividerPlaced && gap.gapCount > 0 && seq >= gap.tailMinSeq) {
+              current = { ...current, messages: [...current.messages, createHistoryGapRow()] };
+              gap.dividerPlaced = true;
+            }
+            current = reduceEvent(current, event);
+          }
+          // Unanswered interactive requests + their `ui-<requestId>` rows carry
+          // across the full-sweep reset — merged AFTER the fold, at the tail, so
+          // the fold's toolCallId scans never see the carried rows (design D8
+          // of fix-pending-prompt-lost-on-replay).
+          if (shouldReset) current = withCarriedInteractiveRequests(current, next.get(msg.sessionId));
+          // Re-tail the pending rows after EVERY batch, not only the reset one:
+          // a multi-batch full replay appends later transcript rows AFTER the
+          // carried dialog, burying it mid-transcript (virtualized off-screen)
+          // while its entry keeps the desync detector suppressed. See change:
+          // fix-pending-prompt-lost-on-replay (design D8).
+          current = retailPendingInteractiveRows(current);
+          next.set(msg.sessionId, current);
+          return next;
+        });
+        // Mirror the replayed batch into the plugin-runtime per-session event
+        // store so plugin slot consumers (flows card, goal chip) reading
+        // `useSessionEvents` rehydrate on cold load — the live `event` path
+        // publishes per event, so the replay path must too. Reuse `shouldReset`
+        // (full-sweep) to clear before republishing so a re-replay does not
+        // duplicate; continuation batches append.
+        // See change: replay-persisted-flow-runs.
+        if (shouldReset) clearSessionEvents(msg.sessionId);
+        publishSessionEvents(msg.sessionId, msg.events.map((e) => e.event));
+        // If we reset, also reset maxSeq tracking so a subsequent batch isn't
+        // misclassified. We rebuild it below from this batch's events.
+        if (shouldReset) {
+          maxSeqMapRef.current.set(msg.sessionId, 0);
+        }
+        // Track highest seq from replay batch
+        if (msg.events.length > 0) {
+          const lastEvt = msg.events[msg.events.length - 1];
+          if (lastEvt.seq > (maxSeqMapRef.current.get(msg.sessionId) ?? 0)) {
+            maxSeqMapRef.current.set(msg.sessionId, lastEvt.seq);
+          }
+        }
+        // Strategy A: mirror the reducer into the durable replay buffer. A
+        // full-sweep reset (shouldReset) replaces the buffer; a delta appends.
+        // This is also the reconciliation path: an offline-drift replay whose
+        // firstSeq <= maxSeq resets and rebuilds the persisted tail too.
+        // See change: reduce-session-replay-traffic.
+        //
+        // EXCEPT when this replay is windowed. Windowed events arrive over the
+        // ordinary `event_replay` stream, which would otherwise cache a SPARSE
+        // array as if it were contiguous. The next reload would then HIT the
+        // cache, re-reduce head+tail as silently adjacent, and delta-subscribe
+        // — and a delta never emits `history_window`, so the gap would become
+        // permanently invisible and unrecoverable. Skipping the write makes the
+        // next reload a MISS → full stream → windowed again → affordance
+        // restored. Self-healing.
+        // See change: lazy-load-session-history (D12).
+        const windowed = (historyGapsRef.current.get(msg.sessionId)?.gapCount ?? 0) > 0;
+        if (msg.events.length > 0 && !windowed) {
+          if (shouldReset) replayPersister?.seed(msg.sessionId, msg.events);
+          // Origin `replay`: this envelope answers THIS tab's subscribe, so it
+          // establishes provenance even when a compacted/capped cold replay
+          // starts past seq 1 (i.e. does not reset).
+          else replayPersister?.record(msg.sessionId, msg.events, "replay");
+        }
+        // Exit LOADING: first content (clear immediately so partial history
+        // paints) OR terminal marker for a genuinely-empty session
+        // (`events:[], isLast:true` → falls through to "No messages yet").
+        // Else — the empty non-terminal marker (`events:[], isLast:false`) is the
+        // cold-hydration start marker AND every server heartbeat: re-arm the
+        // short subscribe window to the longer hydration ceiling so a slow disk
+        // parse never flashes "No messages yet". `rearmLoadingHistory` no-ops
+        // unless a timer is armed (flag set), so warm/painted sessions are
+        // unaffected. See change: show-chat-history-loading-indicator,
+        // fix-history-loading-false-empty-flash.
+        // The ceiling's expiry marks the load failed (content-gated in App);
+        // any content or terminal batch clears a prior failed mark.
+        // See change: show-session-history-load-state.
+        if (msg.events.length > 0 || msg.isLast === true) {
+          clearLoadingHistory(setLoadingHistory, loadingHistoryTimersRef, msg.sessionId);
+          clearHistoryLoadFailed?.(msg.sessionId);
+        } else {
+          rearmLoadingHistory(setLoadingHistory, loadingHistoryTimersRef, msg.sessionId, HYDRATE_CEILING_MS, markHistoryLoadFailed);
+        }
+        // `replayInFlight` deliberately diverges from `loadingHistory` above:
+        // first content clears the skeleton but the transcript is still
+        // filling, so only the TERMINAL batch clears the in-flight flag. Every
+        // NON-terminal batch — content batches included, not just the empty
+        // heartbeat — is a liveness signal that re-arms the ceiling; without
+        // that the ceiling would expire mid-transfer and drop the pill while
+        // the tail is still missing. `rearmLoadingHistory` touches only the
+        // timers ref (never the setter), so a multi-batch replay does not
+        // re-render the transcript once per batch.
+        // See change: show-replay-in-flight-indicator.
+        if (msg.isLast === true) {
+          clearLoadingHistory(setReplayInFlight, replayInFlightTimersRef, msg.sessionId);
+          // ARM backfill only now (D11). Before the terminal batch an evicted
+          // cold session's store is still empty, so an early request would
+          // report the gap exhausted (remainingGapCount 0 against an empty
+          // store) and resolve it to a terminus — and then hydration would
+          // land and make the gap servable again.
+          const armGap = historyGapsRef.current.get(msg.sessionId);
+          if (armGap && !armGap.armed) publishGap(msg.sessionId, { ...armGap, armed: true });
+        } else {
+          rearmLoadingHistory(setReplayInFlight, replayInFlightTimersRef, msg.sessionId, HYDRATE_CEILING_MS);
+        }
+        break;
+      }
+
+      case "auto_name_error": {
+        // Bridge could not auto-name a session (e.g. @fast unconfigured).
+        // One-shot per session so a hard-config error toasts only once.
+        // See change: add-auto-session-naming.
+        if (!autoNameToastedRef.current.has(msg.sessionId)) {
+          autoNameToastedRef.current.add(msg.sessionId);
+          showToast?.(
+            t("session.autoNameError", { reason: msg.reason }, `Couldn't auto-name session: ${msg.reason}`),
+            "error",
+          );
+        }
+        break;
+      }
+
+      case "recovery_offer":
+        // Cold-start interrupted-session offer. Sticky top-right notification
+        // (no auto-timeout). `graceUntil` gates Reopen actionability while
+        // Class-2 liveness resolves. See changes: reopen-sessions-after-shutdown,
+        // fix-recovery-offer-bridge-liveness-gate.
+        setRecoveryOffer(msg.candidates, msg.graceUntil);
+        break;
+
+      case "resume_result":
+        // Resuming any session retires the recovery offer (no nag).
+        if (msg.success) clearRecoveryOffer();
+        if (!msg.success) {
+          console.warn("[dashboard] Resume/fork failed:", msg.message);
+          setSessions((prev) => {
+            const next = new Map(prev);
+            const existing = next.get(msg.sessionId);
+            if (existing) {
+              next.set(msg.sessionId, { ...existing, resuming: false });
+            }
+            return next;
+          });
+          setResumeErrors((prev) => {
+            const next = new Map(prev);
+            next.set(msg.sessionId, msg.message ?? t("session.resumeFailed", undefined, "Resume failed"));
+            return next;
+          });
+          // Drop the pending-spawn entry on failure so a stale entry can't
+          // mis-route a later session_added. See change: spawn-correlation-token.
+          if (msg.requestId) pendingSpawnsRef.current.delete(msg.requestId);
+        } else {
+          setResumeErrors((prev) => {
+            const next = new Map(prev);
+            next.delete(msg.sessionId);
+            return next;
+          });
+          // FORK_DEGRADED_TO_NEW: source session had no persisted history,
+          // so the server silently spawned a fresh session in the same cwd
+          // instead of forking. Surface the substitution as a non-blocking
+          // toast via the existing spawn-result slot.
+          // See change: fix-fork-empty-session-silent-timeout.
+          if (msg.code === "FORK_DEGRADED_TO_NEW") {
+            setSpawnResult({ success: true, message: msg.message ?? t("session.startedFresh", undefined, "Started a fresh session.") });
+          }
+          // For continue mode, the same sessionId is reused — navigate now
+          // since session_added might not fire (status update only).
+          // For fork mode, leave the entry alive: session_added will arrive
+          // for the new fork sessionId and trigger auto-navigate.
+          // See change: spawn-correlation-token.
+        }
+        break;
+
+      case "spawn_result":
+        setSpawnResult({ success: msg.success, message: msg.message });
+        if (!msg.success) {
+          // Clear the placeholder on the group cwd. For a worktree spawn the
+          // matching pending entry carries `placeholderCwd` (parent repo),
+          // distinct from `msg.cwd` (the worktree path).
+          // See change: add-worktree-spawn-placeholder-card.
+          const failedEntry = msg.requestId ? pendingSpawnsRef.current.get(msg.requestId) : undefined;
+          clearSpawningCwd(failedEntry?.placeholderCwd ?? msg.cwd);
+          // Leave the spawn_error message to fill the rich detail; set a placeholder if not yet present.
+          setSpawnErrors((prev) => {
+            const next = new Map(prev);
+            if (!next.has(msg.cwd)) {
+              next.set(msg.cwd, { kind: "error", message: msg.message ?? t("session.spawnFailed", undefined, "+Session failed") });
+            }
+            return next;
+          });
+          // Drop the pending-spawn entry on failure (matched by requestId
+          // when echoed; otherwise leave to be cleaned up by the 30s timeout).
+          // See change: spawn-correlation-token.
+          if (msg.requestId) {
+            pendingSpawnsRef.current.delete(msg.requestId);
+            onSpawnFailed?.(msg.requestId);
+          }
+        } else {
+          // Successful spawn clears error AND timeout banners for this cwd.
+          setSpawnErrors((prev) => {
+            const next = new Map(prev);
+            next.delete(msg.cwd);
+            return next;
+          });
+        }
+        break;
+
+      case "retry_session_error": {
+        // Delivery failed (unknown/disconnected session, or a bridge lacking
+        // the handler). The retry never reached a bridge, so no agent_start /
+        // lastError change will self-heal the disabled one-shot Retry. Re-stamp
+        // lastError.timestamp to bump `retryRevision`, which resets the banner's
+        // one-shot guard and re-enables the button. Same re-enable mechanism as
+        // the auto_retry_end reducer path. See change:
+        // replace-dashboard-retry-command-with-protocol-message.
+        setSessionStates((prev) => {
+          const current = prev.get(msg.sessionId);
+          if (!current?.lastError) return prev;
+          const previousRevision = current.lastError.timestamp;
+          const nextRevision =
+            typeof previousRevision === "number" && Number.isFinite(previousRevision)
+              ? Math.max(Date.now(), previousRevision + 1)
+              : Date.now();
+          const next = new Map(prev);
+          next.set(msg.sessionId, {
+            ...current,
+            lastError: { ...current.lastError, timestamp: nextRevision },
+          });
+          return next;
+        });
+        showToast?.(msg.error, "error");
+        break;
+      }
+
+      case "archive_session_error":
+        // A rejected archive click: tell the user why nothing happened. No
+        // state change — the card is still resident. See change:
+        // fix-orphaned-ended-session-archive.
+        showToast?.(msg.error, "error");
+        break;
+
+      case "spawn_error": {
+        // Enriches the spawn_result error with strategy + optional stderr tail.
+        // Carried as its own message so esbuild preserves this switch case in
+        // production builds (per AGENTS.md ServerToBrowserMessage invariant).
+        // See change: spawn-failure-diagnostics for new code/reasons/stderr fields.
+        clearSpawningCwd(msg.cwd);
+        setSpawnErrors((prev) => {
+          const next = new Map(prev);
+          next.set(msg.cwd, {
+            kind: "error",
+            message: msg.message,
+            code: msg.code,
+            reasons: msg.reasons,
+            stderr: msg.stderr,
+            strategy: msg.strategy,
+          });
+          return next;
+        });
+        // Off-screen fallback (change: harden-worktree-spawn): when the
+        // cwd has no visible folder banner, push a global toast so the
+        // failure isn't silently dropped. The per-folder banner takes
+        // precedence when the cwd IS visible.
+        const visibilityInputs = deps.cwdVisibilityInputsRef?.current;
+        if (visibilityInputs && !isVisibleCwd(msg.cwd, visibilityInputs)) {
+          pushSpawnErrorToast({
+            cwd: msg.cwd,
+            code: msg.code ?? "SPAWN_ERROR",
+            message: msg.message,
+            requestId: undefined,
+          });
+        }
+        break;
+      }
+
+      case "spawn_register_timeout": {
+        // Pi started but never called session_register within timeout window.
+        // See change: spawn-failure-diagnostics.
+        setSpawnErrors((prev) => {
+          const next = new Map(prev);
+          next.set(msg.cwd, {
+            kind: "timeout",
+            message: "",
+            pid: msg.pid,
+            stderr: msg.stderrTail,
+            timeoutMs: msg.timeoutMs,
+          });
+          return next;
+        });
+        if (msg.requestId) onSpawnFailed?.(msg.requestId);
+        break;
+      }
+
+      case "spawn_register_recovered": {
+        // Pi finally registered after the watchdog fired — auto-clear the timeout banner.
+        // See change: spawn-failure-diagnostics.
+        setSpawnErrors((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.cwd);
+          if (existing?.kind === "timeout") next.delete(msg.cwd);
+          return next;
+        });
+        break;
+      }
+
+      case "sessions_list":
+        break;
+
+      case "sessions_reordered":
+        setSessionOrderMap((prev) => {
+          const next = new Map(prev);
+          const held = sessionsRef?.current;
+          if (!held) {
+            // No sessions mirror (lean test context): legacy replace.
+            next.set(msg.cwd, msg.sessionIds);
+            return next;
+          }
+          // D9: incoming order first (ids the client does not hold are
+          // ignored), then held ids absent from the incoming order kept at
+          // the tail — a live reorder must not evict already-paged ids.
+          // See change: fix-connect-snapshot-frame-loss.
+          const seen = new Set<string>();
+          const incoming: string[] = [];
+          for (const id of msg.sessionIds) {
+            if (held.has(id) && !seen.has(id)) {
+              incoming.push(id);
+              seen.add(id);
+            }
+          }
+          const merged = [...incoming];
+          for (const id of prev.get(msg.cwd) ?? []) {
+            if (held.has(id) && !seen.has(id)) {
+              merged.push(id);
+              seen.add(id);
+            }
+          }
+          next.set(msg.cwd, merged);
+          return next;
+        });
+        break;
+
+      case "sessions_page_result":
+        // D9 page merge: sessions overwrite by id; the page's order ids
+        // append after the cwd's current order (already-present ids skipped);
+        // pagedCount advances by the page size so the next offset is right.
+        // See change: fix-connect-snapshot-frame-loss.
+        setSessions((prev) => {
+          const next = new Map(prev);
+          for (const s of msg.sessions) next.set(s.id, s);
+          return next;
+        });
+        setSessionOrderMap((prev) => {
+          const next = new Map(prev);
+          const current = prev.get(msg.cwd) ?? [];
+          const seen = new Set(current);
+          const merged = [...current];
+          for (const id of msg.order) {
+            if (!seen.has(id)) {
+              merged.push(id);
+              seen.add(id);
+            }
+          }
+          next.set(msg.cwd, merged);
+          return next;
+        });
+        setPagedCount?.((prev) => {
+          const next = new Map(prev);
+          next.set(msg.cwd, (prev.get(msg.cwd) ?? 0) + msg.sessions.length);
+          return next;
+        });
+        // D3: bump the reply generation on EVERY reply (including an empty
+        // one) so `SessionList` releases its in-flight mark without relying on
+        // `pagedCount` advancing or on the 15 s timeout; and record/clear the
+        // exhausted mark from `hasMore`. Keys are `msg.cwd` — the group key the
+        // server already uses for `sessions_page` / `endedTotals`.
+        // See change: close-registry-frame-shed-gaps.
+        setPageReplyGen?.((prev) => {
+          const next = new Map(prev);
+          next.set(msg.cwd, (prev.get(msg.cwd) ?? 0) + 1);
+          return next;
+        });
+        setPageExhausted?.((prev) => {
+          if (msg.hasMore) {
+            if (!prev.has(msg.cwd)) return prev;
+            const next = new Set(prev);
+            next.delete(msg.cwd);
+            return next;
+          }
+          if (prev.has(msg.cwd)) return prev;
+          const next = new Set(prev);
+          next.add(msg.cwd);
+          return next;
+        });
+        break;
+
+      case "openspec_get_result": {
+        const entry = openspecGetInflightRef?.current.get(msg.cwd);
+        // Match by requestId: a delayed reply from a timed-out earlier request
+        // must not overwrite newer data or clear the newer in-flight entry.
+        if (entry && entry.requestId !== msg.requestId) break;
+        // D6/D7: applied exactly like `openspec_update`. The in-flight mark
+        // releases only on `final:true` — a `final:false` placeholder is not
+        // a settled entry and its final reply may still be lost.
+        // See change: fix-connect-snapshot-frame-loss.
+        setOpenspecMap((prev) => {
+          const next = new Map(prev);
+          next.set(msg.cwd, msg.data);
+          return next;
+        });
+        if (msg.final && entry) {
+          clearTimeout(entry.timer);
+          openspecGetInflightRef?.current.delete(msg.cwd);
+        }
+        break;
+      }
+
+      case "sessions_snapshot":
+        // Atomic REPLACE — not merge. Drops stale ids from previous server
+        // lifetime so an actually-running session never lingers below the
+        // “Show N ended” divider after a reconnect.
+        // See change: fix-stale-sessions-on-reconnect.
+        setSessions(new Map(msg.sessions.map((s) => [s.id, s])));
+        setSessionOrderMap(new Map(Object.entries(msg.orders)));
+        // D4/D9: endedTotals replaced wholesale; pages are void after a
+        // snapshot (the window resets); the generation bump re-runs OpenSpec
+        // reconciliation. `?? {}` tolerates a pre-change server omitting it.
+        // See change: fix-connect-snapshot-frame-loss.
+        setEndedTotalsMap?.(new Map(Object.entries(msg.endedTotals ?? {})));
+        // archive-sessions-lazy-load: archived counts replace wholesale with
+        // the rest of the snapshot. `?? {}` tolerates a pre-change server
+        // omitting the field at runtime.
+        setArchivedCountMap?.(new Map(Object.entries(msg.archivedCountByCwd ?? {})));
+        setPagedCount?.(new Map());
+        // D3: a snapshot resets the paging offset, so the exhausted mark is
+        // cleared UNCONDITIONALLY here (not on a value diff): a reconnect whose
+        // totals are byte-identical still re-arms every cwd.
+        // See change: close-registry-frame-shed-gaps.
+        setPageExhausted?.(new Set());
+        setSnapshotGeneration?.((n) => n + 1);
+        break;
+
+      case "pinned_dirs_updated":
+        setPinnedDirectories(msg.paths);
+        break;
+
+      case "collapsed_folders_updated":
+        // persist-folder-collapse-server-side: full snapshot on connect and
+        // after every mutation. Replace, do not merge.
+        setCollapsedFolders(msg.collapsedFolders);
+        setExpandedFolders?.(msg.expandedFolders ?? []);
+        break;
+
+      case "group_by_prefs_updated":
+        // session-list-group-by: aggregate snapshot on connect + every
+        // mutation. Replace, do not merge.
+        setGroupByPrefs?.({
+          defaultGroupBy: msg.defaultGroupBy,
+          folderGroupBy: msg.folderGroupBy,
+          collapsedLanes: msg.collapsedLanes,
+        });
+        break;
+
+      case "card_sections_updated":
+        // configurable-session-card-sections: full snapshot. Replace, do not merge.
+        setCardSections?.(msg.cardSections);
+        break;
+
+      case "favorite_models_updated":
+        setFavoriteModels(msg.labels);
+        break;
+
+      case "questions_update":
+        // pending-question-stack: full replacement of this viewer's visible
+        // rows (first frame on connect may be empty). Replace, do not merge.
+        // See change: add-pending-question-stack.
+        setQuestions(msg.questions);
+        break;
+
+      case "workspaces_updated":
+        // folder-workspaces: server sends full snapshot on subscribe and
+        // after every mutation. Replace, do not merge.
+        setWorkspaces(msg.workspaces);
+        break;
+
+      case "extension_ui_request":
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(msg.sessionId) ?? createInitialState();
+          const updated = addInteractiveRequest(current, msg.requestId, msg.method, msg.params);
+          if (updated === current) return prev;
+          next.set(msg.sessionId, updated);
+          return next;
+        });
+        break;
+
+      case "ui_dismiss":
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(msg.sessionId);
+          if (!current) return prev;
+          const updated = dismissInteractiveRequest(current, msg.requestId);
+          if (updated === current) return prev;
+          next.set(msg.sessionId, updated);
+          return next;
+        });
+        break;
+
+      // Notify: a render-only chat row. NEVER `addInteractiveRequest` — that
+      // would recreate the phantom "user is blocked" state.
+      // See change: split-notify-from-prompt-request.
+      case "notify":
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(msg.sessionId) ?? createInitialState();
+          const updated = addNotify(current, msg.notifyId, msg.message, msg.level, msg.ts);
+          if (updated === current) return prev;
+          next.set(msg.sessionId, updated);
+          return next;
+        });
+        break;
+
+      // ── PromptBus protocol messages ──
+      case "prompt_request":
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(msg.sessionId) ?? createInitialState();
+          // Extract the originating toolCallId so the reducer can pair
+          // the interactiveUi row with its parent toolResult row during
+          // assistant message_end reorder. Free-floating prompts (no
+          // tool context) leave the field undefined.
+          // See change: fix-interactive-ui-reorder.
+          const toolCallId =
+            typeof msg.prompt?.metadata?.toolCallId === "string"
+              ? (msg.prompt.metadata.toolCallId as string)
+              : undefined;
+          const updated = addInteractiveRequest(
+            current,
+            msg.promptId,
+            msg.prompt?.type ?? "select",
+            {
+              title: msg.prompt?.question,
+              message: msg.prompt?.metadata?.message as string | undefined,
+              options: msg.prompt?.options,
+              defaultValue: msg.prompt?.defaultValue,
+              // For method "batch": sub-questions travel in metadata.questions.
+              // See change: redesign-ask-user-question-cards.
+              questions: msg.prompt?.metadata?.questions,
+              // Inline "Other" opt-in (core metadata key). See change: add-ask-user-inline-other.
+              ...(msg.prompt?.metadata?.allowOther === true ? { allowOther: true } : {}),
+              _promptBusComponent: msg.component,
+              _promptBusPlacement: msg.placement,
+              // Namespaced plugin data (`ctx.ui.*` `pluginMeta`), exposed to
+              // plugins via the interactive-request snapshot. Core keys never
+              // come from here. See change: add-browser-editor-pane-tab (D6).
+              _pluginMeta: msg.prompt?.metadata?.plugin,
+            },
+            toolCallId,
+          );
+          if (updated === current) return prev;
+          next.set(msg.sessionId, updated);
+          return next;
+        });
+        break;
+
+      case "prompt_dismiss":
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(msg.sessionId);
+          if (!current) return prev;
+          const updated = dismissInteractiveRequest(current, msg.promptId);
+          if (updated === current) return prev;
+          next.set(msg.sessionId, updated);
+          return next;
+        });
+        break;
+
+      case "prompt_cancel":
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(msg.sessionId);
+          if (!current) return prev;
+          const updated = dismissInteractiveRequest(current, msg.promptId);
+          if (updated === current) return prev;
+          next.set(msg.sessionId, updated);
+          return next;
+        });
+        break;
+
+      case "terminal_added":
+        setTerminals((prev) => {
+          const next = new Map(prev);
+          next.set(msg.terminal.id, msg.terminal);
+          return next;
+        });
+        // A spawn succeeded: any "limit reached" notice for this cwd is stale.
+        clearTerminalLimitNotices(msg.terminal.cwd);
+        // A newly-created terminal now surfaces as a `term:<id>` tab inside the
+        // pane that requested it (the pane's terminal slice watches the
+        // terminal set and opens the tab in-place). The standalone
+        // /folder/:cwd/terminals route was removed, so DO NOT navigate here —
+        // doing so deselected the session and landed on the empty state.
+        // We still clear the pending marker + record the id for parity.
+        // See change: terminals-in-tabbed-panes.
+        if (pendingTerminalCwdRef.current === msg.terminal.cwd) {
+          pendingTerminalCwdRef.current = null;
+          lastCreatedTerminalIdRef.current = msg.terminal.id;
+        }
+        break;
+
+      // A cap refusal: notice in the slot that asked (tab bar vs chat). Sent only
+      // to the requesting socket. See change: harden-server-capability-bounds.
+      case "terminal_limit_reached":
+        showTerminalLimitNotice({ scope: msg.scope, limit: msg.limit, cwd: msg.cwd, inline: msg.inline });
+        break;
+
+      // A remote pin / add / move-folder outside the shared roots was dropped.
+      case "folder_refused":
+        showToast?.(
+          t(
+            "folderRefused.toast",
+            { path: msg.path },
+            "{path} is outside the folders this dashboard shares. Ask the host to pin it.",
+          ),
+          "error",
+        );
+        break;
+
+      case "terminal_removed":
+        setTerminals((prev) => {
+          const next = new Map(prev);
+          next.delete(msg.terminalId);
+          return next;
+        });
+        break;
+
+      case "terminal_updated":
+        setTerminals((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.terminalId);
+          if (existing) {
+            next.set(msg.terminalId, { ...existing, ...msg.updates });
+          }
+          return next;
+        });
+        break;
+
+      case "package_progress":
+      case "package_operation_complete":
+        // Dispatch to component-level hooks via custom DOM event
+        window.dispatchEvent(new CustomEvent("pi-package-event", { detail: msg }));
+        break;
+
+      case "runtime_update_progress":
+      case "runtime_update_staged":
+      case "runtime_update_failed":
+        // Settings → Dashboard runtime. See change: electron-runtime-overlay-updates.
+        window.dispatchEvent(new CustomEvent("runtime-update-event", { detail: msg }));
+        break;
+
+      case "pi_core_update_progress":
+      case "pi_core_update_complete":
+        // Dispatch to PiCore hooks via custom DOM event
+        window.dispatchEvent(new CustomEvent("pi-core-event", { detail: msg }));
+        break;
+
+      case "display_prefs_updated":
+        // Global chat-display prefs were updated (by THIS or another tab).
+        // See change: configurable-chat-display.
+        setDisplayPrefs(msg.prefs);
+        break;
+
+      case "editor_tab_open":
+        // Plugin-server-initiated tab open. App (always mounted, route-aware)
+        // decides whether this client acts. See change: add-browser-editor-pane-tab (D5).
+        window.dispatchEvent(new CustomEvent("editor-tab-open", { detail: { sessionId: msg.sessionId, path: msg.path } }));
+        break;
+
+      case "plugin_config_update":
+        // Update the plugin config store and re-render any usePluginConfig consumers.
+        applyPluginConfigUpdate(msg);
+        // Notify usePluginEnabledSet (and any other listener) so they can
+        // refetch /api/health and propagate the new enabled set into the
+        // slot registry. See change: add-plugin-activation-ui.
+        window.dispatchEvent(new CustomEvent("plugin-config-update", { detail: msg }));
+        break;
+
+      // bootstrap_status_update + bootstrap_ticket_complete WS messages
+      // removed under change: eliminate-electron-runtime-install (task 3.1).
+      // pi-core update progress still flows via the surviving pi_core_event
+      // dispatch below.
+
+      // Forward worktree-init streaming events to the process-singleton bus
+      // so the requestId-scoped WorktreeInitButton tail updates live.
+      // See change: generalize-worktree-init-hook.
+      case "worktree_init_progress":
+      case "worktree_init_done":
+      case "worktree_init_failed":
+        dispatchInitEvent(msg);
+        break;
+
+      case "servers_discovered":
+      case "servers_updated":
+        setDiscoveredServers(msg.servers as DiscoveredServerInfo[]);
+        break;
+
+      // `models_refreshed` was a global signal that wiped modelsMap and
+      // re-requested only for the selected session, leaving previously-
+      // visited sessions in `subscribedRef` with empty model lists. The
+      // signal is gone (see change: simplify-model-selection-channels):
+      // each bridge pushes its own `models_list` per-session on credential
+      // changes, so modelsMap is updated incrementally without a wipe.
+      // The case is preserved as a no-op for protocol-compatibility with
+      // older bridges that may still emit it; deleting the case would
+      // throw on receipt under strict-union message handlers.
+      case "models_refreshed":
+        break;
+
+      // ── Extension UI System (Phase 1) ──
+      // Cache the module list directly on the DashboardSession record so the
+      // existing `sessions.get(id)?.uiModules` access pattern works. See
+      // change: add-extension-ui-modal.
+      case "ui_modules_list":
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.sessionId);
+          if (existing) {
+            next.set(msg.sessionId, { ...existing, uiModules: msg.modules });
+          }
+          return next;
+        });
+        break;
+
+      case "ui_data_list":
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.sessionId);
+          if (existing) {
+            const dataMap = { ...(existing.uiDataMap ?? {}), [msg.event]: msg.items };
+            next.set(msg.sessionId, { ...existing, uiDataMap: dataMap });
+          }
+          return next;
+        });
+        break;
+
+      // ── Extension UI System (Phase 2): live decorator updates ──
+      // Cache descriptors on the DashboardSession record under composite key
+      // `${kind}:${namespace}:${id}`. `removed: true` deletes the entry without
+      // affecting siblings. See change: add-extension-ui-decorations.
+      case "ext_ui_decorator": {
+        const descriptor = msg.descriptor;
+        if (!descriptor || typeof descriptor.kind !== "string") break;
+        const key = `${descriptor.kind}:${descriptor.namespace}:${descriptor.id}`;
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(msg.sessionId);
+          if (!existing) return prev;
+          const decorators = { ...(existing.uiDecorators ?? {}) };
+          if (msg.removed === true) delete decorators[key];
+          else decorators[key] = descriptor;
+          next.set(msg.sessionId, { ...existing, uiDecorators: decorators });
+          return next;
+        });
+        break;
+      }
+    }
+  }, [send, clearSpawningCwd, navigate, setSessions, setSessionStates, setSessionCommands, setFileResults, setChangedOnDisk, setOpenspecMap, setModelsMap, setModelRefreshErrorsMap, setRolesMap, setSpawnResult, setSessionOrderMap, setPinnedDirectories, setCollapsedFolders, setExpandedFolders, setCardSections, setGroupByPrefs, setFavoriteModels, setWorkspaces, setTerminals, setDiscoveredServers, setLoadingHistory, setReplayInFlight, setCanvasMap, spawningCwdsRef, subscribedRef, pendingTerminalCwdRef, maxSeqMapRef, selectedSessionIdRef, loadingHistoryTimersRef, replayInFlightTimersRef, replayPersister, flushLiveEvents, scheduleLiveFlush, publishGap, setHistorySpliceRev, setEndedTotalsMap, setPagedCount, setSnapshotGeneration, setPageReplyGen, setPageExhausted, sessionsRef, openspecGetInflightRef, markHistoryLoadFailed, clearHistoryLoadFailed, onSpawnFailed]);
+}

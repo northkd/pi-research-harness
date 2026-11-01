@@ -1,0 +1,1102 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { ServerToBrowserMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import type { DashboardEvent } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserHandlerContext } from "../browser-handlers/handler-context.js";
+import { handleSubscribe, replaySessionAssets, sendEventBatches } from "../browser-handlers/subscription-handler.js";
+import { createDirectoryService, type DirectoryService, type LoadResult } from "../directory-service.js";
+import { createMemoryEventStore } from "../persistence/memory-event-store.js";
+import { createReplayState } from "../session/hydration-state.js";
+import { createMemorySessionManager } from "../session/memory-session-manager.js";
+import type { RemoteTranscriptStore } from "../session/remote-transcript-store.js";
+
+function makeEvent(type: string = "test"): DashboardEvent {
+  return { eventType: type, timestamp: Date.now(), data: {} };
+}
+
+function createMockContext(overrides: Partial<BrowserHandlerContext> = {}): BrowserHandlerContext {
+  return {
+    ws: { readyState: 1, OPEN: 1, bufferedAmount: 0 } as any,
+    sessionManager: createMemorySessionManager(),
+    eventStore: createMemoryEventStore(() => false),
+    piGateway: { sendToSession: vi.fn() } as any,
+    headlessPidRegistry: {} as any,
+    pendingResumeRegistry: {} as any,
+    sendTo: vi.fn(),
+    broadcast: vi.fn(),
+    getSubscribers: () => [],
+    trackUiRequest: vi.fn(),
+    replayPendingUiRequests: vi.fn(),
+    replayNotifyLog: vi.fn(),
+    markReplaying: vi.fn(),
+    clearReplaying: vi.fn(),
+    ...overrides,
+  };
+}
+
+describe("handleSubscribe — metadata requests on subscribe", () => {
+  it("sends request_commands, request_models, request_providers, and request_roles to piGateway", () => {
+    // request_providers added by change: replace-hardcoded-provider-lists.
+    const ctx = createMockContext();
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1" }, subs, ctx);
+
+    const calls = (ctx.piGateway.sendToSession as any).mock.calls;
+    expect(calls).toHaveLength(4);
+    expect(calls[0]).toEqual(["s1", { type: "request_commands", sessionId: "s1" }]);
+    expect(calls[1]).toEqual(["s1", { type: "request_models", sessionId: "s1" }]);
+    expect(calls[2]).toEqual(["s1", { type: "request_providers", sessionId: "s1" }]);
+    expect(calls[3]).toEqual(["s1", { type: "request_roles", sessionId: "s1" }]);
+  });
+});
+
+describe("handleSubscribe — stale lastSeq detection", () => {
+  it("replays delta when lastSeq is within server range", async () => {
+    const ctx = createMockContext();
+    // Insert 5 events
+    for (let i = 0; i < 5; i++) ctx.eventStore.insertEvent("s1", makeEvent(`e${i}`));
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 3 }, subs, ctx);
+
+    // Wait for async replay
+    await new Promise((r) => setTimeout(r, 50));
+
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    // Should NOT have sent session_state_reset
+    const resets = calls.filter(([, msg]) => msg.type === "session_state_reset");
+    expect(resets).toHaveLength(0);
+
+    // Should have replayed only events 4 and 5
+    const replays = calls.filter(([, msg]) => msg.type === "event_replay");
+    expect(replays.length).toBeGreaterThanOrEqual(1);
+    const allEvents = replays.flatMap(([, msg]: any) => msg.events);
+    expect(allEvents).toHaveLength(2);
+    expect(allEvents[0].seq).toBe(4);
+    expect(allEvents[1].seq).toBe(5);
+  });
+
+  /**
+   * The stale-`lastSeq` path no longer emits a call-site `session_state_reset`;
+   * D3 moved the reset into `sendEventBatches`, keyed on `replayWindow !== null`.
+   *
+   * The two arms below are split deliberately, because they fail differently
+   * and only together prove the guarantee survived the move:
+   *   - UNWINDOWED — no reset frame, and none is required. The replay starts at
+   *     seq 1 and the reducer's `firstSeq === 1` rule wipes transcript state.
+   *     Asserting `allEvents[0].seq === 1` is what makes the absence SAFE
+   *     rather than merely tolerated, so it is not a weakened assertion.
+   *   - WINDOWED — exactly one reset, ordered BEFORE `history_window`. This is
+   *     the arm that pins the guarantee D3 relocated; without it, deleting the
+   *     call-site guard would have left the reset untested on this path.
+   * See change: add-tail-only-replay-window (D3, task 2.11).
+   */
+  it("replays the full stream from seq 1 when lastSeq > server maxSeq, with NO reset frame when unwindowed", async () => {
+    const ctx = createMockContext();
+    // Insert 3 events (maxSeq = 3). Far below MIN_REPLAY_WINDOW, so no window
+    // can form and `sendEventBatches` has nothing to announce.
+    for (let i = 0; i < 3; i++) ctx.eventStore.insertEvent("s1", makeEvent(`e${i}`));
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 100 }, subs, ctx);
+
+    // Wait for async replay
+    await new Promise((r) => setTimeout(r, 50));
+
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    const resets = calls.filter(([, msg]) => msg.type === "session_state_reset");
+    expect(resets).toHaveLength(0);
+    // No window applied, so no gap is disclosed either.
+    expect(calls.filter(([, msg]) => msg.type === "history_window")).toHaveLength(0);
+
+    // Should have replayed ALL events from seq 1 — the property that makes the
+    // missing reset harmless, via the reducer's `firstSeq === 1` rule.
+    const replays = calls.filter(([, msg]) => msg.type === "event_replay");
+    const allEvents = replays.flatMap(([, msg]: any) => msg.events);
+    expect(allEvents).toHaveLength(3);
+    expect(allEvents[0].seq).toBe(1);
+  });
+
+  it("emits exactly one session_state_reset, before history_window, when the stale-lastSeq replay IS windowed", async () => {
+    // 300 events against a 100 budget: a window necessarily applies.
+    const ctx = createMockContext({ maxReplayEvents: 100 });
+    for (let i = 0; i < 300; i++) ctx.eventStore.insertEvent("s1", makeEvent(`e${i}`));
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 9_999 }, subs, ctx);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    const types = calls.map(([, msg]) => msg.type);
+
+    // Exactly one — the pre-D3 code emitted two here (call-site + callee).
+    expect(types.filter((t) => t === "session_state_reset")).toHaveLength(1);
+
+    // Ordering is the contract: the gap must never be announced ahead of the
+    // state wipe that precedes its transcript.
+    const resetAt = types.indexOf("session_state_reset");
+    const windowAt = types.indexOf("history_window");
+    expect(windowAt).toBeGreaterThan(-1);
+    expect(resetAt).toBeLessThan(windowAt);
+    // ...and both precede any replayed events.
+    expect(windowAt).toBeLessThan(types.indexOf("event_replay"));
+  });
+
+  it("marks replaying during delta replay and clears after", async () => {
+    const markReplaying = vi.fn();
+    const clearReplaying = vi.fn();
+    const ctx = createMockContext({ markReplaying, clearReplaying });
+    for (let i = 0; i < 5; i++) ctx.eventStore.insertEvent("s1", makeEvent());
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 3 }, subs, ctx);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(markReplaying).toHaveBeenCalledWith(ctx.ws, "s1");
+    expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 5); // lastSent = 5
+  });
+
+  it("marks replaying for fresh subscribe (lastSeq: 0) when events exist", async () => {
+    // Regression: cold subscribe must suppress live events during paginated
+    // replay. Without suppression, a live `event` arriving between batches
+    // bumps the client's maxSeq past the next batch's firstSeq, triggering
+    // the `firstSeq <= maxSeq` reset rule on the client which wipes state
+    // and rebuilds from only the last batch — leaving the chat showing
+    // only the tail messages.
+    // See change: fix-cold-subscribe-replay-interleave.
+    const markReplaying = vi.fn();
+    const clearReplaying = vi.fn();
+    const ctx = createMockContext({ markReplaying, clearReplaying });
+    for (let i = 0; i < 3; i++) ctx.eventStore.insertEvent("s1", makeEvent());
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 0 }, subs, ctx);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(markReplaying).toHaveBeenCalledWith(ctx.ws, "s1");
+    expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 3); // lastSent = 3
+  });
+
+  it("does not mark replaying for fresh subscribe when there are no events", async () => {
+    const markReplaying = vi.fn();
+    const ctx = createMockContext({ markReplaying });
+    // No events inserted — hasEvents() returns false; falls through to the
+    // empty-session branch.
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 0 }, subs, ctx);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(markReplaying).not.toHaveBeenCalled();
+  });
+
+  it("marks replaying during stale lastSeq full replay", async () => {
+    const markReplaying = vi.fn();
+    const clearReplaying = vi.fn();
+    const ctx = createMockContext({ markReplaying, clearReplaying });
+    for (let i = 0; i < 3; i++) ctx.eventStore.insertEvent("s1", makeEvent());
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 100 }, subs, ctx);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(markReplaying).toHaveBeenCalledWith(ctx.ws, "s1");
+    expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 3);
+  });
+
+  it("forwards session.contextWindow into directoryService.loadSessionEvents on lazy load", async () => {
+    // Regression: ended sessions opened from disk must replay with the
+    // persisted contextWindow (e.g. 1M Sonnet beta) instead of the legacy
+    // 200k Claude inference. The wiring lives in subscription-handler:160 —
+    // this test pins that loadSessionEvents is invoked with session.contextWindow
+    // as its 3rd argument so future refactors cannot silently drop it.
+    // See change: fix-context-window-reload.
+    const loadSessionEvents = vi.fn(async () => ({ success: true, events: [] }));
+    const directoryService = { loadSessionEvents } as any;
+    const ctx = createMockContext({ directoryService });
+
+    // Restore an ENDED session with sessionFile + persisted contextWindow.
+    // No events in the store → falls into the lazy-load branch.
+    // (`restore()` takes the full DashboardSession; `register()` does not
+    // accept contextWindow as a registration param.)
+    ctx.sessionManager.restore({
+      id: "s-ctx",
+      cwd: "/test",
+      source: "tui",
+      status: "ended",
+      startedAt: 1000,
+      endedAt: 2000,
+      tokensIn: 0,
+      tokensOut: 0,
+      cost: 0,
+      contextWindow: 1_000_000,
+      sessionFile: "/sessions/s-ctx.jsonl",
+      sessionDir: "/sessions",
+      hidden: false,
+    } as any);
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s-ctx" }, subs, ctx);
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(loadSessionEvents).toHaveBeenCalledTimes(1);
+    expect(loadSessionEvents).toHaveBeenCalledWith("s-ctx", "/sessions/s-ctx.jsonl", 1_000_000);
+  });
+
+  it("does full replay when lastSeq is 0", async () => {
+    const ctx = createMockContext();
+    for (let i = 0; i < 3; i++) ctx.eventStore.insertEvent("s1", makeEvent());
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 0 }, subs, ctx);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    const resets = calls.filter(([, msg]) => msg.type === "session_state_reset");
+    expect(resets).toHaveLength(0); // No reset needed for fresh subscribe
+
+    const replays = calls.filter(([, msg]) => msg.type === "event_replay");
+    const allEvents = replays.flatMap(([, msg]: any) => msg.events);
+    expect(allEvents).toHaveLength(3);
+  });
+});
+
+// chat-markdown-local-images-and-math
+describe("replaySessionAssets — emits one asset_register per Session.assets entry", () => {
+  it("sends nothing when session has no assets", () => {
+    const ctx = createMockContext();
+    ctx.sessionManager.register({ id: "s1", cwd: "/c", source: "dashboard" } as any);
+    replaySessionAssets({} as any, "s1", ctx);
+    expect((ctx.sendTo as any).mock.calls).toHaveLength(0);
+  });
+
+  it("sends one asset_register per asset on the session", () => {
+    const ctx = createMockContext();
+    ctx.sessionManager.register({ id: "s1", cwd: "/c", source: "dashboard" } as any);
+    ctx.sessionManager.update("s1", {
+      assets: {
+        abc: { data: "AAAA", mimeType: "image/png" },
+        def: { data: "BBBB", mimeType: "image/svg+xml" },
+      },
+    } as any);
+    const ws = {} as any;
+    replaySessionAssets(ws, "s1", ctx);
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    const assetMsgs = calls.filter(([, m]) => m.type === "asset_register");
+    expect(assetMsgs).toHaveLength(2);
+    const byHash = Object.fromEntries(assetMsgs.map(([, m]: any) => [m.hash, m]));
+    expect(byHash.abc).toMatchObject({ data: "AAAA", mimeType: "image/png", sessionId: "s1" });
+    expect(byHash.def).toMatchObject({ data: "BBBB", mimeType: "image/svg+xml", sessionId: "s1" });
+  });
+
+  it("skips malformed asset entries defensively", () => {
+    const ctx = createMockContext();
+    ctx.sessionManager.register({ id: "s1", cwd: "/c", source: "dashboard" } as any);
+    // Force a malformed entry past the type check.
+    ctx.sessionManager.update("s1", {
+      assets: {
+        good: { data: "AAAA", mimeType: "image/png" },
+        bad: { data: 123, mimeType: "image/png" } as any,
+      },
+    } as any);
+    replaySessionAssets({} as any, "s1", ctx);
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    const assetMsgs = calls.filter(([, m]) => m.type === "asset_register");
+    expect(assetMsgs).toHaveLength(1);
+    expect((assetMsgs[0][1] as any).hash).toBe("good");
+  });
+});
+
+// fix-history-loading-false-empty-flash
+describe("handleSubscribe — cold-hydration heartbeat", () => {
+  // Fake only timers, NOT setImmediate — sendEventBatches yields via real
+  // setImmediate so batches still flush under `flush()`.
+  const TO_FAKE = ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] as const;
+  const HEARTBEAT_MS = 10000;
+
+  async function flush() {
+    for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+  }
+
+  function restoreEnded(ctx: BrowserHandlerContext, id: string) {
+    ctx.sessionManager.restore({
+      id, cwd: "/test", source: "tui", status: "ended",
+      startedAt: 1000, endedAt: 2000, tokensIn: 0, tokensOut: 0, cost: 0,
+      contextWindow: 200000, sessionFile: `/sessions/${id}.jsonl`,
+      sessionDir: "/sessions", hidden: false,
+    } as any);
+  }
+
+  function emptyNonTerminal(ctx: BrowserHandlerContext) {
+    return ((ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>).filter(
+      ([, m]) => m.type === "event_replay" && (m as any).events.length === 0 && (m as any).isLast === false,
+    );
+  }
+
+  it("4.7 emits >=1 heartbeat before a delayed loadSessionEvents resolves", () => {
+    vi.useFakeTimers({ toFake: [...TO_FAKE] });
+    try {
+      const loadSessionEvents = vi.fn(() => new Promise(() => {})); // never resolves
+      const ctx = createMockContext({ directoryService: { loadSessionEvents } as any });
+      ctx.getSubscribers = () => [ctx.ws];
+      restoreEnded(ctx, "s-cold");
+
+      handleSubscribe({ type: "subscribe", sessionId: "s-cold" }, new Set(), ctx);
+      // priming marker sent synchronously; one interval tick adds a heartbeat.
+      vi.advanceTimersByTime(HEARTBEAT_MS + 1);
+      expect(emptyNonTerminal(ctx).length).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("4.8 heartbeat stops once the first content batch flows; none after", async () => {
+    vi.useFakeTimers({ toFake: [...TO_FAKE] });
+    try {
+      const events = [makeEvent("message_update")];
+      const loadSessionEvents = vi.fn(async () => ({ success: true, events }));
+      const ctx = createMockContext({ directoryService: { loadSessionEvents } as any });
+      ctx.getSubscribers = () => [ctx.ws];
+      restoreEnded(ctx, "s-content");
+
+      handleSubscribe({ type: "subscribe", sessionId: "s-content" }, new Set(), ctx);
+      await flush(); // load resolves + content batch sends; stopHeartbeat runs
+
+      const before = emptyNonTerminal(ctx).length; // priming only
+      vi.advanceTimersByTime(HEARTBEAT_MS * 3);
+      expect(emptyNonTerminal(ctx).length).toBe(before);
+
+      const content = ((ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>)
+        .filter(([, m]) => m.type === "event_replay" && (m as any).events.length > 0);
+      expect(content.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("4.9 heartbeat stops on failure and on cancelled", async () => {
+    for (const err of ["boom", "cancelled"]) {
+      vi.useFakeTimers({ toFake: [...TO_FAKE] });
+      try {
+        const loadSessionEvents = vi.fn(async () => ({ success: false, error: err }));
+        const ctx = createMockContext({ directoryService: { loadSessionEvents } as any });
+        ctx.getSubscribers = () => [ctx.ws];
+        restoreEnded(ctx, `s-${err}`);
+
+        handleSubscribe({ type: "subscribe", sessionId: `s-${err}` }, new Set(), ctx);
+        await flush();
+
+        const before = emptyNonTerminal(ctx).length;
+        vi.advanceTimersByTime(HEARTBEAT_MS * 3);
+        expect(emptyNonTerminal(ctx).length).toBe(before);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  it("4.9 heartbeat never sends to a closed subscriber socket", () => {
+    vi.useFakeTimers({ toFake: [...TO_FAKE] });
+    try {
+      const closedSub = { readyState: 3, OPEN: 1 } as any;
+      const loadSessionEvents = vi.fn(() => new Promise(() => {}));
+      const ctx = createMockContext({ directoryService: { loadSessionEvents } as any });
+      ctx.getSubscribers = () => [closedSub];
+      restoreEnded(ctx, "s-closed");
+
+      handleSubscribe({ type: "subscribe", sessionId: "s-closed" }, new Set(), ctx);
+      vi.advanceTimersByTime(HEARTBEAT_MS * 2);
+
+      const sentToClosed = ((ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>)
+        .some(([w]) => w === closedSub);
+      expect(sentToClosed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// See change: cleanup-async-semantics-server-extension (test-plan #X1, #X2, #X3)
+//
+// Each of the three `sendEventBatches(...).then(...).catch(onReplayFailed)`
+// replay sites must OWN a rejection: `onReplayFailed` clears the replaying
+// flag with lastReplayedSeq 0 (so the socket is not left permanently muted by
+// `markReplaying`), logs the failure, and no unhandled rejection escapes.
+describe("handleSubscribe — replay rejection is owned (onReplayFailed)", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let unhandled: unknown[];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    unhandled = [];
+    process.on("unhandledRejection", onUnhandled);
+  });
+  afterEach(() => {
+    process.off("unhandledRejection", onUnhandled);
+    errorSpy.mockRestore();
+  });
+
+  async function flush() {
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  }
+
+  function loggedReplayFailure(): boolean {
+    return errorSpy.mock.calls.some(
+      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("[replay] event replay failed"),
+    );
+  }
+
+  it("X1 stale-lastSeq full replay: a rejected send clears replaying (seq 0) and is logged, no unhandled rejection", async () => {
+    const markReplaying = vi.fn();
+    const clearReplaying = vi.fn();
+    // Make the batch send throw so `sendEventBatches` rejects at the site.
+    const sendTo = vi.fn((_ws: unknown, msg: ServerToBrowserMessage) => {
+      if (msg.type === "event_replay") throw new Error("send failed");
+    });
+    const ctx = createMockContext({ markReplaying, clearReplaying, sendTo });
+    for (let i = 0; i < 3; i++) ctx.eventStore.insertEvent("s1", makeEvent());
+
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 100 }, new Set(), ctx);
+    await flush();
+
+    expect(markReplaying).toHaveBeenCalledWith(ctx.ws, "s1");
+    // onReplayFailed clears the flag with lastReplayedSeq 0 (no catch-up claimable).
+    expect(clearReplaying).toHaveBeenCalledTimes(1);
+    expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 0);
+    expect(loggedReplayFailure()).toBe(true);
+    expect(unhandled).toEqual([]);
+  });
+
+  it("X2 warm delta replay: a rejected send clears replaying (seq 0) and is logged, no unhandled rejection", async () => {
+    const markReplaying = vi.fn();
+    const clearReplaying = vi.fn();
+    const sendTo = vi.fn((_ws: unknown, msg: ServerToBrowserMessage) => {
+      if (msg.type === "event_replay") throw new Error("send failed");
+    });
+    const ctx = createMockContext({ markReplaying, clearReplaying, sendTo });
+    for (let i = 0; i < 5; i++) ctx.eventStore.insertEvent("s1", makeEvent());
+
+    // lastSeq 3 within range → delta (events 4,5) → the `events.length > 0` branch.
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 3 }, new Set(), ctx);
+    await flush();
+
+    expect(markReplaying).toHaveBeenCalledWith(ctx.ws, "s1");
+    expect(clearReplaying).toHaveBeenCalledTimes(1);
+    expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 0);
+    expect(loggedReplayFailure()).toBe(true);
+    expect(unhandled).toEqual([]);
+  });
+
+  it("X3 empty-delta replay: a rejected post-replay step is owned and logged, no unhandled rejection", async () => {
+    const clearReplaying = vi.fn();
+    // Empty delta → `sendEventBatches([])` resolves; the reject is injected in
+    // the chained `.then` step so the empty-branch `.catch(onReplayFailed)` runs.
+    const replayPendingUiRequests = vi.fn(() => {
+      throw new Error("post-replay step failed");
+    });
+    const ctx = createMockContext({ clearReplaying, replayPendingUiRequests });
+    for (let i = 0; i < 5; i++) ctx.eventStore.insertEvent("s1", makeEvent());
+
+    // lastSeq 5 === maxSeq → delta getEvents(6) is empty → the empty branch.
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 5 }, new Set(), ctx);
+    await flush();
+
+    // The empty branch does not markReplaying, but onReplayFailed still clears
+    // defensively with seq 0.
+    expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 0);
+    expect(loggedReplayFailure()).toBe(true);
+    expect(unhandled).toEqual([]);
+  });
+});
+
+describe("handleSubscribe — asset replay precedes events", () => {
+  it("sends asset_register messages before event_replay batches", async () => {
+    const ctx = createMockContext();
+    ctx.sessionManager.register({ id: "s1", cwd: "/c", source: "dashboard" } as any);
+    ctx.sessionManager.update("s1", {
+      assets: { h1: { data: "AAAA", mimeType: "image/png" } },
+    } as any);
+    ctx.eventStore.insertEvent("s1", makeEvent("message_update"));
+
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 0 }, subs, ctx);
+    await new Promise((r) => setTimeout(r, 50));
+
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    const firstAssetIdx = calls.findIndex(([, m]) => m.type === "asset_register");
+    const firstEventIdx = calls.findIndex(([, m]) => m.type === "event_replay");
+    expect(firstAssetIdx).toBeGreaterThanOrEqual(0);
+    expect(firstEventIdx).toBeGreaterThanOrEqual(0);
+    expect(firstAssetIdx).toBeLessThan(firstEventIdx);
+  });
+});
+
+// See change: show-replay-in-flight-indicator (test-plan #E5, #E6, #E7, #E8, #E9)
+//
+// R2: EVERY replay must terminate with exactly one `isLast: true` frame — an
+// empty payload included, so the client's in-flight flag always has a clearing
+// edge. E7/E9 are the falsification rows for Decision 6: a naive "always append
+// a terminal batch" implementation double-terminates on an exact batch multiple.
+describe("sendEventBatches — every replay terminates exactly once", () => {
+  const REPLAY_BATCH_SIZE = 200;
+  const openWs = () => ({ readyState: 1, OPEN: 1, bufferedAmount: 0 }) as any;
+
+  // Non-compactable events so batch maths is not confounded by compaction.
+  function window(n: number): Array<{ seq: number; event: DashboardEvent; bytes: number }> {
+    return Array.from({ length: n }, (_, i) => ({ seq: i + 1, event: makeEvent("turn_start"), bytes: 0 }));
+  }
+
+  async function sendAll(n: number) {
+    const sent: ServerToBrowserMessage[] = [];
+    await sendEventBatches(openWs(), "s1", window(n), (_w, m) => sent.push(m));
+    return sent.filter((m): m is Extract<ServerToBrowserMessage, { type: "event_replay" }> => m.type === "event_replay");
+  }
+
+  async function flush() {
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  }
+
+  const replayFrames = (ctx: BrowserHandlerContext) =>
+    ((ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>)
+      .map(([, m]) => m)
+      .filter((m): m is Extract<ServerToBrowserMessage, { type: "event_replay" }> => m.type === "event_replay");
+
+  it("E5 warm subscribe with an empty delta sends exactly one terminal frame", async () => {
+    const ctx = createMockContext();
+    for (let i = 0; i < 5; i++) ctx.eventStore.insertEvent("s1", makeEvent());
+
+    // lastSeq === maxSeq → delta is [] → the empty branch.
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 5 }, new Set(), ctx);
+    await flush();
+
+    const frames = replayFrames(ctx);
+    expect(frames).toHaveLength(1);
+    expect(frames[0].events).toEqual([]);
+    expect(frames[0].isLast).toBe(true);
+  });
+
+  it("E6 cold subscribe for a session with zero events terminates on the success path", async () => {
+    const loadSessionEvents = vi.fn(async () => ({ success: true, events: [] }));
+    const ctx = createMockContext({ directoryService: { loadSessionEvents } as any });
+    ctx.getSubscribers = () => [ctx.ws];
+    ctx.sessionManager.restore({
+      id: "s-cold", cwd: "/test", source: "tui", status: "ended",
+      startedAt: 1000, endedAt: 2000, tokensIn: 0, tokensOut: 0, cost: 0,
+      contextWindow: 200000, sessionFile: "/sessions/s-cold.jsonl",
+      sessionDir: "/sessions", hidden: false,
+    } as any);
+
+    handleSubscribe({ type: "subscribe", sessionId: "s-cold" }, new Set(), ctx);
+    await flush();
+
+    const frames = replayFrames(ctx);
+    // The pre-parse start marker (isLast:false) plus exactly one terminal frame.
+    expect(frames.filter((f) => f.isLast === true)).toHaveLength(1);
+    expect(frames.filter((f) => f.isLast === false)).toHaveLength(1);
+    const terminal = frames.find((f) => f.isLast === true);
+    expect(terminal?.events).toEqual([]);
+  });
+
+  it("E7 a payload of exactly REPLAY_BATCH_SIZE sends 1 frame and no trailing terminal", async () => {
+    const frames = await sendAll(REPLAY_BATCH_SIZE);
+    expect(frames).toHaveLength(1);
+    expect(frames[0].events).toHaveLength(200);
+    expect(frames[0].isLast).toBe(true);
+  });
+
+  it("E8 a payload of 201 events sends exactly 2 frames", async () => {
+    const frames = await sendAll(201);
+    expect(frames).toHaveLength(2);
+    expect(frames[0].events).toHaveLength(200);
+    expect(frames[0].isLast).toBe(false);
+    expect(frames[1].events).toHaveLength(1);
+    expect(frames[1].isLast).toBe(true);
+  });
+
+  it("E9 a payload of exactly 400 events sends 2 frames and no trailing terminal", async () => {
+    const frames = await sendAll(400);
+    expect(frames).toHaveLength(2);
+    expect(frames[1].events).toHaveLength(200);
+    expect(frames[1].isLast).toBe(true);
+  });
+});
+
+/**
+ * X5 — subscribing to an ARCHIVED id whose indexed transcript was deleted
+ * from disk. The handler resolves `sessionFile` from the archive index (the
+ * session is non-resident), the real hydration fails, and the browser gets a
+ * terminal empty replay instead of a hang or a crash.
+ *
+ * Uses the REAL `DirectoryService.loadSessionEvents` (in-process, no worker)
+ * so the fault is a genuine missing-file read, not a stubbed rejection.
+ * See change: archive-sessions-lazy-load.
+ */
+describe("handleSubscribe — archived id with a deleted transcript (X5)", () => {
+  function makeRealDirectoryService() {
+    return createDirectoryService(
+      {
+        getPinnedDirectories: () => [],
+        getSessionOrder: () => ({}),
+        setSessionOrder: () => {},
+        setPinnedDirectories: () => {},
+      } as never,
+      createMemorySessionManager(),
+      undefined,
+      { useLoadWorker: false },
+    );
+  }
+
+  it("replays a terminal empty frame, does not throw, and leaves resident sessions alone", async () => {
+    const missingFile = path.join(os.tmpdir(), `archived-gone-${Date.now()}.jsonl`);
+    expect(fs.existsSync(missingFile)).toBe(false);
+
+    const directoryService = makeRealDirectoryService();
+    const sessionArchive = {
+      getById: (id: string) =>
+        id === "arch-gone"
+          ? { id, cwd: "/repo", groupPath: "/repo", endedAt: 2, archivedAt: 3, sessionFile: missingFile }
+          : undefined,
+    } as never;
+    const ctx = createMockContext({ directoryService, sessionArchive });
+    ctx.getSubscribers = () => [ctx.ws];
+
+    // A resident, untouched neighbour.
+    ctx.sessionManager.restore({
+      id: "resident", cwd: "/repo", source: "tui", status: "ended",
+      startedAt: 1, endedAt: 2, hidden: false, dataUnavailable: false,
+    } as never);
+
+    const subs = new Set<string>();
+    expect(() => handleSubscribe({ type: "subscribe", sessionId: "arch-gone" }, subs, ctx)).not.toThrow();
+    await new Promise((r) => setTimeout(r, 200));
+
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    const replays = calls.filter(([, m]) => m.type === "event_replay") as Array<[any, any]>;
+    // Priming (non-terminal) frame, then the terminal empty one — the error frame.
+    // The priming frame is emitted ONLY when `sessionFile` resolved from the
+    // archive index, so its presence proves the archived-hydrate branch ran.
+    expect(replays[0][1]).toMatchObject({ sessionId: "arch-gone", isLast: false });
+    expect(replays.length).toBeGreaterThanOrEqual(2);
+    const last = replays[replays.length - 1][1];
+    expect(last).toMatchObject({ sessionId: "arch-gone", isLast: true });
+    expect(last.events).toEqual([]);
+
+    // The archived id never enters the live set…
+    expect(ctx.sessionManager.get("arch-gone")).toBeUndefined();
+    // …and the resident neighbour is untouched (no dataUnavailable spill-over).
+    expect(ctx.sessionManager.get("resident")).toMatchObject({ dataUnavailable: false });
+
+    directoryService.stopPolling();
+  });
+});
+/**
+ * Retained-hydration coalescing (design D4).
+ *
+ * Making the retained read `await` opened an interleaving the old synchronous
+ * read could not produce: previously its insert microtask drained before the
+ * next WebSocket macrotask, so a second concurrent subscribe always found
+ * `eventStore.hasEvents(...) === true` and never hydrated. Now both arms run —
+ * and `insertEvent` is NOT idempotent (fresh `seq` per call), so without
+ * coalescing the transcript would be inserted twice and both subscribers would
+ * render every message twice.
+ *
+ * These are the deterministic arms of test-plan #F1–#F4 and #X3–#X5: the load
+ * promise is held open by hand, so every interleaving is exact. The L3 arms in
+ * `tests/e2e/remote-transcript-read.spec.ts` exercise the same behaviour end to
+ * end, but cannot hold the hydration window open without a ~44 MB fixture.
+ * See change: offload-retained-transcript-replay.
+ */
+describe("handleSubscribe — retained hydration coalescing (D4)", () => {
+  // A UNIQUE session id per harness. The coalescing map is module-scope, so a
+  // hydration one test leaves in flight would otherwise make the next test's
+  // first subscribe a FOLLOWER of a stranger's leader — a test-order coupling
+  // that reads as a coalescing bug.
+  let seq = 0;
+  let SID = "remote-0";
+  let RAW = "";
+
+  function evt(eventType: string): DashboardEvent {
+    return { eventType, timestamp: Date.now(), data: {} };
+  }
+
+  function harness() {
+    SID = `remote-${++seq}`;
+    RAW = JSON.stringify({ type: "session", id: SID, timestamp: "2025-01-01T00:00:00Z" });
+    const socket = (name: string) => ({ readyState: 1, OPEN: 1, bufferedAmount: 0, name }) as any;
+    const socketA = socket("A");
+    const socketB = socket("B");
+    const sockets: any[] = [socketA, socketB];
+
+    // One deferred PER CALL, queued: `readRetainedTranscript` only reaches the
+    // loader after an `await`, so a test releases a hydration after a tick — and
+    // a self-healing follower can start a SECOND hydration, which must be
+    // releasable independently of the first.
+    const pendingHydrations: Array<(out: LoadResult) => void> = [];
+    const loadRetainedEvents = vi.fn(
+      () => new Promise<LoadResult>((resolve) => pendingHydrations.push(resolve)),
+    );
+    const loadSessionEvents = vi.fn(async (): Promise<LoadResult> => ({ success: true, events: [] }));
+    const store = {
+      readRaw: vi.fn(async () => ({ raw: RAW, complete: true, retained: true })),
+    } as unknown as RemoteTranscriptStore;
+
+    const sessionManager = createMemorySessionManager();
+    sessionManager.register({ id: SID, cwd: "/elsewhere", source: "tui", originDeviceId: "dev-1" } as any);
+
+    const sent: Array<{ ws: any; msg: any }> = [];
+    const broadcast = vi.fn();
+    const base = createMockContext({
+      sessionManager,
+      directoryService: { loadSessionEvents, loadRetainedEvents } as unknown as DirectoryService,
+      remoteTranscriptStore: store,
+      sendTo: ((ws: any, msg: any) => {
+        sent.push({ ws, msg });
+      }) as any,
+      broadcast: broadcast as any,
+      getSubscribers: () => sockets,
+    });
+
+    const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+    return {
+      socketA,
+      socketB,
+      sockets,
+      loadRetainedEvents,
+      loadSessionEvents,
+      sessionManager,
+      store,
+      sent,
+      broadcast,
+      eventStore: base.eventStore,
+      tick,
+      ctxFor: (ws: any) => ({ ...base, ws }),
+      subscribe: (ws: any) =>
+        handleSubscribe({ type: "subscribe", sessionId: SID }, new Set(), { ...base, ws }),
+      replaysFor: (ws: any) =>
+        sent
+          .filter((s) => s.ws === ws && s.msg.type === "event_replay")
+          .map((s) => s.msg) as any[],
+      resolveHydration: (out: LoadResult) => {
+        const resolve = pendingHydrations.shift();
+        if (!resolve) throw new Error("no hydration is pending to release");
+        resolve(out);
+      },
+    };
+  }
+
+  it("F2/F3 two concurrent cold subscribes coalesce onto ONE hydration, and the follower gets the full replay", async () => {
+    const h = harness();
+    h.subscribe(h.socketA);
+    h.subscribe(h.socketB);
+    // The follower registered before the leader's load even dispatched, and
+    // started no hydration of its own.
+    await h.tick();
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(1);
+
+    h.resolveHydration({ success: true, events: [evt("message_start"), evt("message_end")] });
+    await h.tick();
+    await h.tick();
+
+    // Inserted exactly once — `insertEvent` mints a fresh seq per call, so a
+    // double hydration is duplicated messages, not an idempotent overwrite.
+    expect(h.eventStore.getEvents(SID, 1)).toHaveLength(2);
+
+    // Both subscribers received the whole transcript, once each.
+    expect(h.replaysFor(h.socketA).flatMap((m) => m.events).map((e: any) => e.seq)).toEqual([1, 2]);
+    expect(h.replaysFor(h.socketB).flatMap((m) => m.events).map((e: any) => e.seq)).toEqual([1, 2]);
+
+    // …and the follower was never told the session is empty.
+    expect(
+      h.replaysFor(h.socketB).some((m) => m.isLast === true && m.events.length === 0),
+      "the follower received a terminal empty replay",
+    ).toBe(false);
+    expect((h.sessionManager.get(SID) as any)?.dataUnavailable).not.toBe(true);
+    expect((h.sessionManager.get(SID) as any)?.retainedTranscript).toBe("complete");
+  });
+
+  it("F4 a subscribe landing AFTER the leader settles takes the warm path, not a second hydration", async () => {
+    const h = harness();
+    h.subscribe(h.socketA);
+    await h.tick();
+    h.resolveHydration({ success: true, events: [evt("message_start")] });
+    await h.tick();
+    await h.tick();
+
+    const socketC = { readyState: 1, OPEN: 1, bufferedAmount: 0, name: "C" } as any;
+    h.sockets.push(socketC);
+    h.subscribe(socketC);
+    await h.tick();
+
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(1);
+    // The late subscriber replays from the store, so it still sees the history.
+    expect(h.replaysFor(socketC).flatMap((m) => m.events).length).toBeGreaterThan(0);
+  });
+
+  it("X4 a cancelled leader takes the silent exit: no insert, no broadcast, no re-stamp", async () => {
+    const h = harness();
+    h.subscribe(h.socketA);
+    await h.tick();
+    h.resolveHydration({ success: false, events: [], error: "cancelled" });
+    await h.tick();
+    await h.tick();
+
+    // Cancellation is surfaced DISTINCTLY by `readRetainedTranscript`; folding
+    // it into `{events: [], state}` would stamp `retainedTranscript` and
+    // broadcast `session_updated` after the last subscriber had already left.
+    expect(h.eventStore.getEvents(SID, 1)).toHaveLength(0);
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect((h.sessionManager.get(SID) as any)?.retainedTranscript).toBeUndefined();
+    expect((h.sessionManager.get(SID) as any)?.dataUnavailable).not.toBe(true);
+  });
+
+  it("X5 a failed leader releases its followers and clears the in-flight entry", async () => {
+    const h = harness();
+    h.subscribe(h.socketA);
+    h.subscribe(h.socketB);
+    await h.tick();
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(1);
+
+    h.resolveHydration({ success: false, events: [], error: "replay boom" });
+    await h.tick();
+    await h.tick();
+
+    // A failed hydration still releases the leaf in the map…
+    h.subscribe(h.sockets[0]);
+    await h.tick();
+    // …so the next cold subscribe starts a FRESH hydration rather than joining
+    // a promise that already settled.
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(2);
+    // Settle it (silently) so neither its heartbeat nor its in-flight entry
+    // outlives the test.
+    h.resolveHydration({ success: false, events: [], error: "cancelled" });
+    await h.tick();
+    await h.tick();
+  });
+
+  it("X3 a replay failure keeps the state and does NOT mark the session unavailable", async () => {
+    const h = harness();
+    h.subscribe(h.socketA);
+    await h.tick();
+    // `readRetainedTranscript` maps every non-cancel failure to `{events: [],
+    // state}` — the bytes really were transferred, so the state stands.
+    h.resolveHydration({ success: false, events: [], error: "parse boom" });
+    await h.tick();
+    await h.tick();
+
+    expect((h.sessionManager.get(SID) as any)?.dataUnavailable).not.toBe(true);
+    expect((h.sessionManager.get(SID) as any)?.retainedTranscript).toBe("complete");
+  });
+
+  /**
+   * R3 — the leader's fan-out drains the subscriber set, but it AWAITS per
+   * subscriber, and the coalescing entry stays registered until that drain
+   * finishes. A socket subscribing mid-drain is therefore a follower (it starts
+   * no hydration) that a pre-taken snapshot would miss entirely: no terminal
+   * frame, and a heartbeat stopped when the leader settles.
+   */
+  it("R3 a follower the leader's fan-out never reached still gets a replay", async () => {
+    const h = harness();
+    h.subscribe(h.socketA);
+    h.subscribe(h.socketB);
+    await h.tick();
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(1);
+
+    // Simulate the miss: B is not in the live subscriber set when the leader
+    // replays, exactly as it would be if it had subscribed while an earlier
+    // batch was in flight.
+    h.sockets.length = 0;
+    h.sockets.push(h.socketA);
+    h.resolveHydration({ success: true, events: [evt("message_start"), evt("message_end")] });
+    await h.tick();
+    await h.tick();
+
+    // B self-heals from the store, so it ends up with the history exactly once.
+    expect(h.replaysFor(h.socketB).flatMap((m) => m.events).map((e: any) => e.seq)).toEqual([1, 2]);
+  });
+
+  /**
+   * R4 — a follower that joins after the last subscriber left has CANCELLED the
+   * leader, but before that leader's promise settles, would otherwise wait on a
+   * hydration that ingests nothing and replays to nobody: a stopped heartbeat
+   * and an empty screen, permanently.
+   */
+  it("R4 a follower of a cancelled leader starts its own hydration", async () => {
+    const h = harness();
+    h.subscribe(h.socketA);
+    h.subscribe(h.socketB);
+    await h.tick();
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(1);
+
+    h.resolveHydration({ success: false, events: [], error: "cancelled" });
+    await h.tick();
+    await h.tick();
+
+    // A cancelled leader silently ingests nothing, so the waiting follower must
+    // not be left empty: it re-drives the subscribe and becomes the new leader.
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(2);
+
+    h.resolveHydration({ success: true, events: [evt("message_start")] });
+    await h.tick();
+    await h.tick();
+    expect(h.replaysFor(h.socketB).flatMap((m) => m.events).length).toBeGreaterThan(0);
+  });
+
+  it("R4b a follower that unsubscribed while waiting does NOT resurrect itself", async () => {
+    const h = harness();
+    h.subscribe(h.socketA);
+    // B subscribes on its OWN `subs` set, then leaves before the leader settles.
+    const subsB = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: SID }, subsB, h.ctxFor(h.socketB));
+    await h.tick();
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(1);
+    subsB.delete(SID);
+
+    h.resolveHydration({ success: false, events: [], error: "cancelled" });
+    await h.tick();
+    await h.tick();
+
+    // The self-heal must not re-add a subscription the client already dropped.
+    expect(h.loadRetainedEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("F1 the heartbeat keeps firing while the hydration is in flight and stops on settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      h.subscribe(h.socketA);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const heartbeats = () =>
+        h.replaysFor(h.socketA).filter((m) => m.isLast === false && m.events.length === 0).length;
+      const priming = heartbeats();
+      expect(priming).toBeGreaterThanOrEqual(1);
+
+      // Beyond the client's hydration ceiling: the empty non-terminal marker
+      // must keep arriving or the view flashes "No messages yet".
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(heartbeats()).toBeGreaterThan(priming);
+
+      h.resolveHydration({ success: true, events: [evt("message_start")] });
+      await vi.advanceTimersByTimeAsync(0);
+      const atSettle = h.replaysFor(h.socketA).length;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      // `stopHeartbeat` on the success path: a stranded 10 s interval would leak
+      // into the rest of the process's life.
+      expect(h.replaysFor(h.socketA).length).toBe(atSettle);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * A register supersedes a cold hydration that is loading, resolved-but-not-inserted,
+ * or already fanning out. See change: fix-large-session-resume-replay (D6),
+ * test-plan #X2, #X3.
+ */
+describe("handleSubscribe — register supersedes cold hydration", () => {
+  const SID = "s-hyd";
+  const msgEvents = (n: number): Array<{ eventType: string; timestamp: number; data: Record<string, unknown> }> =>
+    Array.from({ length: n }, (_, i) => ({
+      eventType: "message_end",
+      timestamp: 1,
+      data: { message: { role: "user", content: [{ type: "text", text: `m${i}` }] } },
+    }));
+
+  function setup(load: () => Promise<LoadResult>, sendTo?: (ws: any, msg: any) => void) {
+    const replayState = createReplayState();
+    const ws = { readyState: 1, OPEN: 1, bufferedAmount: 0 } as any;
+    const sessionManager = createMemorySessionManager();
+    sessionManager.register({ id: SID, cwd: "/x", sessionFile: "/x/s.jsonl", source: "terminal" } as any);
+    const ctx = createMockContext({
+      ws,
+      sessionManager,
+      replayState,
+      sendTo: vi.fn(sendTo ?? (() => {})),
+      getSubscribers: () => [ws],
+      directoryService: { loadSessionEvents: vi.fn(load) } as unknown as DirectoryService,
+    });
+    return { ctx, replayState };
+  }
+
+  // test-plan #X2
+  it("X2: a load that resolved but whose continuation has not run inserts nothing once a register lands", async () => {
+    let resolve!: (r: LoadResult) => void;
+    const { ctx, replayState } = setup(() => new Promise<LoadResult>((r) => { resolve = r; }));
+    handleSubscribe({ type: "subscribe", sessionId: SID }, new Set(), ctx);
+    // Resolve, then register in the SAME tick: the `.then` continuation is still queued.
+    resolve({ success: true, events: msgEvents(3), entryCount: 3, leafEntryId: "e2" });
+    replayState.hydration.bumpRegister(SID);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(ctx.eventStore.getEvents(SID, 1)).toHaveLength(0);
+    expect(replayState.hydration.getFingerprint(SID)).toBeUndefined();
+  });
+
+  it("a hydration rebuilds the store: the bridge-learned pair is dropped so a later register cannot skip over it", async () => {
+    const { ctx, replayState } = setup(async () => ({ success: true, events: msgEvents(2), entryCount: 2, leafEntryId: "e1" }));
+    replayState.hydration.setBridgeLearned(SID, { entryCount: 2, leafEntryId: "e1" });
+    handleSubscribe({ type: "subscribe", sessionId: SID }, new Set(), ctx);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(replayState.hydration.getBridgeLearned(SID)).toEqual({ entryCount: undefined, leafEntryId: undefined });
+  });
+
+  it("a hydration without a resolvable leaf also drops the bridge-learned pair and records no fingerprint", async () => {
+    const { ctx, replayState } = setup(async () => ({ success: true, events: msgEvents(2) }));
+    replayState.hydration.setBridgeLearned(SID, { entryCount: 2, leafEntryId: "e1" });
+    handleSubscribe({ type: "subscribe", sessionId: SID }, new Set(), ctx);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(replayState.hydration.getBridgeLearned(SID).entryCount).toBeUndefined();
+    expect(replayState.hydration.getFingerprint(SID)).toBeUndefined();
+  });
+
+  it("X2: an unsuperseded load inserts and records the fingerprint", async () => {
+    const { ctx, replayState } = setup(async () => ({ success: true, events: msgEvents(3), entryCount: 3, leafEntryId: "e2" }));
+    handleSubscribe({ type: "subscribe", sessionId: SID }, new Set(), ctx);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(ctx.eventStore.getEvents(SID, 1)).toHaveLength(3);
+    expect(replayState.hydration.getFingerprint(SID)).toEqual({
+      entryCount: 3,
+      leafEntryId: "e2",
+      storeMaxSeq: ctx.eventStore.getMaxSeq(SID),
+    });
+  });
+
+  // test-plan #X3
+  it("X3: no hydration batch reaches the browser after the register's session_state_reset", async () => {
+    const log: any[] = [];
+    let registered = false;
+    let hydrationRef!: ReturnType<typeof createReplayState>["hydration"];
+    const { ctx, replayState } = setup(
+      async () => ({ success: true, events: msgEvents(6_000), entryCount: 6000, leafEntryId: "e5999" }),
+      (_ws, msg) => {
+        log.push(msg);
+        if (!registered && msg.type === "event_replay" && msg.events.length > 0) {
+          // The bridge registers mid fan-out: generation bump + its wipe's reset.
+          registered = true;
+          hydrationRef.bumpRegister(SID);
+          log.push({ type: "session_state_reset" });
+        }
+      },
+    );
+    hydrationRef = replayState.hydration;
+    handleSubscribe({ type: "subscribe", sessionId: SID }, new Set([SID]), ctx);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(registered).toBe(true);
+    // the LAST reset is the register's; the windowed hydration sent its own first
+    const resetAt = log.map((m) => m.type).lastIndexOf("session_state_reset");
+    expect(log.filter((m) => m.type === "event_replay" && m.events.length > 0).length).toBeGreaterThan(0);
+    const after = log.slice(resetAt + 1).filter((m) => m.type === "event_replay" && m.events.length > 0);
+    expect(after).toEqual([]);
+  });
+});

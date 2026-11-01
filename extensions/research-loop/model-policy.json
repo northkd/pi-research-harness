@@ -1,0 +1,73 @@
+{
+  "schema": "pi-research-loop.model-policy.v1",
+  "updatedAt": "2026-10-20",
+  "provider": "cliproxy",
+  "principle": "Strong models plan and judge; light models execute. Model choice is explicit per role and verified at dispatch time.",
+  "tiers": {
+    "heavy": {
+      "description": "Core theory derivation, novelty judgment, adversarial review. Use only for reasoning that changes the research direction.",
+      "models": [
+        "cliproxy/gpt-6-astra(high)[1m]",
+        "cliproxy/gpt-6-astra(xhigh)[1m]",
+        "cliproxy/gpt-6.1-sol(max)[1m]",
+        "cliproxy/gpt-6.1-sol(high)[1m]"
+      ],
+      "fallback": "cliproxy/glm-5.3[1m]",
+      "fallbackNote": "GLM-5.3 has limited quota; use only when both Astra and Sol are unavailable."
+    },
+    "light": {
+      "description": "Literature retrieval, numerics execution, file and tool work, summarization.",
+      "models": [
+        "cliproxy/deepseek-v4.1-flash[1m]",
+        "cliproxy/glm-5.3-flash[1m]"
+      ],
+      "fallbackChain": [
+        "cliproxy/deepseek-flash-1017[1m]"
+      ],
+      "fallbackNote": "Volcano Ark first (deepseek-v4.1-flash / glm-5.3-flash); when quota is exhausted use SquareAPI deepseek-flash-1017. DeepSeek official flash is not registered as a Pi provider here, so it is not in the chain."
+    },
+    "vision": {
+      "description": "Visual and aesthetic work: figure layout, poster, presentation.",
+      "models": [
+        "cliproxy/kimi-k2.8-preview[1m]"
+      ],
+      "imageModels": [
+        "cliproxy/gpt-image-2.5[1m]",
+        "cliproxy/gpt-image-2.5-flare[1m]",
+        "cliproxy/gpt-image-2.5-sunburst[1m]"
+      ],
+      "imageNote": "Prefer the logged-in web GPT-Pro for publication figures; gpt-image models are for illustration, not precise diagrams."
+    },
+    "literature": {
+      "description": "Literature retrieval uses agy with a Gemini flash model, not a Pi subagent model.",
+      "external": "agy --model gemini-3.8-flash-high",
+      "note": "Facts from agy still require first-party verification."
+    }
+  },
+  "roles": {
+    "research-theory": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(xhigh)[1m]", "mustBeDistinct": "theory-derivation-pair" },
+    "research-critic": { "tier": "heavy", "model": "cliproxy/gpt-6.1-sol(max)[1m]", "mustBeDistinct": "from-theory" },
+    "research-mainline-supervisor": { "tier": "heavy", "model": "cliproxy/gpt-6.1-sol(max)[1m]", "fixed": true },
+    "research-strategist": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(high)[1m]", "note": "Proposes directions; must not also judge them." },
+    "research-reframer": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(xhigh)[1m]", "note": "Only invoked when stuck; output needs critic review." },
+    "research-explorer": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(high)[1m]", "note": "Two parallel explorers must use different model families when possible." },
+    "research-literature": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]", "externalTool": "agy/gemini-3.8-flash-high" },
+    "research-numerics": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]" },
+    "research-ssh": { "tier": "light", "model": "cliproxy/glm-5.3-flash[1m]" },
+    "research-web-oracle": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]", "note": "Operates the browser; the scientific answer comes from the web model the user selects." },
+    "research-agy": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]" },
+    "research-agy-sci": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]" },
+    "research-model-assessor": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(high)[1m]" }
+  },
+  "constraints": {
+    "heavyModelPolicy": "ChatGPT Pro quota is spent only on Astra high/xhigh and Sol max/high. Never bind 5.6-luna, gpt-6-luna or unlisted models for heavy roles.",
+    "independenceCheck": "A derivation pair must use two different model families; same-family pairs are recorded as correlated, not independent. The jury must differ from both derivations.",
+    "actualModelRecording": "Every dispatch records requested model and observed model; gate compares observed, not requested.",
+    "fallbackMustBeLogged": "Any fallback or downgrade is written to the ledger with the reason.",
+    "externalProfileLimit": "codex-exec and claude-code profiles do not support model override; a model-pinned review cannot be routed through them."
+  },
+  "resourceGate": {
+    "memAvailableMiB": 1024,
+    "note": "Unified with AGENTS.md. Must stay above earlyoom's ~10% threshold (about 768 MiB)."
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "name": "@blackbelt-technology/pi-dashboard-speed-plugin",
+  "version": "0.8.0",
+  "description": "Real-time token output speed, latency and context monitor for pi-dashboard",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.tsx",
+      "default": "./src/index.tsx"
+    },
+    "./client": {
+      "types": "./src/index.tsx",
+      "default": "./src/index.tsx"
+    },
+    "./server": {
+      "types": "./src/server/index.ts",
+      "default": "./src/server/index.ts"
+    }
+  },
+  "files": [
+    "src/"
+  ],
+  "pi-dashboard-plugin": {
+    "id": "speed-monitor",
+    "displayName": "Speed Monitor",
+    "priority": 100,
+    "client": "./src/index.tsx",
+    "server": "./src/server/index.ts",
+    "claims": []
+  },
+  "dependencies": {
+    "@blackbelt-technology/dashboard-plugin-runtime": "^0.8.0",
+    "@blackbelt-technology/pi-dashboard-shared": "^0.8.0",
+    "@mdi/js": "^7.4.47",
+    "@mdi/react": "^1.6.1"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vitest": "^4.0.0"
+  }
+}

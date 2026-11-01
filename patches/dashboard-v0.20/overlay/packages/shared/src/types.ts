@@ -1,0 +1,1756 @@
+// Type-only (erased at emit), so this module keeps its zero-runtime-dependency
+// character. `HostPressure` is defined beside the thresholds that produce it so
+// the verdict is not described twice. See change: fix-false-unresponsive-badge.
+import type { HostPressure } from "./host-pressure.js";
+
+/**
+ * The auto-namer's enumerated durable state set: carried across an extension
+ * reload as VALUES (never the namer object, whose closures would hold a stale
+ * connection and ctx) and persisted into `.meta.json` so a permanent stop also
+ * survives a process restart.
+ * See change: fix-auto-naming-reasoning-model (design D7).
+ */
+export interface AutoNamerPersistedState {
+  hardStopped: boolean;
+  errorEmitted: boolean;
+  attemptsUsed: number;
+  starvedCount: number;
+  waitingCount: number;
+  sawStarved: boolean;
+  stoppedModelRef?: string;
+  stopCause?: string;
+  /** The cause-matched stop reason, so a later re-report stays actionable. */
+  stoppedReason?: string;
+  nameSource?: "auto" | "user" | "system";
+  hasAutoName: boolean;
+  lastSelfApplied?: string;
+  /** Last name a dashboard system rename applied (echo witness). */
+  lastSystemApplied?: string;
+}
+
+/** Source environment where a pi session is running */
+/** Agent driver behind a session. Absent ≡ pi. See change: add-acp-session-driver. */
+export type SessionDriver = "pi" | "acp";
+
+export type SessionSource =
+  | "tui"
+  | "zed"
+  | "tmux"
+  | "dashboard"
+  | "terminal"
+  | "embed"
+  | "unknown";
+
+/**
+ * Orthogonal disposability marker for a session, independent of `source`.
+ * `"ephemeral"` = a machine-fronted session the server MAY reclaim (idle
+ * reaper + active-session caps act ONLY on these); `"durable"` = an
+ * interactive session that keeps today's forever-alive semantics. Absent is
+ * treated as `"durable"` (see `effectiveLifecyclePolicy` / `isEphemeral`), so
+ * legacy bridges and pre-change `.meta.json` load unchanged. Any front (embed
+ * widget, chat gateway, automation) may set it. Persisted to `.meta.json` and
+ * restored on cold start so a restart never reclassifies an ephemeral session.
+ * See change: add-embed-session-lifecycle.
+ */
+export type LifecyclePolicy = "ephemeral" | "durable";
+
+/** Current status of a session */
+export type SessionStatus = "active" | "idle" | "streaming" | "ended";
+
+/**
+ * Why a session reached `status: "ended"`. One vocabulary, reused by
+ * `DashboardSession.closedReason` and the persisted `.meta.json` liveness
+ * marker — never a third attribution field beside `movedTo`.
+ *
+ *   - `manual`       — the user asked for the close (shutdown / force-kill).
+ *   - `process_gone` — the session's process was established to be ABSENT: a
+ *                      pid probed gone at grace expiry, or the zombie-
+ *                      normalization check. A REMOTE-origin pid is never probed
+ *                      (foreign PID namespace) and reads `unknown` instead.
+ *   - `spawn_failed` — pi could not be started / restarted.
+ *   - `unknown`      — a real terminal state whose cause could not be
+ *                      established. A member, never an absence: "we do not
+ *                      know" is a different fact from "never examined".
+ *
+ * `isRecoveryCandidate` excludes only `manual`; every other value (and an
+ * absent reason) passes through unchanged. See change:
+ * stop-discarding-known-session-state.
+ */
+export type ClosedReason = "manual" | "process_gone" | "spawn_failed" | "unknown";
+
+/**
+ * Per-session git-worktree state. Populated by the bridge's VCS probe when the
+ * shared checkout-root resolution reports the cwd as a LINKED WORKTREE — its
+ * `git rev-parse --git-dir` differs from its `--git-common-dir` — AND a
+ * plausible main checkout resolves for it. Absent (or `undefined`) otherwise,
+ * which now covers a submodule, a `--separate-git-dir` checkout, a bare
+ * repository, and a worktree of a bare hub (a linked worktree whose repository
+ * has no working tree to name). Clients MUST treat absence as "not a
+ * worktree". Used by the dashboard to (a) group worktree sessions under their
+ * parent repo, (b) render the WORKSPACE-subcard worktree pill.
+ *
+ * `mainPath` is the RESOLVED main checkout, never `dirname(--git-common-dir)`:
+ * that derivation names a real checkout only when the git dir happens to sit
+ * inside one, and otherwise yields a nonexistent `…/.git/modules/<name>` path
+ * or a real but unrelated directory. It never contains a `.git` path segment.
+ * See change: add-git-checkout-root-resolver.
+ *
+ * `base` is post-create metadata, set by the server when a session is
+ * spawned via the dashboard's worktree dialog and persisted to
+ * `.meta.json` as `gitWorktreeBase`. The bridge itself never populates
+ * `base` (git does not record the ref a worktree was forked from).
+ *
+ * See change: add-worktree-spawn-dialog.
+ */
+export interface GitWorktreeInfo {
+  /** Absolute path of the main worktree (parent repo root). */
+  mainPath: string;
+  /** Basename of the worktree directory (typically `<repo>/.worktrees/<name>`). */
+  name: string;
+  /** Base ref the worktree was created from. Server-supplied, optional. */
+  base?: string;
+}
+
+/** Lowercased GitHub PR state. Draft is a separate flag (`gitPrDraft`). */
+export type GitPrState = "open" | "closed" | "merged";
+/** Collapsed PR checks summary. See `platform/check-rollup.ts`. */
+export type GitPrChecks = "passing" | "failing" | "pending" | "none";
+
+/**
+ * Working-tree dirtiness + upstream drift for a cwd, parsed from one
+ * `git status --porcelain=v2 --branch` call. Keyed by cwd, not by session:
+ * sessions sharing a cwd share one working tree, so this state is identical
+ * for all of them. Absent = legacy bridge / inconclusive probe; the client
+ * renders no dirty pill.
+ *
+ * `dirtyCount` = staged + unstaged + untracked FILES (not hunks). A file
+ * that is both staged and has further unstaged edits counts once toward
+ * `dirtyCount` but is reflected in both `staged` and `unstaged`.
+ * `ahead`/`behind` are 0 when there is no upstream.
+ *
+ * See change: add-session-uncommitted-indicator-and-commit.
+ */
+export interface GitStatus {
+  /** Distinct changed files: staged ∪ unstaged ∪ untracked. */
+  dirtyCount: number;
+  /** Files with staged changes (index differs from HEAD). */
+  staged: number;
+  /** Files with unstaged changes (worktree differs from index). */
+  unstaged: number;
+  /** Untracked files. */
+  untracked: number;
+  /** Commits ahead of upstream (0 when no upstream). */
+  ahead: number;
+  /** Commits behind upstream (0 when no upstream). */
+  behind: number;
+}
+
+/** Severity a notification may carry. See change: split-notify-from-prompt-request. */
+export type NotifyLevel = "info" | "success" | "warning" | "error";
+
+/** One retained notification row. See change: split-notify-from-prompt-request. */
+export interface NotifyLogEntry {
+  notifyId: string;
+  message: string;
+  level?: NotifyLevel;
+  /** Emit time, epoch ms. Stamped by the bridge; the server backfills its receipt time when absent/invalid. See change: collapse-and-order-notify-rows. */
+  ts?: number;
+}
+
+/** Host-owned association only; never a material or external-model grant. */
+export interface ResWorkflowParticipation {
+  canonicalCwd: string;
+  joinedAt: string;
+  via: "spawn" | "manual" | "adoption";
+}
+
+/** A dashboard session representing a connected pi instance */
+export interface DashboardSession {
+  id: string;
+  cwd: string;
+  name?: string;
+  /**
+   * Provenance of the current name. `"auto"` = bridge auto-naming; `"user"` =
+   * a dashboard or in-pi rename. Absent = never named. Drives the auto-naming
+   * lockout. See change: add-auto-session-naming.
+   */
+  nameSource?: "auto" | "user" | "system";
+  /**
+   * Witness: the name `nameSource` (auto/system) was recorded FOR. Cleared when
+   * provenance becomes user/absent. See change: investigate-auto-name-provenance-relabel.
+   */
+  nameSourceFor?: string;
+  /**
+   * The auto-namer's durable stop state, restored on cold start so a
+   * permanent stop survives a process restart rather than re-spending a full
+   * attempt budget. See change: fix-auto-naming-reasoning-model (design D7).
+   */
+  autoNamerState?: AutoNamerPersistedState;
+  source: SessionSource;
+  /** Agent driver. Absent ≡ pi. Set from `session_register.driver`; persisted. See change: add-acp-session-driver (D12). */
+  driver?: SessionDriver;
+  /** Configured ACP agent id when `driver === "acp"`. Persisted. */
+  acpAgentId?: string;
+  /**
+   * Disposability marker. Absent ⇒ `"durable"`. Only `"ephemeral"` sessions
+   * are governed by the idle reaper and active-session caps. Read via
+   * `effectiveLifecyclePolicy` / `isEphemeral`, never compared raw (so absent
+   * defaults correctly). Persisted to `.meta.json`; restored on cold start.
+   * See change: add-embed-session-lifecycle.
+   */
+  lifecyclePolicy?: LifecyclePolicy;
+  /**
+   * Paired-device id of the host this session RAN on, when that host is not
+   * this one. Absent means local — which is what every pre-existing session is,
+   * so absent must keep meaning "our filesystem" (task 11.12).
+   *
+   * Derived server-side from the bridge's credential, never from a field the
+   * bridge sends: a self-reported origin is a claim by the party being
+   * identified. Display-safe, but its real job is gating every filesystem read
+   * of `sessionFile` — two hosts with the same username produce the same path.
+   * See change: add-pi-gateway-transport-identity (tasks 11.7, 11.8).
+   */
+  originDeviceId?: string;
+  /**
+   * How much of a REMOTE-origin session's transcript this dashboard actually
+   * holds. Set on hydration; absent for every local session.
+   *
+   *   - `complete`   — the origin's file was transferred to its end.
+   *   - `incomplete` — a transfer happened and stopped early; more existed.
+   *   - `absent`     — no transfer ever happened; nothing is missing.
+   *
+   * Three values, not a boolean, because the empty screen a user is looking at
+   * has two different causes and they call for opposite responses. A partial
+   * transfer presented as the whole conversation is the failure this prevents.
+   * See change: serve-retained-remote-transcripts (task 2.2).
+   */
+  retainedTranscript?: "complete" | "incomplete" | "absent";
+  /**
+   * Set when this session left for another dashboard instance (D11, task 9.3).
+   *
+   * The session's `status` stays `"ended"` — it genuinely did end HERE — but a
+   * plain `ended` with no explanation is indistinguishable from a crash, which
+   * is the exact confusion this field exists to remove. Absent means the
+   * session ended for any other reason.
+   * See change: add-pi-gateway-transport-identity.
+   */
+  movedTo?: { instanceId: string; endpoint?: string; at: number };
+  status: SessionStatus;
+  /**
+   * True while the session is compacting its context. Derived server-side
+   * from the bridge-forwarded `session_before_compact` (start) and
+   * `session_compact` (end) events, because `SessionStatus` has no
+   * compaction member. Consumed by the reload dispatcher: pi runs an
+   * extension command immediately even mid-compaction, and `ctx.reload()`
+   * would invalidate the runner, so a compacting session refuses a reload.
+   * Cleared on compaction end and never carried onto a re-registration.
+   * See change: fix-out-of-band-reload.
+   */
+  compacting?: boolean;
+  model?: string;
+  thinkingLevel?: string;
+  startedAt: number;
+  endedAt?: number;
+  /**
+   * Epoch ms timestamp of the most recent activity event observed for this
+   * session. Server-managed: stamped in `event-wiring.ts` whenever an
+   * `event_forward` arrives whose `eventType` is on the activity-event
+   * allowlist (`isActivityEvent`). NOT persisted to `.meta.json`; cold-start
+   * seeded from `events.jsonl` mtime in `session-scanner.ts`. Drives the
+   * session-card relative-time badge via `selectBadgeTimestamp`.
+   * See change: session-card-last-activity-badge.
+   */
+  lastActivityAt?: number;
+  /**
+   * Epoch ms of the latest bridge-normalized `agent_settled` (the version-
+   * agnostic "run at rest" mark — native on pi ≥ 0.80.4, synthesized on the
+   * floor). Server-captured in `event-wiring.ts`; NOT persisted; cold-start
+   * seeded from `events.jsonl` mtime in `session-scanner.ts` so a rehydrated
+   * quiescent session is evaluable without waiting for a fresh run to settle.
+   * Read by the lifecycle quiescence gate (never an inferred `status`).
+   * See change: add-embed-session-lifecycle.
+   */
+  lastSettledAt?: number;
+  /**
+   * Epoch ms of the latest `agent_start`. Newer than `lastSettledAt` ⇒ the
+   * session is mid-run (not at rest). Server-captured in `event-wiring.ts`; NOT
+   * persisted and NOT cold-start seeded (a rehydrated session has no run in
+   * flight ⇒ at rest). See change: add-embed-session-lifecycle.
+   */
+  lastRunStartedAt?: number;
+  /**
+   * Server-managed per-session unread bit. `true` when an attention-worthy
+   * event (turn finished, ask_user appeared, agent_end with error) fired
+   * while no browser was viewing the session. Cleared when any browser
+   * sends `session_view`. Persisted to `.meta.json` so it survives reload.
+   * Bridges SHALL NOT send this field.
+   * See change: session-card-unread-stripes.
+   */
+  unread?: boolean;
+  tokensIn?: number;
+  tokensOut?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  cost?: number;
+  /**
+   * Version of the stats extractor the totals were derived under (server-only).
+   * Persisted via `sessionToMeta` so a full-overwrite save keeps it.
+   * See change: count-non-message-usage.
+   */
+  statsExtractorVersion?: number;
+  currentTool?: string | null;
+  gitBranch?: string;
+  gitBranchUrl?: string;
+  gitPrNumber?: number | null;
+  gitPrUrl?: string | null;
+  /**
+   * PR status for the session's branch (bridge `GH_PR_STATUS` probe on its
+   * own ≥120 s cadence). Absent = unknown / older bridge; `null` = no PR.
+   * Not persisted. See change: redesign-composer-session-strip (D5).
+   */
+  gitPrState?: GitPrState | null;
+  gitPrDraft?: boolean | null;
+  gitPrChecks?: GitPrChecks | null;
+  /** Epoch ms of the last successful PR detection (freshness gate for Merge). */
+  gitPrCheckedAt?: number | null;
+  /**
+   * Working-tree dirtiness + upstream drift, sourced hybrid: passive
+   * broadcast on the bridge's 30 s VCS tick (`git_info_update`) plus an
+   * on-demand `GET /api/git/status` refresh. Keyed conceptually by cwd
+   * (sessions sharing a cwd share one tree). Absent = legacy bridge /
+   * inconclusive probe; the client renders no dirty pill.
+   * See change: add-session-uncommitted-indicator-and-commit.
+   */
+  gitStatus?: GitStatus;
+  /**
+   * pi-coding-agent version the session is actually running, reported by the
+   * bridge from inside pi's own process. Absent on older bridges and until the
+   * first report. See change: restore-pi-version-skew-surface.
+   */
+  piVersion?: string;
+  /**
+   * Set when `piVersion` parses below the dashboard's lockstep floor
+   * (`piCompatibility.minimum`); carries the required version for the warning
+   * on the session card and chat view. `null` = explicitly cleared (the client
+   * merges `session_updated` shallowly); absent = never flagged. An unreported
+   * or unparseable version is never flagged.
+   * See change: update-pi-core-1-0-adopt-apis.
+   */
+  piBelowFloor?: { minimum: string } | null;
+  /**
+   * Per-session git-worktree identity. Set only when the session's cwd
+   * is a git worktree (not the main checkout). See `GitWorktreeInfo`.
+   * Absent on older bridges and for plain checkouts. Clients should read
+   * `gitWorktree.base` for the create-from ref (when known); the raw
+   * `gitWorktreeBase` field below is the server-side cache used to
+   * compose `base` on the broadcast payload.
+   * See change: add-worktree-spawn-dialog.
+   */
+  gitWorktree?: GitWorktreeInfo;
+  /**
+   * Server-cached base ref for the session's worktree, loaded from the
+   * sidecar `.meta.json` (`gitWorktreeBase`). Used internally to compose
+   * `gitWorktree.base` when broadcasting; clients SHOULD prefer
+   * `gitWorktree.base` (merged) and ignore this raw cache.
+   * See change: add-worktree-spawn-dialog.
+   */
+  gitWorktreeBase?: string;
+  /**
+   * Tri-state whether the session's cwd is a git repository, independent of
+   * branch-info arrival. `true` = confirmed git repo, `false` = confirmed
+   * non-git, `undefined` = unknown (probe inconclusive / legacy session).
+   * Carried on `session_register` (no arrival race), persisted to `.meta.json`,
+   * restored by `sessionFromMeta` on cold start. Used to gate the `+Worktree`
+   * button (hide only on `=== false`).
+   * See change: gate-session-worktree-button-on-git.
+   */
+  isGitRepo?: boolean;
+  /**
+   * Server-internal: the bridge has reported worktree state at least once,
+   * INCLUDING the cleared (`null`) case for a non-worktree session. Makes
+   * "not a worktree" distinguishable from "not yet reported", which the
+   * OpenSpec auto-attach locality gate needs to be reject-capable. In-memory
+   * only — NEVER persisted to `.meta.json` and NEVER included in a
+   * `broadcastSessionUpdated` payload.
+   * See change: scope-openspec-auto-attach-to-session-cwd (design D8).
+   */
+  gitWorktreeReported?: boolean;
+  /**
+   * Server-managed flag set by any of three probe sites: (1) the bridge's
+   * 30 s VCS tick (`existsSync(cwd) === false`), (2) the server's session
+   * scanner re-probing ended sessions on boot, (3) the `worktree/remove`
+   * lifecycle endpoint optimistically stamping every session under the
+   * removed path. Purely computed — NEVER persisted to `.meta.json`. Older
+   * bridges never send this; clients SHALL treat `undefined` as "not
+   * missing". See change: add-worktree-lifecycle-actions.
+   */
+  cwdMissing?: boolean;
+  openspecPhase?: OpenSpecPhase | null;
+  openspecChange?: string | null;
+  attachedProposal?: string | null;
+  /**
+   * Server-suggested replacement for a manually-attached proposal that the
+   * user has not yet accepted or dismissed. Set by the event-wiring
+   * coalescing branch when the LLM emits an active OpenSpec operation for a
+   * different change than the one manually attached. When non-null AND
+   * `attachedProposal` is non-null, the client renders the replace-proposal
+   * dialog. Coalesces (latest wins); cleared on accept/dismiss/`agent_end`.
+   * See change: replace-proposal-dialog-with-race-handling.
+   */
+  pendingReplaceProposal?: string | null;
+  /**
+   * ChangeNames the user dismissed during the current LLM activity loop.
+   * A dismissed name does NOT re-prompt until `agent_end` clears this set.
+   * Per-name: dismissing B does not suppress a later prompt for C.
+   * See change: replace-proposal-dialog-with-race-handling.
+   */
+  rejectedReplaceProposals?: string[];
+  /**
+   * Sparse per-session override for chat-view display preferences. Mirror
+   * of `SessionMeta.displayPrefsOverride`. Deep-merged onto the global
+   * `DisplayPrefs` on the client side via `mergeDisplayPrefs`.
+   * A clearing `session_updated` broadcast carries `null` (not `undefined`,
+   * which `JSON.stringify` would drop) so the client can overwrite a stale
+   * override; `getSessionOverride` normalizes `null → undefined`.
+   * See change: configurable-chat-display, fix-clear-display-override-broadcast.
+   */
+  displayPrefsOverride?: import("./display-prefs.js").PartialDisplayPrefs | null;
+  /**
+   * Per-session collapse state for the PROCESS subcard's background-
+   * processes drawer. Mirror of `SessionMeta.processDrawerCollapsed`.
+   * `undefined` (field absent) means "no stored choice" — the drawer
+   * renders collapsed by default. See change: persist-process-drawer-collapse.
+   */
+  processDrawerCollapsed?: boolean;
+  contextTokens?: number | null;
+  contextWindow?: number;
+  sessionFile?: string;
+  sessionDir?: string;
+  hidden?: boolean;
+  /**
+   * Archive state (ended-only) mirrored from `SessionMeta`. Archived sessions
+   * are non-resident: never in `sessions_snapshot`, `GET /api/sessions` or
+   * `session_added`/`session_updated`. See change: archive-sessions-lazy-load.
+   */
+  archived?: boolean;
+  archivedAt?: number;
+  restoredAt?: number;
+  /**
+   * User-owned, free-form tags mirrored from `SessionMeta.tags`. Bridges
+   * SHALL NOT send this — it is dashboard-owned, set via `set_session_tags`.
+   * See change: add-session-tags.
+   */
+  tags?: string[];
+  firstMessage?: string;
+  dataUnavailable?: boolean;
+  /**
+   * Liveness marker fields mirrored from `.meta.json` at scan time so
+   * cold-start restore can classify interrupted-session recovery candidates
+   * (`live===true && closedReason!=="manual"`). Server-internal; not part of
+   * the steady-state wire contract. See change: reopen-sessions-after-shutdown.
+   */
+  live?: boolean;
+  liveEpoch?: number;
+  closedReason?: ClosedReason;
+  /** Set at cold-start restore when the scanned session is a recovery
+   *  candidate. See change: reopen-sessions-after-shutdown. */
+  recoveryCandidate?: boolean;
+  resuming?: boolean;
+  /**
+   * Client-side transient: set optimistically when the user triggers
+   * shutdown so the card can render a "closing" state (dim + spinner +
+   * disabled ✕) while the server kill ladder runs. Mirrors `resuming`.
+   * Cleared when `session_removed` removes the card, or by a bounded
+   * safety-revert timer. Bridges and server SHALL NOT send it.
+   */
+  closing?: boolean;
+  /** Last known bridge entry count (for skip-wipe comparison on reconnect) */
+  lastEntryCount?: number;
+  /** OS process ID of the pi agent — used for force-kill escalation */
+  pid?: number;
+  /**
+   * Server-only: epoch-ms when the server stored `pid` (every register). The
+   * unattended-kill identity guard compares the pid's process start time to it.
+   * In-memory only — never persisted or sent by a bridge.
+   * See change: fix-session-reclaim-tmux.
+   */
+  pidRecordedAt?: number;
+  /** Active child processes detected by bridge process scanner. Server
+   *  enriches each with classification fields. See change:
+   *  classify-process-list-entries. */
+  processes?: Array<{ pid: number; pgid: number; command: string; elapsedMs: number; kind?: import("./protocol.js").ProcessKind; label?: string; sessionRef?: string }>;
+  /** Latest process metrics from the pi agent */
+  processMetrics?: {
+    rss: number;
+    heapUsed: number;
+    heapTotal: number;
+    cpuPercent: number;
+    eventLoopMaxMs?: number;
+    loadAvg1m: number;
+    /** Timestamp when metrics were last received */
+    updatedAt: number;
+  };
+  /**
+   * Server-derived bridge-silence verdict, pushed ONLY on a state transition
+   * (`host-pressure-tracker.ts`). `undefined` = the server has said nothing yet
+   * (unknown, NOT healthy); explicit `null` = recovered, clear the badge.
+   * `since` is the server receipt time of the last frame, so the card can count
+   * elapsed silence locally without any extra traffic.
+   *
+   * The browser MUST NOT derive this from `processMetrics.updatedAt`: that field
+   * only ever arrives in the connect snapshot and then freezes, which read every
+   * live session as unresponsive. See change: fix-false-unresponsive-badge.
+   */
+  hostPressure?: HostPressure | null;
+  /**
+   * Server-derived: true while any tracked pending prompt of this session has
+   * metadata `kind` `agent-path-gate` / `agent-path-gate-confirm` (the agent is
+   * blocked on a file-access approval). Separate from `currentTool`, which is
+   * left untouched. Re-derived on replay/resync; false after disconnect.
+   * See change: ask-agent-file-access-in-chat (D7).
+   */
+  awaitingFileAccess?: boolean;
+  /** Extension-declared UI modules (Phase 1: management-modal slot). */
+  uiModules?: ExtensionUiModule[];
+  /** Cached row data per `view.dataEvent` for table/grid views. Per-event item cap is enforced server-side. */
+  uiDataMap?: Record<string, unknown[]>;
+  /**
+   * Phase-2 live in-page decorations (footer-segment, agent-metric, breadcrumb,
+   * gate, toast). Keyed by `${kind}:${namespace}:${id}`. Last-write-wins on
+   * upsert; explicit removal via `ext_ui_decorator { removed: true }` deletes
+   * the entry. See change: add-extension-ui-decorations.
+   */
+  uiDecorators?: Record<string, DecoratorDescriptor>;
+  /**
+   * Per-session image asset registry, keyed by content hash. Populated by
+   * `asset_register` events emitted by the bridge for local-file images
+   * referenced as `![](path)` in assistant markdown. Survives event-buffer
+   * eviction (lives on Session, not in the rolling event buffer) so
+   * `pi-asset:<hash>` references in older messages still resolve.
+   * See change: chat-markdown-local-images-and-math.
+   */
+  assets?: Record<string, { data: string; mimeType: string }>;
+  /**
+   * Bounded per-session notification history (cap 50, oldest evicted).
+   * Transcript history only — NEVER a pending ask: it does not feed
+   * `hasPendingPromptRequests`, `hasPendingAsk` or the `currentTool` fold, and
+   * it is retained after the session ends.
+   * See change: split-notify-from-prompt-request.
+   */
+  notifyLog?: NotifyLogEntry[];
+  /**
+   * Mirror of pi's native steering + follow-up queues for this session.
+   * Populated from pi's `queue_update` event, forwarded by the bridge.
+   * `steering[]` typically empties every turn boundary (1-15 s); `followUp`
+   * holds up to 20 entries (and a 32 MiB aggregate byte ceiling, both bridge-
+   * enforced) and drains ONE entry per `agent_end`.
+   * `followUp` carries entry objects (text + image COUNT); `steering` stays a
+   * plain string array (pi-owned, display-only).
+   * See capability `mid-turn-prompt-queue`. See change: add-followup-edit-and-steer-cancel,
+   *   fix-bridge-followup-image-drop.
+   */
+  pendingQueues?: { steering: string[]; followUp: FollowUpEntryView[] };
+  /**
+   * Session classification. Currently the only non-default value is
+   * `"automation"`, stamped on sessions spawned by the automation-plugin's
+   * scheduler. Plain user sessions leave this `undefined`. The board/order
+   * filter treats `kind==="automation"` runs as hidden unless their
+   * `automationRun.visibility` is `"shown"`. Persisted to `.meta.json`.
+   * See change: add-automation-plugin.
+   */
+  kind?: "automation";
+  /**
+   * Automation-run identity, set together with `kind==="automation"`. `name`
+   * is the automation's folder name; `runId` is the per-occurrence run id
+   * (`<date>-<name>` store key). `visibility` carries the run's EFFECTIVE
+   * board visibility (per-automation `visibility` field ?? settings default,
+   * default `"hidden"`) so the board filter can decide inclusion without
+   * re-reading the automation config. Persisted to `.meta.json`.
+   * See change: add-automation-plugin.
+   */
+  automationRun?: { name: string; runId: string; visibility?: "hidden" | "shown" };
+  /**
+   * Owning goal id when this session was spawned under / linked to a
+   * folder-scoped `GoalRecord`. Persisted to `.meta.json`. The session-card
+   * goal chip reads this to navigate to the owning goal's detail page.
+   * See change: add-goals-folder-page.
+   */
+  goalId?: string;
+  /**
+   * Human principal that owns this session `(iss, sub)`, mirror of
+   * `SessionMeta.principalOwner`. Absent ⇒ ownerless (scheduler/automation or
+   * inert-era). Surfaced on summaries so owner-scoping can filter without a
+   * sidecar read. See change: add-multi-user-identity-plane (D11).
+   */
+  principalOwner?: { iss: string; sub: string };
+  /**
+   * Plugin-owned session refs, namespaced by owning plugin id. Written and
+   * restored VERBATIM by core (it never parses the interior); every key is
+   * also projected onto the session top level. See session/plugin-refs.ts.
+   */
+  pluginRefs?: Record<string, Record<string, unknown>>;
+  /** Projection of the host association stored in pluginRefs["res-workflow"]. */
+  resWorkflow?: ResWorkflowParticipation;
+  /**
+   * Core-owned cold-start recovery opt-out, mirror of `SessionMeta.recover`.
+   * Absent ⇒ recoverable (`true`). Resolved from an owning plugin's lifecycle
+   * declaration `{ recover }` through the generic session-ownership seam; core
+   * never reads a plugin name or the owner `pluginRef` to set it. Persisted to
+   * `.meta.json` only when `false` (the single additive byte an opted-out
+   * owned session gains). See change: detach-automation-goal-from-core.
+   */
+  recover?: boolean;
+  /**
+   * Core-owned "disposable once ended" declaration, resolved from an owning
+   * plugin's lifecycle declaration `{ archiveOnEnd }`. While
+   * `sessionList.archiveServiceSessionsOnEnd` is on, core archives the session
+   * after a short grace window once it ends (and the boot scan reclaims it).
+   * Distinct from `lifecyclePolicy` ("ephemeral" ≠ disposable). Persisted only
+   * when declared. See change: archive-service-sessions-on-end.
+   */
+  archiveOnEnd?: boolean;
+  /**
+   * Core-owned "hidden by its owning plugin" intent, set when a spawn's
+   * `lifecycle.hidden` is applied. Persisted (like `recover`) so a NON-reattach
+   * re-register after a restart (respawn: `registerReason:"spawn"`, no token)
+   * keeps the session hidden instead of re-deciding from the headless
+   * heuristic. Absent on user sessions (byte-identical sidecars). See change: fix-plugin-hidden-across-restart.
+   */
+  pluginHidden?: boolean;
+  /**
+   * Core-owned close policy, resolved from an owning plugin's lifecycle
+   * declaration `{ close }`. `owner` = declaring plugin id (routes its closer
+   * and authorizes its close requests only). `idleAfterMs` present ⇒ governed
+   * by the idle reaper regardless of `lifecyclePolicy` / the global switch.
+   * Persisted only when declared. See change: add-session-close-plugin-hook.
+   */
+  closePolicy?: SessionClosePolicy;
+  /**
+   * Core-owned socket-close finalization flag. When `true`, the gateway
+   * finalizes the session immediately on socket close (no reconnect grace)
+   * instead of branching on a plugin name. Resolved from an owning plugin's
+   * lifecycle declaration `{ finalizeOnSocketClose }`. In-memory only — NOT
+   * persisted to `.meta.json` (only matters while a live socket is open), so
+   * it adds no on-disk byte. See change: detach-automation-goal-from-core.
+   */
+  finalizeOnSocketClose?: boolean;
+}
+
+// ── Extension UI System (Phase 1: management-modal slot) ───────────
+// Per `extension-ui-system` design + `add-extension-ui-modal` change.
+// Field/type names match PR #15 verbatim so any later archival diff stays small.
+
+export type UiViewKind = "table" | "grid" | "form";
+
+export type UiFieldKind =
+  | "text"
+  | "number"
+  | "boolean"
+  | "select"
+  | "code"
+  | "datetime"
+  | "textarea";
+
+export interface UiField {
+  /** Dot-path into row / form-state. */
+  key: string;
+  label: string;
+  kind: UiFieldKind;
+  /** For kind: "select". */
+  options?: string[];
+  placeholder?: string;
+  required?: boolean;
+  readOnly?: boolean;
+  /** Legacy alias for kind: "textarea". Prefer `kind: "textarea"`. */
+  multiline?: boolean;
+  /** Display-only: table column width. */
+  width?: string | number;
+  /** For kind: "code". Hint to syntax highlighter. */
+  language?: string;
+}
+
+export interface UiAction {
+  /** Action id, echoed back as the `action` field on the `ui_management` message. */
+  id: string;
+  label: string;
+  /** MDI icon key from `@mdi/js` (e.g. `"mdiCheckCircle"`). Unknown keys render no icon. */
+  icon?: string;
+  variant?: "primary" | "secondary" | "danger";
+  /** Event name re-emitted on the extension's `pi.events` bus when the action fires. */
+  event: string;
+  params?: Record<string, unknown>;
+  /** If present, dashboard mounts ConfirmDialog with this message before dispatching. */
+  confirm?: string;
+}
+
+export interface UiSection {
+  id: string;
+  title?: string;
+  description?: string;
+  fields: UiField[];
+}
+
+export interface UiView {
+  kind: UiViewKind;
+  /** Table/grid columns; form fields when no `sections` provided. */
+  fields?: UiField[];
+  /** For form view: grouped fields. Mutually exclusive with top-level `fields`. */
+  sections?: UiSection[];
+  /** Event name to request rows; required for `table`/`grid`. */
+  dataEvent?: string;
+  /** Unique-row field for `table`/`grid` (default: `"id"`). */
+  rowKey?: string;
+  /** Per-row actions for `table`/`grid`. */
+  rowActions?: UiAction[];
+  /** Shown when `items.length === 0`. */
+  emptyState?: string;
+  /** Top-of-modal toolbar actions. */
+  actions?: UiAction[];
+}
+
+export interface ExtensionUiModule {
+  /** Phase 1: only `"management-modal"`. */
+  kind: "management-modal";
+  /** Unique within the session. Last-write-wins on collision. */
+  id: string;
+  /** Exact slash command (case-sensitive). */
+  command: string;
+  title: string;
+  description?: string;
+  /** MDI icon key from `@mdi/js`. */
+  icon?: string;
+  /** Free-form group label (sidebar grouping in future). */
+  category?: string;
+  view: UiView;
+}
+
+// ── Extension UI System (Phase 2: live in-page decorations) ──────
+// Per `extension-ui-system` design + `add-extension-ui-decorations` change.
+// Single discriminated union forwarded as one `ext_ui_decorator` message per
+// descriptor. Cache key: `${kind}:${namespace}:${id}`. `namespace` MUST match
+// `/^[a-z0-9-]+$/`; the bridge drops malformed namespaces with a warning.
+
+export type DecoratorKind =
+  | "footer-segment"
+  | "agent-metric"
+  | "breadcrumb"
+  | "gate"
+  | "toast";
+
+export interface FooterSegmentPayload {
+  text: string;
+  tooltip?: string;
+  /** MDI icon key from `@mdi/js`. Unknown keys render no icon. */
+  icon?: string;
+}
+
+export interface AgentMetricPayload {
+  /** Matches the agent id rendered by `FlowAgentCard`. */
+  agentId: string;
+  text: string;
+  tooltip?: string;
+}
+
+export interface BreadcrumbStep {
+  id: string;
+  label: string;
+  status: "pending" | "active" | "done" | "error";
+}
+
+export interface BreadcrumbPayload {
+  steps: BreadcrumbStep[];
+  /** Step id of the currently-active step (overrides `status: "active"` selection). */
+  current?: string;
+}
+
+export interface GatePayload {
+  /** Matches the flow id rendered in `FlowLaunchDialog`. */
+  flowId: string;
+  available: boolean;
+  /** Reason rendered as a tooltip when `available: false`. */
+  reason?: string;
+}
+
+export interface ToastPayload {
+  level: "info" | "success" | "warn" | "error";
+  message: string;
+  /** Auto-dismiss after this many ms. Default 5000; `0` = sticky. */
+  durationMs?: number;
+}
+
+export type DecoratorDescriptor =
+  | { kind: "footer-segment"; namespace: string; id: string; payload: FooterSegmentPayload }
+  | { kind: "agent-metric";   namespace: string; id: string; payload: AgentMetricPayload }
+  | { kind: "breadcrumb";     namespace: string; id: string; payload: BreadcrumbPayload }
+  | { kind: "gate";           namespace: string; id: string; payload: GatePayload }
+  | { kind: "toast";          namespace: string; id: string; payload: ToastPayload };
+
+/** An event forwarded from a pi session */
+export interface DashboardEvent {
+  eventType: string;
+  timestamp: number;
+  data: Record<string, unknown>;
+}
+
+/** Info about an available flow from pi-flows */
+export interface FlowInfo {
+  name: string;
+  description: string;
+  taskRequired: boolean;
+  source?: string;
+}
+
+/** Info about an available command */
+export interface CommandInfo {
+  name: string;
+  description?: string;
+  source: "extension" | "prompt" | "skill" | "builtin" | "acp";
+  location?: string;
+  path?: string;
+}
+
+/** Image content for message attachments (compatible with pi SDK ImageContent) */
+export interface ImageContent {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
+/**
+ * One bridge follow-up buffer entry as it crosses the wire.
+ *
+ * Image BYTES never leave the extension (design D2): the browser already had
+ * them when it sent them, so echoing them back would double the hold and put
+ * megabytes on the WebSocket on every queue mutation. `imageCount` is
+ * display-only — it drives the chip's attachment indicator and nothing else.
+ *
+ * BREAKING vs the prior `string[]`: every consumer reads `.text`. The client
+ * normalises `string | FollowUpEntryView` on read for one release (design D2b).
+ * See change: fix-bridge-followup-image-drop.
+ */
+export interface FollowUpEntryView {
+  text: string;
+  imageCount: number;
+}
+
+// PendingPrompt removed in change: add-followup-edit-and-steer-cancel.
+// Pi's native queues are now the single source of truth; `Session.pendingQueues`
+// holds `string[]` arrays directly from pi's `queue_update` event.
+
+/** File entry from directory listing */
+export interface FileEntry {
+  path: string;
+  isDirectory: boolean;
+}
+
+/** Per-turn token usage breakdown */
+export interface TurnUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** Context window usage */
+export interface ContextUsage {
+  tokens: number | null;
+  contextWindow: number;
+}
+
+/** Available model info */
+export interface ModelInfo {
+  provider: string;
+  id: string;
+  /** Human-friendly label from `Model.name`; falls back to id when absent. */
+  name?: string;
+  /** From `Model.reasoning` — model supports thinking. */
+  reasoning?: boolean;
+  /** Derived: `Model.input.includes("image")` — model accepts image input. */
+  vision?: boolean;
+  /** From `Model.contextWindow`. */
+  contextWindow?: number;
+  /**
+   * Confidence of `reasoning`/`vision`: `"catalog"` when the bridge's
+   * `enrichModelMetadata()` probe resolved the model against pi's registry
+   * (real capabilities); `"endpoint"` when the custom provider itself
+   * advertised every projected field in its model list (also confirmed, but
+   * self-reported by the proxy rather than pi's bundled catalog);
+   * `"fallback"` when it force-defaulted (`input:["text","image"]`,
+   * `reasoning:false`) because the provider reported no capability data for at
+   * least one field. Drives confident-badge vs `?`-badge in the selector. A
+   * mixed-tier model reports its WEAKEST tier, so a floor value is never shown
+   * as confirmed. Absent = old bridge that sent no capability fields (render no
+   * badge, NOT `?`). See changes: enrich-model-selector-capabilities-favorites,
+   * fix-custom-provider-model-metadata.
+   */
+  metadataSource?: "catalog" | "endpoint" | "fallback";
+  /**
+   * Thinking levels this model supports, derived from pi 0.72+'s per-model
+   * `thinkingLevelMap`. Keys whose value is non-null (string | true) are
+   * projected here; null map entries mean "pi level not supported by this
+   * model". Absent on pre-0.72 bridges (no map) → selector falls back to all
+   * canonical levels. See change: adopt-pi-071-072-073-features.
+   */
+  supportedThinkingLevels?: string[];
+}
+
+/**
+ * Where a provider's credential is sourced from, as reported by the bridge.
+ * Mirrors pi-ai's own union verbatim — the earlier four-member declaration
+ * dropped `models_json_key` / `models_json_command`, which pi reports for
+ * providers registered from a models.json entry.
+ *
+ * Only `environment` (and an `ambient` flag) mean "an env var supplies this";
+ * the remaining members are not necessarily un-removable and must not be
+ * labelled as environment-sourced. See change: redesign-providers-settings-page (D1).
+ */
+export type ProviderSource =
+  | "stored"
+  | "runtime"
+  | "environment"
+  | "fallback"
+  | "models_json_key"
+  | "models_json_command";
+
+/**
+ * Provider catalogue entry pushed by the bridge to the server.
+ * Derived from pi's live `ModelRegistry` (see provider-register.ts in
+ * the bridge). The server caches the most recently received catalogue
+ * and uses it as the source for `GET /api/provider-auth/status`.
+ * See change: replace-hardcoded-provider-lists.
+ */
+export interface ProviderInfo {
+  /** pi-ai provider id (e.g. "anthropic", "deepseek", "google-vertex"). */
+  id: string;
+  /** From `modelRegistry.getProviderDisplayName(id)`; falls back to id. */
+  displayName: string;
+  /** True iff `authStorage.getOAuthProviders()` includes this id. */
+  hasOAuth: boolean;
+  /**
+   * True iff the provider holds a usable credential at REGISTRY level — not
+   * only an auth.json entry. An environment variable or a key registered in
+   * pi's runtime configuration also sets this, with `source` naming which.
+   * Consumers must not read `configured: true` as "stored in auth.json";
+   * check `source === "stored"` for that.
+   */
+  configured: boolean;
+  /** Where the credential is sourced from, when configured. */
+  source?: ProviderSource;
+  /** First env var name pi-ai consults for this provider, when applicable. */
+  envVar?: string;
+  /** True when configured via ambient credential chain (AWS profile / GCP ADC). */
+  ambient?: boolean;
+  /**
+   * pi's own label for the credential's source, from
+   * `modelRegistry.getProviderAuthStatus(id).label` (pi >= 0.99.2) — e.g.
+   * `"workload identity federation"`, or an env var name. Absent when pi
+   * reports none. See change: update-pi-core-1-0-adopt-apis (D7).
+   */
+  authLabel?: string;
+  /** Expiry timestamp for OAuth credentials. */
+  expires?: number;
+  /**
+   * True when this provider was registered by the dashboard itself via
+   * `pi.registerProvider()` from `~/.pi/agent/providers.json` (a "custom"
+   * provider managed by the LLM Providers settings section). Consumers
+   * use this to suppress API-key auth rows for custom providers — their
+   * keys are managed elsewhere. OAuth rows are still emitted because a
+   * custom OAuth provider needs its login button.
+   */
+  custom?: boolean;
+}
+
+/** Role assignment info (from pi-flows role-manager) */
+export interface RoleInfo {
+  roles: Record<string, string>;
+  presets: Array<{ name: string; roles: Record<string, string> }>;
+  activePreset: string | null;
+}
+
+/** OpenSpec artifact status */
+export interface OpenSpecArtifact {
+  id: string;
+  /**
+   * `skipped`: the change's `.openspec.yaml` declares `skip_specs: true`, so
+   * the raw CLI emits the specs artifact as skipped and it satisfies planning
+   * completeness without a specs dir. See change: dispatch-provider-auth-event
+   * (develop-borne CI fix for poller/CLI parity).
+   */
+  status: "done" | "ready" | "blocked" | "skipped";
+}
+
+/** A single OpenSpec change */
+export interface OpenSpecChange {
+  name: string;
+  status: "no-tasks" | "in-progress" | "complete";
+  completedTasks: number;
+  totalTasks: number;
+  artifacts: OpenSpecArtifact[];
+  /**
+   * Artifact-authoring completeness reported by `openspec status --change <name> --json`.
+   * `true` when all required artifacts for the change's workflow are present/done.
+   * Orthogonal to task-tally completeness; used by the dashboard to surface an
+   * "Archive anyway" escape hatch when artifacts are authored but tasks remain unchecked.
+   */
+  isComplete?: boolean;
+  /**
+   * Group assignment joined server-side from `<cwd>/openspec/groups/groups.json`.
+   * `null` or absent means Ungrouped. Clients SHALL NOT recompute the join.
+   * See change: add-openspec-change-grouping.
+   */
+  groupId?: string | null;
+  /**
+   * Per-change CLI error from `openspec status --all` (e.g. invalid
+   * `.openspec.yaml`, unknown schema). Control characters stripped, `message`
+   * one line ≤ 500 chars, `code` ≤ 64. When present `artifacts` is empty and
+   * OpenSpec actions are blocked for this change. See change: use-openspec-status-all.
+   */
+  error?: { code: string; message: string };
+}
+
+/** Schema version for the per-repo OpenSpec groups file at
+ *  `<cwd>/openspec/groups/groups.json`. Bumped only on incompatible shape changes.
+ *  See change: add-openspec-change-grouping. */
+export const OPENSPEC_GROUPS_SCHEMA_VERSION = 1 as const;
+
+/** Schema version for the per-folder goals file under the dashboard data dir
+ *  (`~/.pi/dashboard/goals/<folderHash>.json`). Bumped only on incompatible
+ *  shape changes. See change: add-goals-folder-page. */
+export const GOALS_SCHEMA_VERSION = 1 as const;
+
+/** Durable lifecycle status of a folder-scoped goal. Distinct from the
+ *  goal-plugin's live `GoalStatus` ("active"/"done") — this is the dashboard's
+ *  owned intent. See change: add-goals-folder-page.
+ *
+ *  `respawning` = supervisor has no live driver and a respawn is pending
+ *  (backoff delay or spawn in flight) — visible, non-terminal; a goal is NEVER
+ *  `pursuing` without a live driver. `failed` = terminal supervisor verdict
+ *  (crash-loop breaker, or a kill that targeted nothing). Both added by
+ *  See change: add-goal-session-supervisor. */
+export type GoalRecordStatus =
+  | "pursuing"
+  | "paused"
+  | "achieved"
+  | "cleared"
+  | "respawning"
+  | "failed";
+
+/** A single success criterion on a goal. */
+export interface GoalCriterion {
+  text: string;
+  done: boolean;
+}
+
+/** Optional budget config mirrored onto the in-session loop. */
+export interface GoalBudget {
+  maxTurns?: number;
+  maxSpendUsd?: number;
+}
+
+/** Judge-model selection for a goal's loop. Cross-model by default; `sameModel`
+ *  opts into self-judge (judge == executor). See change:
+ *  sophisticate-goal-authoring-and-control. */
+export interface GoalJudge {
+  provider: string;
+  modelId: string;
+  sameModel?: boolean;
+}
+
+/** A single judge verdict recorded for a goal's driver loop, derived from
+ *  advances in the `goal_status` snapshot stream. FIFO-capped on the record.
+ *  See change: sophisticate-goal-authoring-and-control. */
+export interface GoalVerdict {
+  /** Continuation turn this verdict was observed at. */
+  turn: number;
+  /** Wall-clock ms when appended. */
+  at: number;
+  verdict: "continue" | "satisfied" | "paused";
+  note?: string;
+}
+
+/** Max retained verdicts per GoalRecord (FIFO; oldest dropped past this).
+ *  See change: sophisticate-goal-authoring-and-control. */
+export const GOAL_VERDICTS_CAP = 50 as const;
+
+/** One recorded supervisor respawn attempt. Persisted FIFO on the record so
+ *  the crash-loop breaker + poison counters survive a server restart (the
+ *  counters are DERIVED from this array, never from RAM).
+ *  See change: add-goal-session-supervisor. */
+export interface GoalRespawn {
+  /** Wall-clock ms when the respawn was attempted. */
+  at: number;
+  /** Session id of the driver that died and triggered this respawn. */
+  sessionId: string;
+  /** Why this respawn happened: `"resume"` (continue-mode) or `"fresh"` (re-primed). */
+  reason: "resume" | "fresh";
+  /** Whether the dead driver made progress (strict `turnsUsed` increase) before dying. */
+  madeProgress: boolean;
+}
+
+/** Max retained respawns per GoalRecord (FIFO; oldest dropped past this).
+ *  See change: add-goal-session-supervisor. */
+export const GOAL_RESPAWNS_CAP = 50 as const;
+
+/** In-flight supervisor respawn, persisted so a server restart between spawn
+ *  launch and `session_register` does not double-spawn, and a stale-generation
+ *  completion can kill the orphaned process. See change:
+ *  add-goal-session-supervisor (C2b/C2d). */
+export interface GoalInFlightSpawn {
+  /** Spawn correlation token minted BEFORE launch (host `linkByToken` key). */
+  spawnToken: string;
+  /** `generation` snapshot at launch; a completion under a newer generation is stale. */
+  generation: number;
+  /** Wall-clock ms the spawn launched. */
+  startedAt: number;
+}
+
+/** Folder-scoped goal record. Dashboard owns the durable definition
+ *  (objective, criteria, status intent, linked sessions); the
+ *  @ricoyudog/pi-goal-hermes extension stays source of truth for live loop
+ *  state, associated by `goalId` on the `goal_status` snapshot.
+ *  See change: add-goals-folder-page. */
+export interface GoalRecord {
+  /** Server-generated unique id. */
+  id: string;
+  /** Folder scope key (absolute cwd). */
+  cwd: string;
+  objective: string;
+  criteria: GoalCriterion[];
+  status: GoalRecordStatus;
+  budget?: GoalBudget;
+  /** Judge-model selection (optional; absent = extension default cross-model). */
+  judge?: GoalJudge;
+  /** Bounded per-turn judge verdict history (FIFO, cap `GOAL_VERDICTS_CAP`). */
+  verdicts?: GoalVerdict[];
+  /** Latest `turnsUsed` observed from any driver's live loop. Optional; a
+   *  pre-change record backfills on the first snapshot after upgrade.
+   *  See change: persist-goal-status-and-progress. */
+  lastKnownTurnsUsed?: number;
+  /** Cumulative turns consumed across all drivers of this goal (per-driver
+   *  non-negative deltas; the truthful budget denominator). Optional.
+   *  See change: persist-goal-status-and-progress. */
+  totalTurnsUsed?: number;
+  /** Wall-clock ms when `turnsUsed` last strictly increased. Optional.
+   *  Doubles as the crash-loop breaker epoch: no-progress deaths recorded at or
+   *  before this instant do not count toward the breaker (progress bumps it).
+   *  See change: persist-goal-status-and-progress, add-goal-session-supervisor. */
+  lastProgressAt?: number;
+  /** When true, the supervisor auto-respawns a dead driver (progress-gated,
+   *  bounded by the cumulative budget + crash-loop breaker). Defaults from
+   *  `autoRespawnDefault` at create time. Optional; absent = off (legacy
+   *  records load unchanged). See change: add-goal-session-supervisor. */
+  autoRespawn?: boolean;
+  /** Bounded supervisor respawn history (FIFO, cap `GOAL_RESPAWNS_CAP`). The
+   *  breaker + poison counters derive from this so they survive restart.
+   *  See change: add-goal-session-supervisor. */
+  respawns?: GoalRespawn[];
+  /** Monotonic per-goal generation counter. Bumped synchronously on
+   *  clear/pause so a pending backoff timer or in-flight spawn completion
+   *  observes the change and becomes a no-op. See change:
+   *  add-goal-session-supervisor (S6). */
+  generation?: number;
+  /** Durable reason for the current `paused`/`failed` status (e.g. `"session
+   *  ended"`, `"crash loop"`, `"stop failed"`). Surfaced on chip/board when no
+   *  live driver snapshot exists. See change: add-goal-session-supervisor. */
+  statusReason?: string;
+  /** Persisted in-flight respawn, cleared once the new driver registers.
+   *  See change: add-goal-session-supervisor (C2b/C2d). */
+  inFlightSpawn?: GoalInFlightSpawn;
+  /** Cumulative `totalTurnsUsed` captured when the CURRENT driver became the
+   *  driver (link/respawn register). The supervisor classifies a driver death
+   *  as progress iff `totalTurnsUsed` strictly exceeds this. Persisted so the
+   *  signal survives restart; `undefined` = unknown baseline (a death is then
+   *  unknown-progress and does NOT count toward the breaker — C2f).
+   *  See change: add-goal-session-supervisor. */
+  currentDriverBaselineTurns?: number;
+  /** Sessions opened in service of this goal (drivers + workers, incl. hidden). */
+  sessionIds: string[];
+  /** Session running the pi-goal-hermes loop, when known. */
+  driverSessionId?: string;
+  createdAt: number;
+  updatedAt: number;
+  /** Total USD spend across this goal's linked sessions, **server-derived at
+   *  read time** (Σ `DashboardSession.cost` over `sessionIds`). Never persisted
+   *  to the goals file, never bridge-sent — same server-join convention as
+   *  `groupId`. Optional; absent on legacy records / pre-scan cold start.
+   *  See change: fix-goal-detail-turns-and-spend. */
+  totalSpendUsd?: number;
+}
+
+/** Shape of the on-disk goals file under the dashboard data dir.
+ *  See change: add-goals-folder-page. */
+export interface GoalsFile {
+  schemaVersion: number;
+  goals: GoalRecord[];
+}
+
+/** A user-defined group of OpenSpec changes within a single repo.
+ *  See change: add-openspec-change-grouping. */
+export interface OpenSpecGroup {
+  /** Server-generated slug from `name` plus collision suffix. Stable across rename. */
+  id: string;
+  /** User-visible label; editable. */
+  name: string;
+  /** Optional CSS hex color (`#RRGGBB`). Clients fall back to a default palette when omitted. */
+  color?: string;
+  /** Display order; server keeps values contiguous `0..groups.length - 1` after every reorder. */
+  order: number;
+}
+
+/** Shape of the on-disk groups file at `<cwd>/openspec/groups/groups.json`.
+ *  Single combined file for groups + assignments — one read, one write, atomic.
+ *  See change: add-openspec-change-grouping. */
+export interface OpenSpecGroupsFile {
+  schemaVersion: number;
+  groups: OpenSpecGroup[];
+  /** `changeName` → `groupId`. Unassigned changes have no entry. */
+  assignments: Record<string, string>;
+  /**
+   * Persisted manual ordering of changes within each group. Key = `groupId`
+   * (or `OPENSPEC_UNGROUPED_KEY` for the implicit Ungrouped column); value =
+   * ordered list of `changeName`. Absent groups/changes fall back to the
+   * deterministic default sort (in-progress → complete → name). Optional for
+   * backward compatibility with files written before this field existed.
+   * See change: redesign-openspec-board.
+   */
+  changeOrder?: Record<string, string[]>;
+}
+
+/** Sentinel `groupId` key for the implicit Ungrouped column in
+ *  `OpenSpecGroupsFile.changeOrder`. See change: redesign-openspec-board. */
+export const OPENSPEC_UNGROUPED_KEY = "__ungrouped__" as const;
+
+/**
+ * Global OpenSpec workflow configuration — the user's enabled commands
+ * and delivery preferences. Returned by `openspec config list --json`.
+ *
+ * `workflows` is the single source of truth for which actions render.
+ * `delivery` decides the prompt prefix (skills vs commands).
+ * See change: redesign-session-card-and-composer (config-driven-workflow).
+ */
+export interface OpenSpecConfig {
+  profile: "core" | "expanded" | "custom";
+  delivery: "skills" | "commands" | "both";
+  workflows: string[];
+}
+
+/**
+ * Canonical workflow sets per profile, shared by client + server.
+ * `core` mirrors the openspec CLI preset; `expanded` is the full set
+ * (no CLI preset exists for it — written as JSON).
+ * See change: add-openspec-profile-settings.
+ */
+export const CORE_WORKFLOWS: readonly string[] = [
+  "propose", "explore", "apply", "archive",
+];
+
+export const EXPANDED_WORKFLOWS: readonly string[] = [
+  "propose", "explore", "new", "continue", "ff",
+  "apply", "verify", "sync", "archive", "bulk-archive", "onboard",
+];
+
+/** Default config used as fallback when fetch fails or hasn't arrived yet.
+ *  Assumes the full expanded set so no UI disappears unexpectedly. */
+export const DEFAULT_OPENSPEC_CONFIG: OpenSpecConfig = {
+  profile: "custom",
+  delivery: "both",
+  workflows: [
+    "explore", "propose", "new", "continue", "ff",
+    "apply", "verify", "sync", "archive",
+    "bulk-archive", "onboard",
+  ],
+};
+
+/** Lifecycle state of an OpenSpec change, derived from artifacts + task status */
+export const ChangeState = {
+  PLANNING: "PLANNING",
+  READY: "READY",
+  IMPLEMENTING: "IMPLEMENTING",
+  COMPLETE: "COMPLETE",
+} as const;
+export type ChangeState = (typeof ChangeState)[keyof typeof ChangeState];
+
+/** Derive the lifecycle state of an OpenSpec change from its data */
+export function deriveChangeState(change: OpenSpecChange): ChangeState {
+  // "skipped" counts as done (e.g. skip_specs changes): the CLI reports
+  // isPlanningComplete for them, and OpenSpecStepper already renders them as done.
+  const allDone =
+    change.artifacts.length > 0 &&
+    change.artifacts.every((a) => a.status === "done" || a.status === "skipped");
+  if (!allDone) return ChangeState.PLANNING;
+  if (change.status === "complete") return ChangeState.COMPLETE;
+  if (change.status === "in-progress") return ChangeState.IMPLEMENTING;
+  return ChangeState.READY;
+}
+
+/** OpenSpec data for a session's project */
+/** Server-derived per-cwd OpenSpec readiness state. See change: add-openspec-init-affordances. */
+export type OpenSpecReadinessState =
+  | "GLOBAL_OFF"
+  | "OPTED_OUT"
+  | "PENDING"
+  | "ABSENT"
+  | "BROKEN"
+  | "STALE"
+  | "READY";
+
+/**
+ * Why a cwd is not READY. `missing-changes-dir` / `cli-failed` subdivide BROKEN
+ * (only the first is remediable by re-running init); `missing-skills` /
+ * `profile-stale` subdivide STALE (missing-skills wins when both hold).
+ */
+export type OpenSpecReadinessReason =
+  | "missing-changes-dir"
+  | "cli-failed"
+  | "missing-skills"
+  | "profile-stale";
+
+export interface OpenSpecReadiness {
+  state: OpenSpecReadinessState;
+  reason?: OpenSpecReadinessReason;
+}
+
+export interface OpenSpecData {
+  /**
+   * `openspec list` returned authoritative data for this cwd. Requires both
+   * `<cwd>/openspec/` AND `<cwd>/openspec/changes/` to exist AND the CLI to
+   * succeed. Does NOT distinguish "openspec project, no changes yet" from
+   * "truly not an openspec project" — see `hasOpenspecDir` for that.
+   */
+  initialized: boolean;
+  changes: OpenSpecChange[];
+  /**
+   * Cold-boot signaling: server has detected `openspec/changes/` for this
+   * cwd but the slow poll has not yet produced authoritative data.
+   *
+   * Optional for backwards compatibility — absence means `false`. Composes
+   * with `initialized` to encode three states:
+   *   - { initialized: false, pending: false } → no openspec dir
+   *   - { initialized: false, pending: true  } → dir exists, polling
+   *   - { initialized: true,  pending: ?     } → poll complete
+   *
+   * See change: fix-cold-boot-openspec-protocol.
+   */
+  pending?: boolean;
+  /**
+   * Whether `<cwd>/openspec/` directory exists. Strictly weaker than
+   * `initialized`: this can be `true` while `initialized` is `false` when
+   * the project is OpenSpec-initialized (`openspec init` was run) but
+   * `openspec/changes/` doesn't exist yet (no proposals authored). In that
+   * case `openspec list` errors out and `initialized` stays `false`, but
+   * the session card should still show the OPENSPEC subcard as an
+   * init/attach affordance.
+   *
+   * Optional for backwards compatibility — absence means "unknown, fall
+   * back to `initialized || pending`" on the client side.
+   *
+   * See change: auto-hide-empty-session-subcards.
+   */
+  hasOpenspecDir?: boolean;
+  /**
+   * Whether `<configRoot>/.pi/skills/openspec-explore/` exists — i.e. will
+   * `/skill:openspec-explore` resolve. Resolved at the cwd's config root
+   * (main checkout for a worktree) because `.pi/skills/openspec-*` is
+   * gitignored and never checks out into a worktree.
+   *
+   * Optional for backwards compatibility — absence means "unknown, infer
+   * nothing". See change: add-openspec-init-affordances.
+   */
+  hasOpenSpecSkills?: boolean;
+  /**
+   * Server-derived readiness fold (see `OpenSpecReadinessState` for the
+   * precedence). Clients render from it; they do not re-derive. Optional:
+   * absence (older server) degrades every client to its previous gate and
+   * SHALL NOT present a disabled or stale state.
+   *
+   * See change: add-openspec-init-affordances.
+   */
+  readiness?: OpenSpecReadiness;
+  /**
+   * Workflow-schema status (`pi-spec-driven`). Successful-poll payloads only;
+   * omitted on failure / disabled / opted-out / global-off payloads.
+   * See change: add-pi-spec-driven-schema.
+   */
+  workflowSchema?: OpenSpecWorkflowSchemaStatus;
+}
+
+/**
+ * Status of the dashboard-managed `pi-spec-driven` workflow schema in a project.
+ * See change: add-pi-spec-driven-schema.
+ */
+export type WorkflowSchemaGenerated =
+  | "none"
+  | "current"
+  | "outdated"
+  | "newer"
+  | "incompatible"
+  | "conflict"
+  | "unmanaged";
+
+/**
+ * Workflow-schema status carried on successful-poll `OpenSpecData` payloads.
+ * Reported separately from `readiness`; never alters readiness-gated controls.
+ * See change: add-pi-spec-driven-schema.
+ */
+export interface OpenSpecWorkflowSchemaStatus {
+  /** `schema:` of the config file the CLI reads, or `null` when absent. */
+  configured: string | null;
+  generated: WorkflowSchemaGenerated;
+  /** Config names a schema that resolves in no project/user/package dir. */
+  missing: boolean;
+  /** Active changes without `.openspec.yaml`; only when `configured === "pi-spec-driven"`. */
+  unpinnedChanges: string[];
+  /** Active changes resolving to `pi-spec-driven` from files alone; sorted by name. */
+  affectedChanges: string[];
+  /**
+   * Project-authored schemas in `openspec/schemas/` (real dirs only; excludes the
+   * managed `pi-spec-driven`, dot-prefixed staging and `*.fork-*` backups); sorted.
+   * See change: add-pi-spec-driven-schema.
+   */
+  projectSchemas: string[];
+}
+
+/** OpenSpec workflow phase detected from tool calls */
+export type OpenSpecPhase =
+  | "explore"
+  | "new"
+  | "continue"
+  | "ff"
+  | "apply"
+  | "verify"
+  | "archive"
+  | "sync-specs"
+  | "onboard";
+
+/** Active OpenSpec activity for a session */
+export interface OpenSpecActivity {
+  phase: OpenSpecPhase;
+  changeName?: string;
+}
+
+/** Pi session info returned from SessionManager.list() */
+export interface PiSessionInfo {
+  id: string;
+  path: string;
+  cwd: string;
+  name?: string;
+  parentSessionPath?: string;
+  created: string;
+  modified: string;
+  messageCount: number;
+  firstMessage?: string;
+}
+
+/**
+ * Structured error payload emitted when a registry-resolved tool is
+ * missing at spawn time. Carries only the tool name; the client fetches
+ * live install hints via /api/tools and renders an inline error with a
+ * deep-link into Settings → Tools.
+ * See change: register-bash-and-tool-install-help.
+ */
+export interface MissingToolError {
+  kind: "missing-tool";
+  toolName: string;
+}
+
+/** Data payload for bash_output dashboard events */
+export interface BashOutputData {
+  command: string;
+  output: string;
+  exitCode: number;
+  /** true for !! (silent), false for ! (sent to LLM) */
+  excludeFromContext: boolean;
+  /**
+   * Set to "slash-exec" when the output originates from an executable-mode
+   * slash template (`executable: bash` frontmatter). The client renders an
+   * "ℹ ran locally — LLM not invoked" footer for this source. Absent for
+   * `!` / `!!` invocations — additive, backward-compatible (older clients
+   * ignore the field and render no footer).
+   * See change: add-dashboard-slash-commands.
+   */
+  source?: "slash-exec";
+  /**
+   * Set when the shell binary could not be resolved (e.g. no bash on a
+   * clean Windows host). The client renders MissingToolInlineError
+   * instead of plain output; no command actually ran.
+   * See change: register-bash-and-tool-install-help.
+   */
+  missingTool?: MissingToolError;
+}
+
+/** Data payload for inline_terminal_open dashboard events.
+ *  Fixes the inline terminal card's durable position in the chat stream so
+ *  it is reconstructed on reload via event replay.
+ *  See change: add-inline-terminal-card. */
+export interface InlineTerminalOpenData {
+  /** The ephemeral PTY's terminal id (reattach via /ws/terminal/:id). */
+  terminalId: string;
+}
+
+/** Data payload for inline_terminal_close dashboard events.
+ *  Freezes the card to a read-only scrollable transcript on close.
+ *  See change: add-inline-terminal-card. */
+export interface InlineTerminalCloseData {
+  /** The closed terminal's id. */
+  terminalId: string;
+  /** Captured final scrollback transcript. */
+  transcript: string;
+}
+
+/** Data payload for command_feedback dashboard events */
+export interface CommandFeedbackData {
+  command: string;
+  status: "started" | "completed" | "error";
+  message?: string;
+}
+
+// ── Flow Dashboard Types ────────────────────────────────────────────
+
+/** Status of a flow agent card */
+export type FlowAgentStatus = "pending" | "running" | "complete" | "error" | "blocked";
+
+/** A recent tool call displayed on an agent card */
+export interface FlowRecentTool {
+  toolName: string;
+  inputPreview: string;
+}
+
+/** Detail history entry for agent detail view */
+export type FlowDetailEntry =
+  | { kind: "tool"; toolName: string; input: unknown; output?: unknown; isError: boolean }
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "error"; text: string };
+
+/** Agent card config from pi-flows AgentConfig (minimal subset) */
+export interface FlowAgentCardConfig {
+  name: string;
+  description?: string;
+  model?: string;
+  card?: { label?: string; metric?: string; role?: string };
+  sourcePath?: string;
+}
+
+/** First-class node-kind discriminator emitted by every pi-flows executor.
+ *  Decided once at the node's started event; carried on the event payload so it
+ *  persists + replays. Distinct from FlowDetailEntry.kind (text|thinking|tool|error).
+ *  See change: rework-flows-plugin-for-new-pi-flows (consumes pi-flows surface-node-kind). */
+export type NodeKind =
+  | "agent"
+  | "agent-decision"
+  | "code"
+  | "code-decision"
+  | "fork";
+
+/** Per-agent (per-step) state tracked in flow state */
+export interface FlowAgentState {
+  agentName: string;
+  stepId: string;
+  /** Step type from the flow config (agent, fork, agent-decision, etc.) */
+  stepType?: string;
+  /** Node-kind from the lifecycle started event; selects the card renderer. */
+  nodeKind?: NodeKind;
+  /** Failure outcome from the completion event: routed-soft vs flow-halting-hard. */
+  outcome?: "success" | "soft" | "hard";
+  /** Typed outputs from the completion event (code/agent contract). */
+  typedOutputs?: Record<string, string>;
+  /** Chosen branch label for code-decision / agent-decision nodes. */
+  branch?: string;
+  /** Resolved handler target path for code / code-decision nodes (from started). */
+  codeTarget?: string;
+  status: FlowAgentStatus;
+  label?: string;
+  model?: string;
+  resolvedModel?: string;
+  cardRole?: string;
+  blockedBy: string[];
+  tokens?: { input: number; output: number };
+  /** Accumulated per-agent USD cost from `flow_agent_complete` (`result.cost`).
+   *  Sibling of `tokens`; `undefined` when the session predates cost surfacing. */
+  cost?: number;
+  duration?: number;
+  summary?: string;
+  files?: string[];
+  recentTools: FlowRecentTool[];
+  detailHistory: FlowDetailEntry[];
+  loopIteration?: number;
+  loopMax?: number;
+  sourcePath?: string;
+  runCount?: number;
+}
+
+/** Overall flow execution status. `interrupted` = orphaned run reconciled on resume
+ *  (pi-flows clear-orphaned synthesized terminal). */
+export type FlowStatus = "running" | "success" | "error" | "aborted" | "interrupted";
+
+/** Flow execution state tracked client-side by the event reducer */
+export interface FlowState {
+  flowName: string;
+  task: string;
+  status: FlowStatus;
+  autonomousMode: boolean;
+  /** Path to the flow YAML file (for YAML viewer) */
+  flowSource?: string;
+  /** Ordered map — insertion order matches step order from flow config */
+  agents: Map<string, FlowAgentState>;
+  /** All steps from the flow configuration — used for DAG graph rendering.
+   *  Includes non-agent steps (fork, agent-decision, code-decision). `branches`
+   *  carries decision routing (label → target) emitted by `flow:flow-started`. */
+  dagSteps?: Array<{ id: string; stepType: string; agent?: string; blockedBy: string[]; branches?: Record<string, string>; onComplete?: string; onError?: string }>;
+  /** Set after flow_complete event */
+  flowResult?: Record<string, unknown>;
+
+  /** Next flow to run (workflow stage resolution) */
+  nextStep?: string | null;
+  /** Pre-computed summary stats */
+  summaryStats?: {
+    agentCount: number;
+    duration: string;
+    fileCount: number;
+    perAgent: Array<{ name: string; status: string; fileCount: number }>;
+  };
+}
+
+// ── Architect Dashboard Types ───────────────────────────────────────
+
+/** Phase of the architect lifecycle */
+export type ArchitectPhase = "context" | "designing" | "preview" | "complete" | "cancelled";
+
+/** Agent entry tracked during architect design */
+export interface ArchitectAgentEntry {
+  name: string;
+  type: "built-in" | "local" | "custom";
+  status: "pending" | "creating" | "done" | "error";
+  statusText?: string;
+  /** Raw markdown source from agent_write (only for custom agents) */
+  source?: string;
+}
+
+/** Step in the designed flow DAG */
+export interface ArchitectDagStep {
+  id: string;
+  agentName?: string;
+  blockedBy: string[];
+  /** Step type — matches flow engine step types */
+  stepType?: "agent" | "fork" | "conditional" | "agent-decision" | "agent-loop-decision";
+  /** For loop steps: the step ID to loop back to */
+  loopTarget?: string;
+  /** For loop steps: the step ID to continue to after exiting the loop */
+  exitTarget?: string;
+}
+
+/** Parsed flow metadata from architect preview */
+export interface ArchitectParsedFlow {
+  name: string;
+  description: string;
+  maxConcurrent: number;
+  steps: ArchitectDagStep[];
+}
+
+/** Architect state tracked client-side by the architect reducer */
+export interface ArchitectPrompt {
+  id: string;
+  type: "select" | "input" | "confirm";
+  question: string;
+  options?: string[];
+  defaultValue?: string;
+}
+
+export interface ArchitectState {
+  phase: ArchitectPhase;
+  architectMode: "new" | "edit";
+  flowName: string;
+  /** Resolved model ID (e.g., "anthropic/claude-opus-4-6") */
+  resolvedModel?: string;
+  /** Model alias (e.g., "@planning") */
+  modelAlias?: string;
+  agents: ArchitectAgentEntry[];
+  dagSteps: ArchitectDagStep[];
+  parsedFlows: ArchitectParsedFlow[];
+  lastToolCall: { toolName: string; inputPreview: string } | null;
+  /** Rolling window of recent tool calls for card display */
+  recentTools: FlowRecentTool[];
+  /** Full detail history (tool calls, text, thinking) for detail view */
+  detailHistory: FlowDetailEntry[];
+  iteration: number;
+  catalogSummary?: string;
+  error?: string;
+  /** Pending architect prompt (Save/Replan/Cancel etc.) rendered in widget bar */
+  pendingPrompt: ArchitectPrompt | null;
+  /** Raw flow YAML content for the YAML viewer */
+  flowYamlContent?: string;
+  /** Whether the last flow_write succeeded (file written to disk) */
+  flowWriteStatus?: "written" | "validation-error";
+}
+
+/** REST API response envelope */
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  /**
+   * Optional structured failure-classifier code paired with `error`.
+   * Lets clients render specific UI for known failure modes
+   * (e.g., `"FORK_EMPTY_SESSION"`).
+   * See change: fix-fork-empty-session-silent-timeout.
+   */
+  code?: string;
+  /**
+   * Optional captured stderr from a shelled-out command (e.g. `git
+   * worktree add`). Surfaced verbatim so the client can render the
+   * git error inline in dialogs. See change: add-worktree-spawn-dialog.
+   */
+  stderr?: string;
+  /**
+   * Set on `POST /api/git/worktree` responses whose `code === "path_exists"`.
+   * `true` when the colliding path exists on disk but is NOT a registered
+   * worktree (likely orphan from a previous failed attempt); `false` when
+   * the path IS a registered worktree. Undefined for non-`path_exists`
+   * errors. Drives the dialog's inline `[Clean up]` button.
+   * See change: openspec-worktree-spawn-button.
+   */
+  orphanLikely?: boolean;
+  /**
+   * `POST /api/session/:id/prompt`: whether the prompt was WRITTEN to the
+   * owning bridge's socket. Transmission, not delivery — the response is
+   * deliberately not gated on the bridge acknowledging, so `delivered` cannot
+   * appear here at all. Pair with `promptId`.
+   * See change: fix-spawn-correlation-ttl-coupling (D7).
+   */
+  transmitted?: boolean;
+  /**
+   * Per-prompt handle echoed by the bridge on `prompt_received`, making the
+   * acknowledged state observable on the session event stream.
+   * See change: fix-spawn-correlation-ttl-coupling (D7).
+   */
+  promptId?: string;
+  /**
+   * `"contended"` when a second bridge recently claimed this session id and was
+   * refused. Annotation only — `success` is unaffected.
+   * See change: fix-duplicate-bridge-registration (D4).
+   */
+  bridgeState?: string;
+  /** Human-readable annotation paired with `bridgeState`. */
+  warning?: string;
+}
+
+/**
+ * Target for a dashboard-local `/view` preview. Discriminated by `kind`.
+ * - `file`: a path inside a known session cwd (anti-traversal enforced by the
+ *   server when the file is served).
+ * - `url`: an absolute `http(s)://` URL (renderer dispatch picks YouTube
+ *   embed vs. fallback "open in new tab").
+ * Persisted on a `ChatMessage` as the optional `view` field. Filtered out
+ * of the pi-bound message stream by the bridge — view rows are a UI-only
+ * artifact and never reach the agent. See change: render-file-previews.
+ */
+export type ViewTarget =
+  | { kind: "file"; cwd: string; path: string }
+  | { kind: "url"; url: string };
+
+/** Plugin-declared session close policy. See change: add-session-close-plugin-hook. */
+export interface SessionClosePolicy {
+  owner: string;
+  idleAfterMs?: number;
+  mode: "sleep" | "archive";
+}

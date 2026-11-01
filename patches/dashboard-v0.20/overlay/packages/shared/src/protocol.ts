@@ -1,0 +1,1830 @@
+/**
+ * Extension ↔ Server WebSocket protocol messages.
+ */
+import type { AutoNamerPersistedState, CommandInfo, ContextUsage, DashboardEvent, DecoratorDescriptor, ExtensionUiModule, FileEntry, FlowInfo, FollowUpEntryView, GitPrChecks, GitPrState, ImageContent, ModelInfo, NotifyLevel, OpenSpecPhase, PiSessionInfo, ProviderInfo, RoleInfo, SessionDriver, SessionSource, TurnUsage } from "./types.js";
+import type { UsageTotals } from "./usage-totals.js";
+import type { ThinkingTranslationFrame } from "./thinking-translation.js";
+
+// Notify level lives in types.ts (the session record retains a notify log);
+// re-exported here so protocol consumers import it from one place.
+// See change: split-notify-from-prompt-request.
+export type { NotifyLevel };
+
+/**
+ * Bridge -> server: mirror of pi's native steering + follow-up queues, forwarded
+ * from pi's `queue_update` event. Server caches the latest snapshot per session
+ * in `SessionUiState.pendingQueues` and broadcasts via `session_updated`.
+ * See change: add-followup-edit-and-steer-cancel.
+ */
+export interface QueueUpdateToServerMessage {
+  type: "queue_update";
+  sessionId: string;
+  steering: string[];
+  /** Entry views: text + image COUNT. Image bytes never cross the wire (design D2). */
+  followUp: FollowUpEntryView[];
+}
+
+/**
+ * Bridge -> server: per-send acknowledgement of a `send_prompt`, carrying the
+ * bridge's authoritative capture-before-send streaming verdict. `fresh:true`
+ * means the send started a fresh turn (idle); `fresh:false` means it raced into
+ * a mid-turn queue entry. Server forwards verbatim to subscribed browsers so the
+ * optimistic `pendingPrompt` bubble can transition to "sent" or drop.
+ * See change: optimistic-prompt-progress.
+ */
+export interface PromptReceivedToServerMessage {
+  type: "prompt_received";
+  sessionId: string;
+  fresh: boolean;
+  /**
+   * Echo of `SendPromptToExtensionMessage.promptId` when the prompt came from
+   * the server. This is the acknowledgement half of the transmitted-vs-delivered
+   * split: `POST /api/session/:id/prompt` returning `success` proves only that a
+   * byte left the server, while this echo proves the OWNING bridge handed the
+   * prompt to pi. Optional — an older bridge never echoes and the prompt stays
+   * `transmitted`. See change: fix-spawn-correlation-ttl-coupling (D7).
+   */
+  promptId?: string;
+}
+
+/** What a bridge can tell us about a message it threw away. */
+export type InboundDropClass = "session_mismatch" | "queue_overflow";
+
+/**
+ * Bridge -> server: an inbound message the bridge DISCARDED.
+ *
+ * The drop site's only record used to be a `console.error`, which lands in
+ * `/dev/null` whenever `keeperLog.capturePiOutput` is false (the default).
+ *
+ * `sessionId` is the REPORTING bridge's own session — the routing field. The id
+ * the dropped message named travels as `droppedSessionId` payload, because the
+ * gateway drops any inbound frame whose routing id maps to another connection,
+ * which is exactly the shape of a mismatch report.
+ *
+ * Best-effort by contract: reports share the outbound ring that can itself
+ * overflow, and are bounded per session per window.
+ * See change: fix-spawn-correlation-ttl-coupling (D6).
+ */
+export interface InboundDropReportMessage {
+  type: "inbound_drop_report";
+  sessionId: string;
+  dropClass: InboundDropClass;
+  /** Message type that was dropped, when known. */
+  messageType?: string;
+  /** The session id the dropped message named — payload, never routing. */
+  droppedSessionId?: string;
+  /** Reports elided by the per-window bound since the last delivered report. */
+  suppressed?: number;
+}
+
+/** Which transport fact a bridge is reporting. */
+export type BridgeDiagnosticEvent =
+  | "endpoint_resolved"
+  | "retarget_refused"
+  | "retarget_accepted"
+  /**
+   * The bridge's liveness watchdog force-closed a socket. Without this, a
+   * client-initiated close is indistinguishable in server.log from a network
+   * drop or a server reap — all three read as `connection closed` followed by
+   * a re-register, so a reconnect storm cannot be attributed.
+   */
+  | "watchdog_force_close"
+  /**
+   * A MARKED (dashboard-spawned) bridge reached a server at its own endpoint that
+   * could not prove it holds this HOME's local credential, so it aborted before
+   * registering. Delivered only over a later connection to the SAME endpoint
+   * whose proof verified. See change: loopback-credential-proof (D8).
+   */
+  | "server_proof_failed"
+  /**
+   * ACP adapter: negotiated protocol version, startup/exit cause and the
+   * rate-limited skipped / discarded / dropped-update counters. `detail` is
+   * human text. See change: add-acp-session-driver (D5, D6).
+   */
+  | "acp";
+
+/**
+ * Bridge -> server: how this bridge chose its endpoint, and every refusal to
+ * move off it.
+ *
+ * Same motivation as `inbound_drop_report`: the bridge-side `console.log` lands
+ * in /dev/null under the default `keeperLog.capturePiOutput:false`, so the
+ * only durable record is the one the server writes.
+ *
+ * `detail` is a preformatted human string, not structured fields — these are
+ * read by a person diagnosing "why that dashboard", never matched on.
+ * See change: add-pi-gateway-transport-identity (tasks 10.1, 10.2, 10.5).
+ */
+export interface BridgeDiagnosticMessage {
+  type: "bridge_diagnostic";
+  sessionId: string;
+  event: BridgeDiagnosticEvent;
+  detail: string;
+}
+
+// ── Extension → Server ──────────────────────────────────────────────
+
+/**
+ * The bridge's own extension package: realpath'd package dir + version.
+ * Compared by the server with the active runtime's extension (D8).
+ * See change: electron-runtime-overlay-updates.
+ */
+export interface BridgeExtensionIdentity {
+  dir: string;
+  version?: string;
+}
+
+export interface SessionRegisterMessage {
+  type: "session_register";
+  /**
+   * Announce intent to serve this session WITHOUT claiming it (D11, task
+   * 9.3a). The gateway takes no routing entry and no contention slot, creates
+   * no placeholder session, and replies `provisional_accepted` (carrying its
+   * instance id + a commit token) or `provisional_rejected`. Routing transfers
+   * only on an explicit commit.
+   * See change: add-pi-gateway-transport-identity.
+   */
+  provisional?: boolean;
+  sessionId: string;
+  cwd: string;
+  name?: string;
+  source: SessionSource;
+  /** Bridge extension identity (D8). Absent on pre-overlay bridges. */
+  extensionIdentity?: BridgeExtensionIdentity;
+  model?: string;
+  thinkingLevel?: string;
+  sessionFile?: string;
+  sessionDir?: string;
+  firstMessage?: string;
+  /** True when this is a fresh session start (not a reconnection) */
+  isNew?: boolean;
+  /** Number of conversation entries — used by server to skip event wipe on reconnect */
+  eventCount?: number;
+  /**
+   * Id of the last entry of the branch `eventCount` counts. With `eventCount`
+   * it lets the server prove a stored/hydrated transcript is the same branch
+   * and skip the wipe. Sent only by a bridge that also marks replayed events
+   * (`EventForwardMessage.replay`). Absent ⇒ the server always wipes.
+   * See change: fix-large-session-resume-replay (D5, D7).
+   */
+  leafEntryId?: string;
+  /**
+   * True when a turn is in progress (the same value the bridge uses for its
+   * own replay's `liveTailOpen`). A hydration-learned skip requires `false`:
+   * cold hydration closes open tool calls the live replay keeps open.
+   * Absent ⇒ no hydration-learned skip.
+   * See change: fix-large-session-resume-replay (D5, D7).
+   */
+  liveTailOpen?: boolean;
+  /** OS process ID of the pi agent — used for force-kill escalation */
+  pid?: number;
+  /**
+   * Server-minted spawn correlation token. Bridge populates this from
+   * `process.env.PI_DASHBOARD_SPAWN_TOKEN` IFF this is the first register
+   * for the bridge process (`bc.hasRegisteredOnce === false`). Subsequent
+   * registers (reattach, in-process new/fork/resume) omit it.
+   *
+   * SINGLE-USE: the token is scrubbed from `process.env` after its first
+   * read at BOTH boundaries — the rpc keeper (`keeper.cjs` injects it into
+   * the first pi launch only, deletes it on respawn) and the bridge (deletes
+   * `PI_DASHBOARD_SPAWN_TOKEN` after the first register). Descendants
+   * (subagents, nested `pi`, reload) therefore never inherit or re-report it.
+   * See changes: spawn-correlation-token, fix-spawn-token-env-leak.
+   */
+  spawnToken?: string;
+  /**
+   * Strong, restart-survival flag: true when the bridge process was
+   * dashboard-spawned. Derived from a capture-once boolean (captured from
+   * `PI_DASHBOARD_SPAWN_TOKEN` at bridge startup BEFORE the single-use token
+   * is scrubbed), NOT a live env read — so it stays correct after the token
+   * is removed. Unlike `spawnToken`,
+   * this is sent on EVERY register (initial + every reattach), so the
+   * server can re-stamp `source: "dashboard"` after its in-memory
+   * `pendingDashboardSpawns` counter and `headlessPidRegistry` have
+   * been wiped by a restart. Optional for forward-compat with older
+   * bridges; absence is interpreted as "unknown" and the server falls
+   * back to its legacy FIFO heuristic.
+   * See changes: fix-dashboard-source-mislabelling, fix-spawn-token-env-leak.
+   */
+  dashboardSpawned?: boolean;
+  /**
+   * Why the bridge is registering this session. The bridge sets this to
+   * `"spawn"` for the very first `session_register` after process boot
+   * and for every register emitted by the new/fork/resume path
+   * (`handleSessionChange`), and `"reattach"` for any subsequent
+   * `sendStateSync` triggered by a WebSocket reconnect to the dashboard
+   * server (i.e. the dashboard restarted while the bridge stayed alive).
+   * When omitted (legacy bridges), the server treats the message as if
+   * `"spawn"` was specified.
+   * See change: reattach-move-to-front.
+   */
+  registerReason?: "spawn" | "reattach";
+  /**
+   * Whether a TUI is attached to the pi process. `true` for interactive
+   * TUI sessions, `false` for headless/print-mode (`pi -p`). The bridge
+   * populates it from its cached UI state. Fact-forwarding only — the
+   * server decides what to do with it (auto-hide heuristic). Optional and
+   * back-compatible: when absent (legacy bridge), the server SHALL NOT
+   * apply the auto-hide heuristic.
+   * See change: auto-hide-headless-worker-sessions.
+   */
+  hasUI?: boolean;
+  /**
+   * Explicit visibility override derived from the bridge's environment
+   * (`PI_DASHBOARD_VISIBLE` ⇒ `"visible"`, `PI_DASHBOARD_HIDDEN` ⇒
+   * `"hidden"`; visible wins if both set). When present, it overrides the
+   * server's auto-hide heuristic at first register. Optional/back-compatible.
+   * See change: auto-hide-headless-worker-sessions.
+   */
+  visibilityIntent?: "hidden" | "visible";
+  /**
+   * Tri-state whether the session's cwd is a git repository, computed
+   * synchronously at register time (no `git_info_update` arrival race).
+   * `true` = confirmed git repo, `false` = confirmed non-git (git exited
+   * 128), `undefined` = unknown (probe inconclusive: missing binary,
+   * timeout, signal — never a false negative). Optional/back-compatible;
+   * an absent field is treated as `undefined`.
+   * See change: gate-session-worktree-button-on-git.
+   */
+  isGitRepo?: boolean;
+  /**
+   * Full usage totals (every kind, cache included) of the bridge's baseline
+   * `getEntries()` snapshot — the same snapshot its usage drain cursor starts
+   * after, so seed and live drain share one cutoff. Sent on the init/reload
+   * register and on a session change (new/fork/resume); never on a reconnect.
+   * The server applies it ONLY for a session id it has no record of.
+   * Optional/back-compatible: absent ⇒ all five totals start at zero.
+   * See change: count-non-message-usage.
+   */
+  usageSeed?: UsageTotals;
+  /**
+   * Which agent driver serves this session. Absent ≡ `"pi"`. `"acp"` is set by
+   * the ACP adapter; the server persists it and rejects pi-only operations.
+   * Additive/back-compatible. See change: add-acp-session-driver (D12).
+   */
+  driver?: SessionDriver;
+  /** Configured ACP agent id (`acpAgents[].id`) when `driver === "acp"`. */
+  acpAgentId?: string;
+}
+
+export interface SessionUnregisterMessage {
+  type: "session_unregister";
+  sessionId: string;
+}
+
+export interface ProcessMetrics {
+  /** RSS in bytes */
+  rss: number;
+  /** Heap used in bytes */
+  heapUsed: number;
+  /** Heap total in bytes */
+  heapTotal: number;
+  /** CPU usage percent since last heartbeat (0-100+) */
+  cpuPercent: number;
+  /** Event loop max delay in ms since last heartbeat */
+  eventLoopMaxMs?: number;
+  /** System load average (1 min) */
+  loadAvg1m: number;
+  /**
+   * Cumulative count of outgoing messages the bridge evicted from its bounded
+   * send buffer on ring-buffer overflow (bridge→server hop drop). Surfaced on
+   * `/api/health` for observability. See change:
+   * fix-stuck-tool-card-on-dropped-event.
+   */
+  droppedBufferedFrames?: number;
+  /**
+   * Poll-cost counters (change: optimize-polling-hot-paths). Cumulative for the
+   * bridge's lifetime; summed across sessions on `/api/health`.
+   */
+  pollProcScanRuns?: number;
+  pollProcScanSpawns?: number;
+  pollProcScanMs?: number;
+  pollGitProbesTick?: number;
+  pollGitProbesTool?: number;
+  pollGitProbesWatch?: number;
+  pollGitProbesRefresh?: number;
+  pollGitSpawns?: number;
+  pollGitMs?: number;
+  pollGitWatchersAttached?: number;
+  /**
+   * Cumulative count of INBOUND messages the bridge refused because its
+   * serialized inbound queue was full (server→bridge hop drop). Distinct from
+   * `droppedBufferedFrames`, which counts the outgoing send ring. Surfaced
+   * because the refusal warning is rate-limited to one per 5 s, so the log
+   * alone can hide a burst. See change: serialize-bridge-message-pump.
+   */
+  refusedInboundFrames?: number;
+  /**
+   * Subagent-tick throttle counters (change: reduce-bridge-tick-bandwidth, D6).
+   * Cumulative for the bridge's lifetime. `tickForwarded`/`tickCoalesced`
+   * describe the throttle's visible work; `tickDiscardedAtTerminal` and
+   * `tickDroppedNotReady` are its ONLY two information-loss modes and are
+   * otherwise entirely invisible in production. Ride the existing heartbeat
+   * metrics transport rather than a new one, and land on `/api/health` both
+   * per-session (via `agents[]`) and summed.
+   */
+  tickForwarded?: number;
+  tickCoalesced?: number;
+  tickDiscardedAtTerminal?: number;
+  tickDroppedNotReady?: number;
+  /**
+   * Plugin event-forward registry counters (change:
+   * add-plugin-bridge-contributions, D3/D4). `pluginForwardDeclared` is a gauge
+   * of accepted plugin channels; the rest are cumulative. `pluginForwardDropped`
+   * counts stream/latest messages lost to the retention bounds.
+   */
+  pluginForwardDeclared?: number;
+  pluginForwardRejected?: number;
+  pluginForwardConflicts?: number;
+  pluginForwardRetained?: number;
+  pluginForwardDropped?: number;
+  /**
+   * Subagent fan-out admission counters (change:
+   * bound-subagent-fanout-under-host-pressure, D7). Cumulative for the bridge's
+   * lifetime. `fanoutAdmitted` are calls the gate admitted; `fanoutRefused` are
+   * refusals by any cause, of which `fanoutSaturationRefused` were caused by
+   * resource saturation rather than the static cap. The refusals are ALSO
+   * written to the durable session record, because the failure mode this
+   * capability addresses ends with the process gone and these live counters
+   * vanish with it. Ride the existing heartbeat metrics transport rather than a
+   * new one.
+   */
+  fanoutAdmitted?: number;
+  fanoutRefused?: number;
+  fanoutSaturationRefused?: number;
+  /**
+   * V8 heap ceiling of this process in bytes (`v8.getHeapStatistics()
+   * .heap_size_limit`). Without it `heapUsed` is unreadable: "148 MB" means
+   * nothing until you know whether the ceiling is 512 MB or 8 GB.
+   * NOT the configured request — V8 adds a fixed overhead (~192 MB observed).
+   * See change: bound-session-heap-and-gc-telemetry.
+   */
+  heapSizeLimit?: number;
+  /**
+   * `process.memoryUsage().external` / `.arrayBuffers`, in bytes — where the
+   * bytes actually are on the worst observed session (512 MB RSS against
+   * 148 MB `heapUsed`, so ~360 MB sits OUTSIDE the knob a heap ceiling tunes).
+   * Measured here, not bounded.
+   */
+  external?: number;
+  arrayBuffers?: number;
+  /**
+   * GC activity SINCE THE LAST HEARTBEAT (read-and-reset, like the event-loop
+   * histogram above) — not cumulative. Scalars folded in a
+   * `PerformanceObserver("gc")` callback, so nothing buffers between beats and
+   * the memory-observation path cannot itself become a leak.
+   *
+   * `gcMajorCount` counts only major collections; a rising major count against
+   * a flat `heapUsed` is the thrash signature that precedes an OOM.
+   */
+  gcCount?: number;
+  gcMajorCount?: number;
+  gcPauseMsTotal?: number;
+}
+
+export interface SessionHeartbeatMessage {
+  type: "session_heartbeat";
+  sessionId: string;
+  /** Process metrics from the pi agent process */
+  metrics?: ProcessMetrics;
+  /**
+   * Bridge-reported agent liveness (`getBridgeState().isAgentStreaming`).
+   *
+   * `status: "streaming"` is otherwise a one-way latch — `agent_end` is the
+   * only path back to `idle`, so a single dropped `agent_end` sticks a card on
+   * `Thinking…` forever. The server reconciles session status against this on
+   * each beat (`reconcileAgentLiveness`).
+   *
+   * OPTIONAL by design (D5): absent ⇒ no liveness truth ⇒ no reconcile ⇒
+   * exactly the pre-change behaviour, so an old bridge against a new server
+   * degrades rather than breaks. Advisory for the watchdog: it MUST NOT alter
+   * the existing timeout/grace behaviour.
+   *
+   * See change: fix-stuck-streaming-status-latch.
+   */
+  agentRunning?: boolean;
+}
+
+export interface EventForwardMessage {
+  type: "event_forward";
+  sessionId: string;
+  event: DashboardEvent;
+  /**
+   * `true` on every event of a history replay (register / reconnect / session
+   * switch / ACP event-log replay); never set on a live forward. The server
+   * handles a marked event as replayed whatever its replay timers say. Absent
+   * ⇒ the server falls back to its idle/cap replay-mode timers.
+   * See change: fix-large-session-resume-replay (D1).
+   */
+  replay?: true;
+}
+
+/**
+ * Conventions on `event_forward` payloads relevant to per-message fork:
+ *
+ * - `message_start` and `message_end` events MAY carry an optional
+ *   `data.nonce: string` stamped by the bridge. The reducer carries it
+ *   onto the resulting ChatMessage so a later `entry_persisted` event
+ *   can back-fill the entry id.
+ * - `entry_persisted` events have shape:
+ *     {
+ *       eventType: "entry_persisted",
+ *       timestamp,
+ *       data: { type: "entry_persisted", entryId: string, nonce: string }
+ *     }
+ *   They are emitted by the bridge after pi calls
+ *   `sessionManager.appendMessage` and the entry id has been generated.
+ *   See change: fix-per-message-fork.
+ */
+export interface EntryPersistedEventData {
+  type: "entry_persisted";
+  entryId: string;
+  nonce: string;
+}
+
+export interface CommandsListMessage {
+  type: "commands_list";
+  sessionId: string;
+  commands: CommandInfo[];
+}
+
+export interface FlowsListMessage {
+  type: "flows_list";
+  sessionId: string;
+  flows: FlowInfo[];
+}
+
+export interface ExtensionUiRequestMessage {
+  type: "extension_ui_request";
+  sessionId: string;
+  requestId: string;
+  method: string;
+  params: Record<string, unknown>;
+}
+
+// StatsUpdateMessage removed — server extracts stats directly from forwarded turn_end events
+
+/**
+ * Bridge -> server: one model-attributed usage that is not an assistant turn
+ * and not a tool result — a `usage` session entry (`kind: "usage:<kind>"`,
+ * e.g. `usage:cache_warm`) or the `usage` of a compaction / branch-summary
+ * entry (`kind: "compaction" | "branch_summary"`). Drained from
+ * `ctx.sessionManager.getEntries()` past the bridge's entry-id cursor at
+ * `turn_end`, `agent_settled`, `cache_warming_decision` and `session_shutdown`.
+ * The server adds it to the session totals and synthesizes a kind-marked
+ * `stats_update` (no `contextUsage`). A top-level message, not an
+ * `event_forward`: an older server ignores it instead of rendering a card.
+ * See change: count-non-message-usage.
+ */
+export interface UsageRecordedMessage {
+  type: "usage_recorded";
+  sessionId: string;
+  kind: string;
+  /** pi `Usage`: input/output/cacheRead/cacheWrite/totalTokens/cost.total. */
+  usage: Record<string, unknown>;
+  /** Present for `usage` entries only (compaction/branch-summary carry none). */
+  provider?: string;
+  model?: string;
+  /** pi entry id the usage came from (diagnostics). */
+  entryId?: string;
+}
+
+export interface FilesListMessage {
+  type: "files_list";
+  sessionId: string;
+  query: string;
+  files: FileEntry[];
+}
+
+export interface GitInfoUpdateMessage {
+  type: "git_info_update";
+  sessionId: string;
+  gitBranch: string;
+  gitBranchUrl?: string;
+  /**
+   * PR tuple for the session's branch. `undefined` (absent) = unknown / old
+   * bridge (server leaves stored value untouched for the new fields);
+   * `null` = known-absent (server clears). See change:
+   * redesign-composer-session-strip (D5).
+   */
+  gitPrNumber?: number | null;
+  gitPrUrl?: string | null;
+  /** Lowercased PR state. Absent on older bridges. */
+  gitPrState?: GitPrState | null;
+  gitPrDraft?: boolean | null;
+  /** Collapsed `statusCheckRollup`. Absent on older bridges. */
+  gitPrChecks?: GitPrChecks | null;
+  /** Epoch ms of the last successful PR detection. */
+  gitPrCheckedAt?: number | null;
+  /**
+   * Set when the session's cwd is a git worktree. `null` clears any
+   * previously-stored worktree state on the server — UNLESS parentage was
+   * already resolved for the session, in which case it is retained (a `null`
+   * after set means the worktree was removed underneath a live session, not
+   * that the cwd switched to a plain checkout). Absent on older bridges —
+   * server treats as "no change".
+   * See changes: add-worktree-spawn-dialog,
+   *               fix-worktree-grouping-lost-on-remove.
+   */
+  gitWorktree?: import("./types.js").GitWorktreeInfo | null;
+  /**
+   * Optional refresh of the tri-state git-repo signal. The bridge only
+   * emits `git_info_update` for a confirmed repo (branch resolved), so this
+   * is `true` when present. `session_register` remains the authority.
+   * See change: gate-session-worktree-button-on-git.
+   */
+  isGitRepo?: boolean;
+  /**
+   * Working-tree dirtiness + upstream drift for the session's cwd, gathered
+   * on the same 30 s VCS tick from `git status --porcelain=v2 --branch`.
+   * Absent on older bridges and when the probe is inconclusive.
+   * See change: add-session-uncommitted-indicator-and-commit.
+   */
+  gitStatus?: import("./types.js").GitStatus;
+}
+
+// OpenSpecUpdateMessage removed — server polls directly via DirectoryService
+
+/**
+ * One provider that failed to refresh its catalogue. Degraded, not fatal:
+ * the last-known catalogue is still served alongside it.
+ * See change: upgrade-model-selector-primitives.
+ */
+export interface ProviderRefreshError {
+  provider: string;
+  message: string;
+}
+
+export interface ModelsListMessage {
+  type: "models_list";
+  sessionId: string;
+  models: ModelInfo[];
+  /**
+   * Present only when at least one provider failed to refresh — omitted (never
+   * `[]`) on a clean refresh, and never populated by a bare abort.
+   */
+  refreshErrors?: ProviderRefreshError[];
+}
+
+/**
+ * Bridge -> server: pi's live provider catalogue derived from
+ * `modelRegistry.authStorage` + `modelRegistry.getProviderDisplayName`.
+ * Sent alongside ModelsListMessage. See change: replace-hardcoded-provider-lists.
+ */
+export interface ProvidersListMessage {
+  type: "providers_list";
+  sessionId: string;
+  providers: ProviderInfo[];
+}
+
+export interface SessionNameUpdateMessage {
+  type: "session_name_update";
+  sessionId: string;
+  name: string;
+  /**
+   * Provenance of this name change, when the bridge can attribute it.
+   * `"auto"` = the bridge's automatic topic-naming applied it; `"user"` =
+   * an in-pi rename the bridge did not originate. Absent = unattributed
+   * (server keeps existing provenance). See change: add-auto-session-naming.
+   */
+  nameSource?: "auto" | "user" | "system";
+}
+
+/**
+ * Bridge → server: automatic session naming failed. Carries a human-readable
+ * `reason`; the server forwards it to browser subscribers as a one-shot toast
+ * and logs one line. Emitted once per session for hard-config errors
+ * (`@fast` unconfigured / OAuth-only-unauthable); transient model errors are
+ * silent. See change: add-auto-session-naming.
+ */
+export interface AutoNameErrorMessage {
+  type: "auto_name_error";
+  sessionId: string;
+  reason: string;
+}
+
+/**
+ * The outcome of ONE auto-naming attempt. `starved` means the model could not
+ * emit a title under the output cap (truncated stream) — distinct from
+ * `waiting`, where a well-behaved model reported no nameable topic yet, and
+ * from `retrying`, a transient failure. Conflating them destroys the
+ * diagnostic value of all three. See change: fix-auto-naming-reasoning-model.
+ */
+export type AutoNameOutcome =
+  | "applied"
+  | "waiting"
+  | "starved"
+  | "skipped-prefilter"
+  | "locked-out"
+  | "disabled"
+  | "already-named"
+  | "not-ready"
+  | "retrying"
+  | "stopped";
+
+/**
+ * Bridge → server: the outcome of one auto-naming attempt. DEDUPLICATED by the
+ * bridge — sent only when the outcome or its reason differs from the last one
+ * sent for that session, because terminal states (`already-named`,
+ * `locked-out`, `disabled`) otherwise recur on every terminal turn forever.
+ * The server retains the last one per session for the diagnostics surface.
+ * See change: fix-auto-naming-reasoning-model (design D9).
+ */
+export interface AutoNameOutcomeMessage {
+  type: "auto_name_outcome";
+  sessionId: string;
+  outcome: AutoNameOutcome;
+  reason: string;
+  modelRef?: string;
+  at: number;
+}
+
+/**
+ * Bridge → server: the auto-namer's durable state set, persisted into the
+ * session's `.meta.json` so a permanent stop survives a PROCESS restart, not
+ * only an extension reload. Without it a cold start re-spends a full attempt
+ * budget and re-emits the error, so "permanent" would not be permanent.
+ * See change: fix-auto-naming-reasoning-model (design D7).
+ */
+export interface AutoNameStateMessage {
+  type: "auto_name_state";
+  sessionId: string;
+  state: AutoNamerPersistedState;
+}
+
+
+/**
+ * Bridge -> server: the pi-coding-agent version of the process this bridge
+ * runs inside, read argv-anchored by walking up from that process's entry
+ * point to the nearest pi manifest (`readRunningPiVersion`) — never by name,
+ * which can read a hoisted newer copy — so it is the ground truth for the
+ * session. Sent at register and whenever the polled value changes (e.g. after
+ * an out-of-band `pi update --self`). Server stores it as
+ * `DashboardSession.piVersion`, derives the below-floor flag from it, and
+ * re-broadcasts. See change: restore-pi-version-skew-surface,
+ * update-pi-core-1-0-adopt-apis.
+ */
+export interface PiVersionUpdateMessage {
+  type: "pi_version_update";
+  sessionId: string;
+  version: string;
+}
+
+export interface SessionsListExtensionMessage {
+  type: "sessions_list";
+  sessionId: string;
+  cwd: string;
+  sessions: PiSessionInfo[];
+}
+
+// SessionHistorySyncMessage removed — server reads history directly via DirectoryService
+// OpenSpecActivityUpdateMessage removed — server detects OpenSpec activity from forwarded events
+
+export interface ModelUpdateMessage {
+  type: "model_update";
+  sessionId: string;
+  model: string;
+  thinkingLevel?: string;
+}
+
+export interface ReplayCompleteMessage {
+  type: "replay_complete";
+  sessionId: string;
+}
+
+export interface FirstMessageUpdateMessage {
+  type: "first_message_update";
+  sessionId: string;
+  firstMessage: string;
+}
+
+export interface RolesListMessage {
+  type: "roles_list";
+  sessionId: string;
+  roles: Record<string, string>;
+  presets: Array<{ name: string; roles: Record<string, string> }>;
+  activePreset: string | null;
+  /**
+   * Built-in (seeded default) role names, sourced server-side from
+   * DEFAULT_ROLE_NAMES. The client classifies a role as custom iff its name
+   * ∉ builtinRoleNames. Additive; older clients ignore it.
+   * See change: add-custom-roles-ui (design D2).
+   */
+  builtinRoleNames?: string[];
+}
+
+export interface ExtensionUiDismissMessage {
+  type: "extension_ui_dismiss";
+  sessionId: string;
+  requestId: string;
+}
+
+export interface SpawnNewSessionMessage {
+  type: "spawn_new_session";
+  sessionId: string;
+  cwd: string;
+}
+
+// ── PromptBus protocol messages ─────────────────────────────────────
+
+/**
+ * Interactive `ask_user` methods carried by `prompt.type`. The wire field
+ * stays `string` (adapters/plugins emit custom types) but this union is the
+ * authoritative set the built-in renderers handle. `"batch"` dispatches all
+ * sub-questions as ONE request answered together.
+ * See change: redesign-ask-user-question-cards.
+ */
+export type InteractiveMethod =
+  | "confirm"
+  | "select"
+  | "multiselect"
+  | "input"
+  | "editor"
+  | "batch";
+
+/** One sub-question inside a `batch` prompt (no nesting — cannot be `batch`). */
+export interface BatchQuestion {
+  method: "confirm" | "select" | "multiselect" | "input";
+  title: string;
+  message?: string;
+  options?: string[];
+  placeholder?: string;
+  /** Opt this select/multiselect step into the inline "Other" answer. See change: add-ask-user-inline-other. */
+  allowOther?: boolean;
+}
+
+/**
+ * One answer in a `batch` response, index-aligned with `BatchQuestion[]`.
+ * `confirm` → `{confirmed}`, `select`/`input` → `{value}`,
+ * `multiselect` → `{values}`.
+ *
+ * The `input` variant MAY carry pasted `images` (multiline-paste). They
+ * ride inside the JSON-encoded `{answers}` payload; the bridge persists
+ * them and rewrites the answer to `{value, attachments}` before the tool
+ * sees it. See change: add-ask-user-input-multiline-paste.
+ */
+export type BatchAnswer =
+  | { confirmed: boolean }
+  | { value: string; images?: ImageContent[] }
+  | { values: string[] };
+
+/** Result payload returned by a resolved `batch` prompt. */
+export interface BatchResult {
+  answers: BatchAnswer[];
+}
+
+export interface PromptRequestMessage {
+  type: "prompt_request";
+  sessionId: string;
+  promptId: string;
+  prompt: {
+    question: string;
+    /** Interactive method. See {@link InteractiveMethod}. */
+    type: string;
+    options?: string[];
+    defaultValue?: string;
+    pipeline?: string;
+    /** For `type: "batch"`, carries `questions: BatchQuestion[]`. */
+    metadata?: Record<string, unknown>;
+  };
+  component: {
+    type: string;
+    props: Record<string, unknown>;
+  };
+  placement: string;
+  /**
+   * Correlation token echoed by the bridge on a `prompt_resync_request` reply,
+   * so the server routes the re-emitted prompt to the requesting socket as a
+   * blocking frame instead of the guarded fan-out. Absent on a live prompt.
+   * See change: fix-pending-prompt-lost-on-replay (D4).
+   */
+  __resyncRequestId?: string;
+}
+
+/**
+ * Fire-and-forget notification from `ctx.ui.notify`. Deliberately NOT a
+ * `prompt_request`: a notification is not an unanswered ask, so it must never
+ * reach the pending-prompt registry, the `currentTool` fold, the unread stamp
+ * or the `questionFirst` reorder. Carries no `promptId`, no `component` and no
+ * `placement`. See change: split-notify-from-prompt-request.
+ */
+export interface NotifyMessage {
+  type: "notify";
+  sessionId: string;
+  notifyId: string;
+  message: string;
+  level?: NotifyLevel;
+  /** Emit time, epoch ms. Stamped by the bridge; the server backfills its receipt time when absent/invalid. See change: collapse-and-order-notify-rows. */
+  ts?: number;
+}
+
+export interface PromptDismissMessage {
+  type: "prompt_dismiss";
+  sessionId: string;
+  promptId: string;
+}
+
+export interface PromptCancelMessage {
+  type: "prompt_cancel";
+  sessionId: string;
+  promptId: string;
+}
+
+/**
+ * Bridge → server: persist a project-scope "Always allow" grant after the
+ * operator confirmed the agent path-gate confirm prompt. Bound to the raised
+ * confirm prompt (`promptId`) server-side.
+ * See change: ask-agent-file-access-in-chat.
+ */
+export interface PathGrantRequestMessage {
+  type: "path_grant_request";
+  requestId: string;
+  sessionId: string;
+  promptId: string;
+  path: string;
+  subject: string;
+}
+
+/** Server → bridge: outcome of a {@link PathGrantRequestMessage}. */
+export interface PathGrantResultMessage {
+  type: "path_grant_result";
+  requestId: string;
+  ok: boolean;
+  subject?: string;
+  error?: string;
+}
+
+/**
+ * Server → bridge, on every bridge (re)registration: content of the server's
+ * `~/.pi/dashboard/grant-store-id` token, re-read each time. The bridge offers
+ * "Always allow" only when it equals its own local token file.
+ */
+export interface DashboardIdentityMessage {
+  type: "dashboard_identity";
+  /** Absent when the server has no announceable grant store. */
+  grantStoreId?: string;
+  /** Server capability flags, e.g. `"path-yolo"`. See change: yolo-covers-agent-path-gate. */
+  features?: string[];
+}
+
+/**
+ * Bridge → server: at the would-prompt point of the agent path gate, ask whether
+ * a live YOLO session answers it. See change: yolo-covers-agent-path-gate.
+ */
+export interface PathYoloRequestMessage {
+  type: "path_yolo_request";
+  requestId: string;
+  sessionId: string;
+  /** Absolute, canonical path of the gated call. */
+  path: string;
+  access: "r" | "w";
+  tool: string;
+}
+
+/** Server → bridge: outcome of a {@link PathYoloRequestMessage}. */
+export interface PathYoloResultMessage {
+  type: "path_yolo_result";
+  requestId: string;
+  verdict: "auto-allow" | "refused" | "decline";
+}
+
+/**
+ * Bridge → server: ask for the vault values granted to this session's project.
+ * Sent on every connect and every `session_start` reason. `cwd` is the session's
+ * own cwd from `ctx.sessionManager.getCwd()`; absent when it could not be read
+ * (the hub then delivers nothing). `tracked` carries NAMES only, never values or
+ * hashes. See change: add-credential-vault (D2).
+ */
+export interface VaultSyncRequestMessage {
+  type: "vault_sync_request";
+  sessionId: string;
+  cwd?: string;
+  /** Raw `git remote get-url origin` of `cwd`; absent when there is no readable origin. The hub normalises it. */
+  origin?: string;
+  tracked: string[];
+  reason: "connect" | "startup" | "reload" | "new" | "resume" | "fork";
+}
+
+/**
+ * Server → bridge: the COMPLETE set of values granted to the session (a sync
+ * answer and a push are the same shape). `ok` replaces the granted set; `denied`
+ * means withdraw everything (disabled, untrusted, insecure transport, no project);
+ * `unavailable` means the vault could not be read, so the bridge keeps its values
+ * within the offline grace. See change: add-credential-vault (D2).
+ */
+export interface VaultSnapshotMessage {
+  type: "vault_snapshot";
+  status: "ok" | "denied" | "unavailable";
+  outcome: import("./vault-delivery.js").VaultDeliveryOutcome;
+  /** Present only when `status === "ok"`. */
+  entries: Array<{ name: string; value: string }>;
+  graceHours: number;
+}
+
+/** Bridge → server: how each granted name was applied (names and outcomes only). */
+export interface VaultReportMessage {
+  type: "vault_report";
+  sessionId: string;
+  applied: Array<{ name: string; outcome: "delivered" | "local-override" | "inherited" }>;
+}
+
+/** Bridge → server: the operator denied/dismissed a gate select prompt (fire-and-forget). */
+export interface PathGateRefusalMessage {
+  type: "path_gate_refusal";
+  sessionId: string;
+  promptId: string;
+  path: string;
+  subject: string;
+}
+
+export interface ProcessInfo {
+  pid: number;
+  pgid: number;
+  command: string;
+  elapsedMs: number;
+  // Optional server-supplied classification. The bridge is not required to
+  // populate these; the server enriches each entry before forwarding.
+  // See change: classify-process-list-entries.
+  kind?: ProcessKind;
+  label?: string;
+  sessionRef?: string;
+}
+
+/**
+ * Classification of a scanned background process.
+ *  - `task`        generic user background task (label = command)
+ *  - `sub-session` nested `pi` whose pid matches a connected session
+ *  - `pi-worker`   headless `pi` not in the session registry
+ *  - `plugin`      pi-agent plugin/MCP sidecar (label = plugin name)
+ * See change: classify-process-list-entries.
+ */
+export type ProcessKind = "task" | "sub-session" | "pi-worker" | "plugin";
+
+export interface ProcessListMessage {
+  type: "process_list";
+  sessionId: string;
+  processes: ProcessInfo[];
+}
+
+// LoadSessionEventsResultMessage and LoadSessionEventsErrorMessage removed — server loads directly
+
+// ── Extension UI System (Phase 1) ──
+// Pull-discovered, schema-driven UI modules. See change: add-extension-ui-modal.
+
+export interface UiModulesListMessage {
+  type: "ui_modules_list";
+  sessionId: string;
+  modules: ExtensionUiModule[];
+}
+
+export interface UiDataListMessage {
+  type: "ui_data_list";
+  sessionId: string;
+  /** Matches some `module.view.dataEvent`. */
+  event: string;
+  items: unknown[];
+}
+
+/**
+ * Bridge → server: the bridge's 30 s VCS tick discovered
+ * `existsSync(ctx.cwd) === false` for the first time on a session whose
+ * cwd previously existed. Server responds by stamping `cwdMissing: true`
+ * on the matching `DashboardSession` and broadcasting `session_updated`.
+ * Idempotent on the server side — re-emitting is harmless.
+ * See change: add-worktree-lifecycle-actions.
+ */
+export interface CwdMissingMessage {
+  type: "cwd_missing";
+  sessionId: string;
+}
+
+// ── RPC keeper: bridge → server slash dispatch ──
+// See change: add-rpc-stdin-dispatch-with-keeper-sidecar.
+//
+// @deprecated Retired by change
+// `retire-slash-dispatch-via-expand-prompt-templates`: the bridge dispatches
+// extension slash commands in-process via
+// `pi.sendUserMessage(text, { expandPromptTemplates: true })`, so
+// no current bridge sends this message. The server keeps a one-release
+// tombstone arm that answers with `command_feedback {status:"error",
+// message:"bridge outdated — reload the session"}`. Successor requirement:
+// `command-routing` "Extension slash command dispatch via sendUserMessage".
+// A follow-up change removes both this type and the tombstone.
+export interface DispatchExtensionCommandMessage {
+  type: "dispatch_extension_command";
+  sessionId: string;
+  command: string;
+  /** UUID minted by the bridge so pi's RPC response can be correlated. */
+  requestId: string;
+}
+
+// ── Extension UI System (Phase 2: live in-page decorations) ──
+// See change: add-extension-ui-decorations.
+
+/**
+ * Extension → server: a single live decorator descriptor. Cache key
+ * `${kind}:${namespace}:${id}` MUST be unique within a session; `removed: true`
+ * deletes the cache entry instead of upserting.
+ */
+export interface ExtUiDecoratorMessage {
+  type: "ext_ui_decorator";
+  sessionId: string;
+  descriptor: DecoratorDescriptor;
+  /** When true, server deletes the cached descriptor under the matching key. */
+  removed?: boolean;
+}
+
+// ── Markdown asset inlining (chat-markdown-local-images-and-math) ──
+//
+// Bridge → server: register a base64-encoded image asset under a content
+// hash. Emitted by the bridge BEFORE the `message_update` / `message_end`
+// event whose text references `pi-asset:<hash>`. Bytes ride exactly once
+// per (session, hash) pair — subsequent references in later events emit
+// no further `asset_register`. Persisted in `events.jsonl` alongside the
+// referencing message events so reconnect/replay rebuilds the per-session
+// asset registry deterministically. See change:
+// chat-markdown-local-images-and-math.
+export interface AssetRegisterMessage {
+  type: "asset_register";
+  sessionId: string;
+  /** Content hash (sha256 truncated to 16 hex chars). */
+  hash: string;
+  /** MIME type (one of the bridge's image allowlist). */
+  mimeType: string;
+  /** Base64-encoded file bytes. */
+  data: string;
+}
+
+/**
+ * Generic plugin-originated message forwarded from a plugin bridge entry to
+ * its plugin server entry. The bridge emits `pi.events.emit("dashboard:plugin-message",
+ * { pluginId, messageType, payload })`; the main bridge wraps it in this
+ * envelope and the server dispatches it to handlers registered via
+ * `ServerPluginContext.registerPiHandler(messageType, handler)`.
+ *
+ * Keeps plugin-specific payloads out of the typed core protocol: the
+ * envelope is generic, `payload` is opaque. See change: add-goal-continuation-plugin.
+ */
+export interface PluginPiMessage {
+  type: "plugin_pi_message";
+  sessionId: string;
+  /** Manifest id of the originating plugin (e.g. "goal"). */
+  pluginId: string;
+  /** Handler key the plugin server registered via registerPiHandler. */
+  messageType: string;
+  /** Opaque plugin-defined payload. */
+  payload: unknown;
+}
+
+/**
+ * Private request from a plugin bridge entry to its plugin server entry's
+ * `registerPiRequestHandler(messageType, …)` handler. Answered by exactly one
+ * {@link PluginReplyMessage} on the same socket. Never rides `pi.events`.
+ * See change: expose-plugin-credential-and-oauth-seams (D7).
+ */
+export interface PluginRequestMessage {
+  type: "plugin_request";
+  /** Bridge-generated correlation id (uuid). */
+  requestId: string;
+  /** Manifest id of the target plugin (claimed by the caller, not authenticated). */
+  pluginId: string;
+  messageType: string;
+  payload: unknown;
+}
+
+export type ExtensionToServerMessage =
+  | ThinkingTranslationFrame
+  | SessionMovedMessage
+  | SessionMoveCommitMessage
+  | SessionRegisterMessage
+  | SessionUnregisterMessage
+  | SessionHeartbeatMessage
+  | EventForwardMessage
+  | CommandsListMessage
+  | FlowsListMessage
+  | ExtensionUiRequestMessage
+  | FilesListMessage
+  | GitInfoUpdateMessage
+  | SessionNameUpdateMessage
+  | ModelsListMessage
+  | ProvidersListMessage
+  | ModelUpdateMessage
+  | SessionsListExtensionMessage
+  | ExtensionUiDismissMessage
+  | PromptRequestMessage
+  | NotifyMessage
+  | PromptDismissMessage
+  | PromptCancelMessage
+  | PathGrantRequestMessage
+  | PathYoloRequestMessage
+  | VaultSyncRequestMessage
+  | VaultReportMessage
+  | PathGateRefusalMessage
+  | ReplayCompleteMessage
+  | FirstMessageUpdateMessage
+  | RolesListMessage
+  | SpawnNewSessionMessage
+  | ProcessListMessage
+  | UiModulesListMessage
+  | UiDataListMessage
+  | ExtUiDecoratorMessage
+  | AssetRegisterMessage
+  | DispatchExtensionCommandMessage
+  | CwdMissingMessage
+  | PiVersionUpdateMessage
+  | PluginPiMessage
+  | PluginRequestMessage
+  | QueueUpdateToServerMessage
+  | GitCommitDraftResultMessage
+  | AutoNameErrorMessage
+  | AutoNameOutcomeMessage
+  | AutoNameStateMessage
+  | PromptReceivedToServerMessage
+  | InboundDropReportMessage
+  | BridgeDiagnosticMessage
+  | TranscriptChunkMessage
+  | UsageRecordedMessage;
+
+
+/**
+ * Server -> bridge: send the next slice of this session's transcript.
+ *
+ * Addressing is by session id ONLY — there is deliberately no path field, and
+ * the bridge refuses any request that carries one (`transcript-request-guard`).
+ * `cursor` is opaque to the server: it is minted by the bridge, echoed back
+ * unchanged, and carries a witness so a rewritten or truncated origin file
+ * restarts the read instead of resuming into misaligned bytes.
+ * See change: add-pi-gateway-transport-identity (D12, task 11.6).
+ */
+export interface TranscriptRequestMessage {
+  type: "transcript_request";
+  sessionId: string;
+  cursor?: unknown;
+  /** Read budget for this slice; the bridge may overshoot to finish a line. */
+  maxBytes?: number;
+}
+
+/**
+ * Bridge -> server: one bounded slice of the transcript.
+ *
+ * `restarted` means the bridge could not trust its cursor and re-read from the
+ * beginning — the server MUST replace what it retained rather than append, or
+ * the retained copy silently doubles. `complete` means a clean end of file was
+ * reached; until then the retained transcript is explicitly partial (#X18).
+ */
+export interface TranscriptChunkMessage {
+  type: "transcript_chunk";
+  sessionId: string;
+  /** Whole `.jsonl` lines, verbatim. Never a partial line. */
+  entries: string[];
+  cursor?: unknown;
+  complete: boolean;
+  restarted: boolean;
+  /** Set instead of `entries` when the bridge refused the request. */
+  refused?: { cause: string; reason: string };
+}
+
+
+/**
+ * Bridge -> server: this session has moved to another instance (D11, task 9.3).
+ *
+ * Sent to the ORIGIN in the window between a successful commit and releasing
+ * the origin connection — the only moment both facts are known and the origin
+ * can still be told. Without it the origin sees an abrupt disconnect and
+ * renders a crash.
+ */
+export interface SessionMovedMessage {
+  type: "session_moved";
+  sessionId: string;
+  /** Identity of the instance now serving it; an address would not survive a move. */
+  instanceId: string;
+  endpoint?: string;
+}
+
+/**
+ * Bridge -> server: commit a provisional, transferring routing to this socket
+ * (D11, task 9.3b). Single-use and TTL-bounded; the token is the only proof,
+ * so a commit cannot be replayed after the origin has been released.
+ */
+export interface SessionMoveCommitMessage {
+  type: "session_move_commit";
+  sessionId: string;
+  token: string;
+}
+
+/** Server -> bridge: the provisional was opened. Carries no routing claim. */
+export interface ProvisionalAcceptedMessage {
+  type: "provisional_accepted";
+  sessionId: string;
+  /** The TARGET's instance id, so the origin can verify identity (task 9.7). */
+  instanceId: string;
+  /** Single-use, TTL-bounded (30s) token that commits the move. */
+  token: string;
+}
+
+/**
+ * Server -> bridge: the provisional was refused.
+ *
+ * Deliberately detail-free: a cause would let a caller difference two refusals
+ * into "does this session exist here" (task 9.3a-iv). The true cause is logged
+ * server-side. Distinct from `register_rejected`, which the bridge treats as
+ * TERMINAL for the session — a refused move must not kill the session it was
+ * trying to preserve (task 9.3a-i).
+ */
+/**
+ * Positive acknowledgement that routing has ACTUALLY transferred.
+ *
+ * Without it the mover could only observe that its commit was *sent*, so a
+ * commit the gateway rejected (expired or replayed token, a mismatched
+ * sessionId, a live incumbent) still looked like success — the origin was
+ * released and the target owned nothing, losing the session outright. This
+ * is what makes "a failed move is a no-op" true rather than aspirational.
+ */
+export interface SessionMoveCommittedMessage {
+  type: "session_move_committed";
+  sessionId: string;
+}
+
+export interface ProvisionalRejectedMessage {
+  type: "provisional_rejected";
+}
+
+// ── Server → Extension ──────────────────────────────────────────────
+
+export interface SendPromptToExtensionMessage {
+  type: "send_prompt";
+  sessionId: string;
+  text: string;
+  images?: ImageContent[];
+  /**
+   * Per-prompt handle minted by the server, echoed back on `prompt_received`.
+   * Absent for prompts the server did not mint a handle for.
+   * See change: fix-spawn-correlation-ttl-coupling (D7).
+   */
+  promptId?: string;
+  /** Delivery mode: "steer" (after current turn) or "followUp" (after agent finishes). Defaults to "followUp" when absent. See change: add-steering-message. */
+  delivery?: "steer" | "followUp";
+}
+
+export interface AbortToExtensionMessage {
+  type: "abort";
+  sessionId: string;
+}
+
+/**
+ * Server → extension: re-drive a settled-error turn. Forwarded by the server
+ * gateway from a browser `retry_session`. The bridge re-drives the turn via
+ * `pi.sendMessage({ customType: "pi-dashboard:retry", display: false },
+ * { triggerTurn: true })` — the same pi call the legacy `/__dashboard_retry`
+ * sentinel made. See change:
+ * replace-dashboard-retry-command-with-protocol-message.
+ */
+export interface RetrySessionExtensionMessage {
+  type: "retry_session";
+  sessionId: string;
+}
+
+export interface RequestCommandsMessage {
+  type: "request_commands";
+  sessionId: string;
+}
+
+export interface RequestStateSyncMessage {
+  type: "request_state_sync";
+  sessionId: string;
+}
+
+export interface ListFilesMessage {
+  type: "list_files";
+  sessionId: string;
+  query: string;
+  /** Optional regexp interpretation of the leaf (editor filename search).
+   *  Absent for `@`-mention (substring) — wire shape unchanged for that path.
+   *  See change: split-editor-workspace. */
+  regex?: boolean;
+}
+
+// OpenSpecRefreshMessage removed — server refreshes directly via DirectoryService
+
+export interface RenameSessionExtensionMessage {
+  type: "rename_session";
+  sessionId: string;
+  name: string;
+  /** `"system"` = dashboard programmatic rename (attach/detach/plugin); absent = user. */
+  origin?: "system";
+}
+
+export interface RequestModelsMessage {
+  type: "request_models";
+  sessionId: string;
+}
+
+/**
+ * Server -> bridge: ask the bridge to push a fresh providers_list.
+ * See change: replace-hardcoded-provider-lists.
+ */
+export interface RequestProvidersMessage {
+  type: "request_providers";
+  sessionId: string;
+}
+
+export interface SetThinkingLevelMessage {
+  type: "set_thinking_level";
+  sessionId: string;
+  level: string;
+}
+
+export interface ListSessionsExtensionMessage {
+  type: "list_sessions";
+  sessionId: string;
+  cwd: string;
+}
+
+export interface SetModelMessage {
+  type: "set_model";
+  sessionId: string;
+  provider: string;
+  modelId: string;
+}
+
+export interface ShutdownExtensionMessage {
+  type: "shutdown";
+  sessionId: string;
+}
+
+/**
+ * Server→bridge graceful stop: set a per-session flag; the bridge shuts
+ * down cleanly at the next turn_end. See change:
+ * adopt-pi-071-072-073-features.
+ */
+/**
+ * Server → bridge: force a PR-status probe after a successful worktree Push
+ * or Open PR. No session id — the server only sends it to bridges whose
+ * session cwd is the worktree root or inside it; every receiving bridge acts.
+ * `reason: "pr"` additionally retries at +5 s / +15 s on an absent result
+ * (GitHub lag). Older bridges ignore it. See change:
+ * redesign-composer-session-strip (D5).
+ */
+export interface GitInfoRefreshExtensionMessage {
+  type: "git_info_refresh";
+  reason: "push" | "pr";
+}
+
+export interface StopAfterTurnExtensionMessage {
+  type: "stop_after_turn";
+  sessionId: string;
+}
+
+export interface FlowControlExtensionMessage {
+  type: "flow_control";
+  sessionId: string;
+  action: "abort" | "toggle_autonomous" | "dismiss_summary";
+}
+
+// LoadSessionEventsMessage removed — server loads directly via DirectoryService
+
+export interface HeartbeatAckMessage {
+  type: "heartbeat_ack";
+}
+
+/**
+ * Sent by the gateway to a bridge whose `session_register` lost a contention
+ * for an already-served session id, immediately BEFORE the socket is closed.
+ *
+ * The refusal is terminal: the bridge SHALL stop retrying for `sessionId`
+ * rather than treating the close as a transient disconnect, and SHALL surface
+ * `reason` instead of failing silently.
+ *
+ * See change: fix-duplicate-bridge-registration (D2).
+ */
+export interface RegisterRejectedExtensionMessage {
+  type: "register_rejected";
+  sessionId: string;
+  reason: string;
+}
+
+export interface RequestFlowsRefreshMessage {
+  type: "request_flows_refresh";
+  sessionId: string;
+}
+
+export interface CredentialsUpdatedMessage {
+  type: "credentials_updated";
+  /**
+   * Custom providers to force-re-register (re-fetch `/models`) even when their
+   * providers.json entry is unchanged. Absent = plain re-sync. Older bridges
+   * ignore it. See change: add-provider-models-refresh.
+   */
+  refreshProviders?: string[];
+}
+
+/**
+ * Server → extension: the plaintext MCP bearer minted for THIS session, sent
+ * only on the session's own bridge socket (the `credentials_updated` lane).
+ *
+ * The bridge assigns it to its own `process.env.PI_DASHBOARD_MCP_TOKEN` so the
+ * provisioned `pi-dashboard` entry's `requestHeadersCommand` can echo it per
+ * HTTP request. NEVER re-emitted onto `pi.events` — that bus is shared with
+ * every extension, and `plugin_emit_event` was measured to deliver payloads to
+ * unrelated subscribers (see change: wire-mcp-session-token, design D5).
+ */
+export interface McpTokenMintedExtensionMessage {
+  type: "mcp_token_minted";
+  /** Plaintext `mcp_`-prefixed bearer. Held in memory only — never logged. */
+  token: string;
+  /**
+   * The `/mcp` URL the bridge registers with pi's built-in MCP
+   * (`http://127.0.0.1:<port>/mcp`). Optional: an older server omits it, and
+   * the bridge then reports registration unavailable.
+   * See change: migrate-mcp-to-pi-builtin (D1).
+   */
+  url?: string;
+}
+
+export interface FlowManagementExtensionMessage {
+  type: "flow_management";
+  sessionId: string;
+  action: "run" | "new" | "edit" | "delete" | "set-edit-mode";
+  flowName?: string;
+  task?: string;
+  description?: string;
+  /** For action "set-edit-mode": toggles pi-flows `flows.editFlow`. */
+  enabled?: boolean;
+}
+
+export interface ArchitectPromptResponseExtensionMessage {
+  type: "architect_prompt_response";
+  sessionId: string;
+  promptId: string;
+  answer?: string;
+  cancelled?: boolean;
+}
+
+export interface RoleSetExtensionMessage {
+  type: "role_set";
+  sessionId: string;
+  role: string;
+  modelId: string;
+}
+
+export interface RolePresetLoadExtensionMessage {
+  type: "role_preset_load";
+  sessionId: string;
+  presetName: string;
+}
+
+export interface RolePresetSaveExtensionMessage {
+  type: "role_preset_save";
+  sessionId: string;
+  presetName: string;
+}
+
+export interface RolePresetDeleteExtensionMessage {
+  type: "role_preset_delete";
+  sessionId: string;
+  presetName: string;
+}
+
+/**
+ * Human-facing removal of a CUSTOM role. Routed to the `roles:remove` handler
+ * which purges the name from the schema, active map, and every preset in one
+ * atomic write. Built-in names are rejected server-side.
+ * See change: add-custom-roles-ui (design D3).
+ */
+export interface RoleRemoveExtensionMessage {
+  type: "role_remove";
+  sessionId: string;
+  role: string;
+}
+
+export interface RequestRolesMessage {
+  type: "request_roles";
+  sessionId: string;
+}
+
+export interface KillProcessMessage {
+  type: "kill_process";
+  sessionId: string;
+  /** Optional: the REST/MCP lifecycle path may not know the pgid; the bridge
+   *  no-ops on a falsy value. See change: expand-mcp-tiered-surface. */
+  pgid?: number;
+}
+
+export interface ExtensionUiResponseMessage {
+  type: "extension_ui_response";
+  sessionId: string;
+  requestId: string;
+  result?: unknown;
+  cancelled?: boolean;
+}
+
+/**
+ * Server → extension: a browser invoked an action / requested data on a
+ * Phase-1 management-modal module. The bridge re-emits this on `pi.events`
+ * as `pi.events.emit(msg.event, { ...msg.params, action: msg.action, _reply })`.
+ * Extensions either populate `data.items` synchronously (for `action: "list"`
+ * data fetches) or perform side-effects and emit `ui:invalidate` to refresh.
+ */
+export interface UiManagementMessage {
+  type: "ui_management";
+  sessionId: string;
+  /** Action id (matches some `UiAction.id`) or `"list"` for data fetch. */
+  action: string;
+  /** Event name to emit (matches `view.dataEvent` or `UiAction.event`). */
+  event: string;
+  params?: Record<string, unknown>;
+}
+
+export interface PromptResponseServerMessage {
+  type: "prompt_response";
+  sessionId: string;
+  promptId: string;
+  answer?: string;
+  cancelled?: boolean;
+  source: string;
+}
+
+/**
+ * Server → extension: the dashboard server is about to exit as part of a
+ * deliberate restart or shutdown. Bridges that receive this MUST suppress
+ * the spawn step in `server-auto-start.ts` for `quiesceMs` ms; mDNS
+ * discovery + health-check probes still run, so reconnection to the
+ * orchestrator-spawned replacement is unaffected.
+ *
+ * See change: fix-restart-bridge-auto-start-race.
+ */
+export interface ServerRestartingExtensionMessage {
+  type: "server_restarting";
+  reason: "restart" | "shutdown";
+  /** Suppression window in ms. Default 5000 for restart, 60000 for shutdown. */
+  quiesceMs: number;
+}
+
+// ── Follow-up queue mutation forwarded server → bridge ────────────────────
+//
+// Pi's ExtensionAPI exposes no queue-mutation primitives. The bridge owns
+// `bridgeFollowUp: string[]` and handles these messages locally. None of
+// them call pi.* methods. See change: rework-mid-turn-prompt-queue.
+//
+// The old pi-mutation types from Phase 3 (clear_steering_queue,
+// clear_followup_slot, edit_followup_slot) STAY DELETED. The names
+// edit/remove/promote_followup_entry are REUSED with new
+// bridge-buffer-only semantics.
+
+export interface ClearFollowupEntriesToExtensionMessage {
+  type: "clear_followup_entries";
+  sessionId: string;
+  indices: number[] | "all";
+}
+
+/**
+ * Replaces the entry's TEXT only; its buffered images are preserved by the
+ * bridge. An `images` field was retired in `fix-bridge-followup-image-drop`
+ * (design D5): under the count-only wire the browser never holds the bytes
+ * after the initial `send_prompt`, so no producer could populate it.
+ */
+export interface EditFollowupEntryToExtensionMessage {
+  type: "edit_followup_entry";
+  sessionId: string;
+  index: number;
+  text: string;
+}
+
+export interface RemoveFollowupEntryToExtensionMessage {
+  type: "remove_followup_entry";
+  sessionId: string;
+  index: number;
+}
+
+export interface PromoteFollowupEntryToExtensionMessage {
+  type: "promote_followup_entry";
+  sessionId: string;
+  index: number;
+}
+
+/**
+ * Server → extension: the dashboard-attached OpenSpec change for `sessionId`
+ * changed (attach sets `attachedChange` to the change name; detach sets it to
+ * `null`). The bridge mirrors this into `BridgeContext.attachedChange`, which
+ * the `before_agent_start` injector reads to build the per-turn system-prompt
+ * fragment. Replayed on every `session_register` so a reattaching bridge picks
+ * up current state. See change: inject-session-context-into-agent.
+ */
+export interface AttachProposalChangedExtensionMessage {
+  type: "attach_proposal_changed";
+  sessionId: string;
+  attachedChange: string | null;
+}
+
+/**
+ * Server → extension: a dashboard plugin action emits a configured event INTO
+ * this session. The in-session bridge relays it onto `pi.events`. The bridge
+ * does not know which events exist — it is a generic relay. Gated server-side
+ * to trusted (priority ≤ 100) plugins. See change: automation-emit-configured-event.
+ */
+export const RESERVED_EVENT_PREFIXES = ["roles:", "role:", "model:", "prompt:", "dashboard:", "ui:"] as const;
+
+/** True when `eventType` is in a namespace owned by host listeners (never plugin-emittable). */
+export function isReservedEventType(eventType: string): boolean {
+  return RESERVED_EVENT_PREFIXES.some((p) => eventType.startsWith(p));
+}
+
+export interface PluginEmitEventExtensionMessage {
+  type: "plugin_emit_event";
+  sessionId: string;
+  eventType: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Server → extension: broadcast the current value of bridge-relevant global
+ * preferences. Sent to a bridge on register (initial state) and to all bridges
+ * whenever the value changes (`piGateway.broadcast`). The bridge gates its
+ * automatic session naming on `autoNameSessions`. See change:
+ * add-auto-session-naming.
+ */
+export interface PreferencesUpdateExtensionMessage {
+  type: "preferences_update";
+  /** Global auto-naming toggle; bridge attempts naming only when true. */
+  autoNameSessions: boolean;
+}
+
+/**
+ * Server → bridge: the auto-namer stop state persisted in the session's
+ * `.meta.json`, pushed on register so a permanent stop survives a PROCESS
+ * restart and not merely an extension reload.
+ *
+ * Carries the STOP state plus the session-owned provenance (`nameSource` +
+ * witness `nameSourceFor`); never the bridge-persisted `hasAutoName`.
+ * See change: fix-auto-naming-reasoning-model (design D7, D8b);
+ * investigate-auto-name-provenance-relabel (D4).
+ */
+export interface AutoNameStateRestoreMessage {
+  type: "auto_name_state_restore";
+  /**
+   * STOP fields only. Typed as the projection rather than the full state so
+   * the wire contract matches the documented one: a type-only `Omit` on the
+   * sender would still ship whatever extra properties the object carries.
+   */
+  state: AutoNamerStopState;
+  /** Session-owned provenance (server authoritative). */
+  nameSource?: "auto" | "user" | "system";
+  /** Witness name the provenance was recorded for. */
+  nameSourceFor?: string;
+}
+
+/** The restore-only projection: everything describing the STOP, no provenance. */
+export type AutoNamerStopState = Pick<
+  AutoNamerPersistedState,
+  "hardStopped" | "errorEmitted" | "attemptsUsed" | "starvedCount" | "waitingCount"
+  | "sawStarved" | "stoppedModelRef" | "stopCause" | "stoppedReason"
+>;
+
+/**
+ * Host answer to a {@link PluginRequestMessage}. Sent host-internally on the
+ * requesting session's socket regardless of plugin priority. `error` is a
+ * handler message or one of `no_handler` / `reply_too_large` /
+ * `reply_not_serializable`. See change: expose-plugin-credential-and-oauth-seams (D7).
+ */
+export interface PluginReplyMessage {
+  type: "plugin_reply";
+  requestId: string;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+}
+
+export interface ThinkingTranslationSettingsChangedMessage {
+  type: "thinking_translation_settings_changed";
+  sessionId: string;
+}
+
+export type ServerToExtensionMessage =
+  | ThinkingTranslationSettingsChangedMessage
+  | ProvisionalAcceptedMessage
+  | SessionMoveCommittedMessage
+  | ProvisionalRejectedMessage
+  | TranscriptRequestMessage
+  | AutoNameStateRestoreMessage
+  | SendPromptToExtensionMessage
+  | RetrySessionExtensionMessage
+  | AbortToExtensionMessage
+  | ExtensionUiResponseMessage
+  | RequestCommandsMessage
+  | RequestStateSyncMessage
+  | ListFilesMessage
+  | RenameSessionExtensionMessage
+  | RequestModelsMessage
+  | RequestProvidersMessage
+  | SetThinkingLevelMessage
+  | ListSessionsExtensionMessage
+  | SetModelMessage
+  | ShutdownExtensionMessage
+  | StopAfterTurnExtensionMessage
+  | GitInfoRefreshExtensionMessage
+  | FlowControlExtensionMessage
+  | HeartbeatAckMessage
+  | RegisterRejectedExtensionMessage
+  | PathGrantResultMessage
+  | PathYoloResultMessage
+  | VaultSnapshotMessage
+  | DashboardIdentityMessage
+  | RequestFlowsRefreshMessage
+  | CredentialsUpdatedMessage
+  | McpTokenMintedExtensionMessage
+  | PluginReplyMessage
+  | FlowManagementExtensionMessage
+  | ArchitectPromptResponseExtensionMessage
+  | PromptResponseServerMessage
+  | RoleSetExtensionMessage
+  | RolePresetLoadExtensionMessage
+  | RolePresetSaveExtensionMessage
+  | RolePresetDeleteExtensionMessage
+  | RoleRemoveExtensionMessage
+  | RequestRolesMessage
+  | UiManagementMessage
+  | KillProcessMessage
+  | ServerRestartingExtensionMessage
+  | ClearFollowupEntriesToExtensionMessage
+  | EditFollowupEntryToExtensionMessage
+  | RemoveFollowupEntryToExtensionMessage
+  | PromoteFollowupEntryToExtensionMessage
+  | AttachProposalChangedExtensionMessage
+  | PluginEmitEventExtensionMessage
+  | PreferencesUpdateExtensionMessage
+  | GitCommitDraftMessage
+  | SubagentResyncRequestExtensionMessage
+  | PromptResyncRequestExtensionMessage;
+
+/**
+ * Server → extension: request an AI-drafted commit message. The bridge builds
+ * `git diff HEAD -- <files>`, seeds an ephemeral in-memory fork-subagent with
+ * the live session context, prompts once, and replies with
+ * `git_commit_draft_result` carrying the same `requestId`. The visible
+ * conversation is never appended to. See change:
+ * add-session-uncommitted-indicator-and-commit.
+ */
+export interface GitCommitDraftMessage {
+  type: "git_commit_draft";
+  sessionId: string;
+  /** Correlates the async reply back to the pending HTTP request. */
+  requestId: string;
+  cwd: string;
+  /** Repo-relative files chosen for the commit. */
+  files: string[];
+}
+
+/** Extension → server: the drafted commit message for `requestId`. */
+export interface GitCommitDraftResultMessage {
+  type: "git_commit_draft_result";
+  sessionId: string;
+  requestId: string;
+  message: string;
+  /** Which ladder rung produced the message. */
+  source: "fork-subagent" | "diff-only" | "stub";
+}
+
+/**
+ * Server → extension: forward a browser resync request to the owning bridge.
+ * The bridge replies with the latest retained `AgentDetails` snapshot of the
+ * running subagent as a synthetic `subagent_started` `event_forward`, or no-ops
+ * for an unknown/finished agent. See change: fix-subagent-live-detail-reliability (D2).
+ */
+export interface SubagentResyncRequestExtensionMessage {
+  type: "subagent_resync_request";
+  sessionId: string;
+  agentId: string;
+  /**
+   * Correlation token from the requesting browser, echoed by the bridge onto
+   * the reply frame (`__resyncRequestId`) so the server can route the reply to
+   * that one connection. See change: reduce-subagent-details-payload (C5).
+   */
+  requestId?: string;
+  /**
+   * Why this resync fired — `"open"` (user opened the inspector) or
+   * `"cadence"` (the D4 v1 pull loop). Counted separately by the bridge.
+   * See change: reduce-subagent-details-payload (D6, task 9.4).
+   */
+  reason?: "open" | "cadence";
+}
+
+/**
+ * Server → extension: ask the session's bridge to re-emit every prompt it is
+ * still awaiting an answer for, so a dialog lost to transcript back-pressure or
+ * a client state reset can be rebuilt without a page reload. The bridge replies
+ * with ordinary `prompt_request` frames carrying `__resyncRequestId` = the
+ * echoed token. See change: fix-pending-prompt-lost-on-replay (B).
+ */
+export interface PromptResyncRequestExtensionMessage {
+  type: "prompt_resync_request";
+  sessionId: string;
+  /**
+   * Correlation token from the requesting browser, echoed by the bridge onto
+   * each re-emitted `prompt_request` (`__resyncRequestId`) so the server can
+   * route the reply back to that one connection. Optional: an older browser
+   * omits it and every reply falls back to the ordinary fan-out.
+   */
+  requestId?: string;
+}
+
+

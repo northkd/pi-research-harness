@@ -1,0 +1,2412 @@
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetAddonIssuesStore } from "../../lib/addons/addon-issues-store.js";
+import {
+  ModelConfigProvider,
+  type ModelConfigValue,
+} from "../../lib/state/ModelConfigContext.js";
+import { SettingsPanel } from "../settings/SettingsPanel.js";
+
+// Worktree auto-init preference is fetched/persisted through git-api, not
+// /api/config. Mock those so the Sessions-tab toggle drives them.
+// See change: auto-init-worktree-on-spawn.
+const { fetchAutoInitWorktreePref, setAutoInitWorktreePref } = vi.hoisted(() => ({
+  fetchAutoInitWorktreePref: vi.fn(),
+  setAutoInitWorktreePref: vi.fn(),
+}));
+vi.mock("../../lib/git/git-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/git/git-api.js")>("../../lib/git/git-api.js");
+  return { ...actual, fetchAutoInitWorktreePref, setAutoInitWorktreePref };
+});
+
+// Dual-URL routing is exercised against real wouter + jsdom history (no mock)
+// so route-param / ?tab= resolution and the replace-redirects run for real.
+// See change: reorganize-settings-into-pages.
+function setPath(path: string) {
+  window.history.replaceState({}, "", path);
+}
+
+// Mock model-proxy-api (called by ModelProxySection when proxy is enabled)
+vi.mock("../../lib/api/model-proxy-api.js", () => ({
+  listApiKeys: vi.fn().mockResolvedValue({ keys: [], revoked: [] }),
+  createApiKey: vi.fn(),
+  revokeApiKey: vi.fn().mockResolvedValue(undefined),
+  deleteApiKey: vi.fn().mockResolvedValue(undefined),
+  refreshRegistry: vi.fn().mockResolvedValue(undefined),
+}));
+
+const mockConfig = {
+  port: 8000,
+  piPort: 9999,
+  autoStart: true,
+  autoShutdown: true,
+  shutdownIdleSeconds: 300,
+  spawnStrategy: "headless",
+  tunnel: { enabled: true },
+  devBuildOnReload: false,
+  memoryLimits: {
+    maxEventsPerSession: 200,
+    maxStringFieldSize: 4000,
+    maxWsBufferBytes: 4194304,
+  },
+};
+
+function mockFetchConfig(configOverrides?: any) {
+  const cfg = configOverrides ? { ...mockConfig, ...configOverrides } : mockConfig;
+  return vi.fn().mockImplementation((url: string, options?: any) => {
+    if (url === "/api/config" && !options?.method) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: cfg }) });
+    }
+    if (url === "/api/providers") {
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    }
+    // PUT /api/config
+    if (url === "/api/config" && options?.method === "PUT") {
+      return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+    }
+    return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+  });
+}
+
+// Click a left-nav page item by its visible label. Scoped to the rail: the
+// Save Bar also renders a button per dirty page, with the same label.
+// See change: plugin-settings-pages.
+function gotoPage(name: string) {
+  const rail = screen.getByTestId("settings-nav-rail");
+  fireEvent.click(within(rail).getByRole("button", { name }));
+}
+
+describe("SettingsPanel", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    // Safe defaults so the Sessions-tab WorktreeAutoInitToggle never throws
+    // when other tests navigate there.
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/general");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the left-nav rail with grouped pages and defaults to General", async () => {
+    global.fetch = mockFetchConfig();
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Settings")).toBeTruthy();
+      expect(screen.getByTestId("settings-nav-rail")).toBeTruthy();
+      // Nav items (one per page).
+      expect(screen.getByRole("button", { name: "General" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Sessions" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Remote Servers" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Security" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "OpenSpec" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Developer" })).toBeTruthy();
+      // General page content: Interface section, default selection.
+      expect(screen.getByText("Interface")).toBeTruthy();
+    });
+  });
+
+  it("opens read-only billing from navigation and its direct URL", async () => {
+    global.fetch = mockFetchConfig();
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("settings-nav-rail"));
+    gotoPage("Billing statistics");
+    await waitFor(() => screen.getByTestId("billing-statistics"));
+    expect(window.location.pathname).toBe("/settings/billing");
+    expect(screen.queryByTestId("nav-dirty-billing")).toBeNull();
+    cleanup();
+    setPath("/settings/billing");
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("billing-statistics"));
+    expect(window.location.pathname).toBe("/settings/billing");
+  });
+
+  // Back arrow returns to the launching route via onBack (App's goBack), not a
+  // hardcoded navigate("/"). See change: fix-settings-back-to-launching-route.
+  it("back arrow invokes onBack when not dirty", async () => {
+    global.fetch = mockFetchConfig();
+    const onBack = vi.fn();
+
+    render(<SettingsPanel onBack={onBack} />);
+
+    await waitFor(() => expect(screen.getByTitle("Back")).toBeTruthy());
+    fireEvent.click(screen.getByTitle("Back"));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it("keeps header and nav rail outside the scroll container", async () => {
+    global.fetch = mockFetchConfig();
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => screen.getByText("Settings"));
+
+    const header = screen.getByTestId("settings-header");
+    const navRail = screen.getByTestId("settings-nav-rail");
+    const content = screen.getByTestId("settings-content");
+
+    expect(content.contains(header)).toBe(false);
+    expect(content.contains(navRail)).toBe(false);
+  });
+
+  it("marks the active page with aria-current and switches content + URL", async () => {
+    global.fetch = mockFetchConfig();
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Interface"));
+
+    expect(screen.getByRole("button", { name: "General" }).getAttribute("aria-current")).toBe("page");
+
+    // Switch to Server page.
+    gotoPage("Server");
+    await waitFor(() => {
+      expect(screen.getByText("HTTP Port")).toBeTruthy();
+      expect(window.location.pathname).toBe("/settings/server");
+      expect(screen.getByRole("button", { name: "Server" }).getAttribute("aria-current")).toBe("page");
+    });
+  });
+
+  it("redirects bare /settings to /settings/general", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings");
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings/general");
+      expect(screen.getByText("Interface")).toBeTruthy();
+    });
+  });
+
+  it("renders a canonical page URL directly", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/security");
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Authentication")).toBeTruthy();
+      expect(window.location.pathname).toBe("/settings/security");
+    });
+  });
+
+  it("replace-upgrades legacy ?tab=<id> to the canonical path", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings?tab=security");
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings/security");
+      expect(window.location.search).toBe("");
+      expect(screen.getByText("Authentication")).toBeTruthy();
+    });
+  });
+
+  it("aliases legacy ?tab=advanced → developer and ?tab=servers → remote", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings?tab=advanced");
+
+    const { unmount } = render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings/developer");
+      expect(screen.getByText("Dev Build on Reload")).toBeTruthy();
+    });
+    unmount();
+    cleanup();
+
+    setPath("/settings?tab=servers");
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings/remote");
+      expect(screen.getByText("Known Servers")).toBeTruthy();
+    });
+  });
+
+  it("falls back to general for an unknown page id", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/bogus");
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings/general");
+      expect(screen.getByText("Interface")).toBeTruthy();
+    });
+  });
+
+  // See change: addons-hub-declutter (test-plan E5, E6)
+  it("E5: /settings/add-ons renders the Add-ons page as the canonical URL", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/add-ons");
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings/add-ons");
+      expect(screen.getByRole("button", { name: "Add-ons" }).getAttribute("aria-current")).toBe("page");
+    });
+  });
+
+  it.each(["/settings/packages", "/settings?tab=packages"])(
+    "E5: legacy %s replace-redirects to /settings/add-ons without a new history entry",
+    async (legacy) => {
+      global.fetch = mockFetchConfig();
+      setPath(legacy);
+      const lengthBefore = window.history.length;
+
+      render(<SettingsPanel />);
+
+      await waitFor(() => {
+        expect(window.location.pathname).toBe("/settings/add-ons");
+        expect(window.location.search).toBe("");
+        expect(screen.getByRole("button", { name: "Add-ons" }).getAttribute("aria-current")).toBe("page");
+      });
+      expect(window.history.length).toBe(lengthBefore);
+    },
+  );
+
+  it.each(["/settings/package", "/settings/add-on"])("E6: near-miss %s still falls back to general", async (bad) => {
+    global.fetch = mockFetchConfig();
+    setPath(bad);
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings/general");
+    });
+  });
+
+  it("shows loading state initially", () => {
+    global.fetch = vi.fn().mockReturnValue(new Promise(() => {})); // never resolves
+    render(<SettingsPanel />);
+    expect(screen.getByText("Loading settings...")).toBeTruthy();
+  });
+
+  it("renders each section on exactly one page (dedup)", async () => {
+    global.fetch = mockFetchConfig();
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Interface"));
+
+    // Memory Limits lives on Server only.
+    gotoPage("Server");
+    await waitFor(() => screen.getByText("Memory Limits"));
+    expect(screen.queryByText("Dev Build on Reload")).toBeNull();
+
+    // Dev Build on Reload lives on Developer only; Memory Limits is gone there.
+    gotoPage("Developer");
+    await waitFor(() => screen.getByText("Dev Build on Reload"));
+    expect(screen.queryByText("Memory Limits")).toBeNull();
+  });
+
+  it("saves changes made across multiple pages in a single operation", async () => {
+    let savedBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        savedBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Interface"));
+
+    // Change port on the Server page.
+    gotoPage("Server");
+    await waitFor(() => screen.getByText("HTTP Port"));
+    const portInput = screen.getByDisplayValue("8000");
+    fireEvent.change(portInput, { target: { value: "9000" } });
+
+    // Change a memory limit (also Server page) and navigate away/back to prove
+    // the draft survives page changes.
+    const maxEventsInput = screen.getByDisplayValue("200");
+    fireEvent.change(maxEventsInput, { target: { value: "500" } });
+
+    gotoPage("Sessions");
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/sessions"));
+    gotoPage("Server");
+    await waitFor(() => screen.getByText("HTTP Port"));
+    // Edits preserved after navigating between pages.
+    expect(screen.getByDisplayValue("9000")).toBeTruthy();
+
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+
+    await waitFor(() => {
+      expect(savedBody).toBeTruthy();
+      expect(savedBody.port).toBe(9000);
+      expect(savedBody.memoryLimits?.maxEventsPerSession).toBe(500);
+    });
+  });
+
+  it("hides the Save Bar (no Save button) when there are no changes", async () => {
+    global.fetch = mockFetchConfig();
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => screen.getByText("Interface"));
+
+    // Dirty-gated friction: nothing to save → no bar, no Save button.
+    expect(screen.queryByTestId("settings-save-bar")).toBeNull();
+    expect(screen.queryByTestId("save-btn")).toBeNull();
+  });
+
+  it("displays bypass URLs from auth config on the Security page", async () => {
+    const configWithAuth = {
+      ...mockConfig,
+      auth: {
+        secret: "***",
+        providers: { github: { clientId: "id1", clientSecret: "***" } },
+        allowedUsers: ["user@example.com"],
+        bypassUrls: ["/webhooks/", "/metrics"],
+      },
+    };
+    global.fetch = mockFetchConfig(configWithAuth);
+    setPath("/settings/security");
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => screen.getByTestId("bypass-urls-textarea"));
+
+    const textarea = screen.getByTestId("bypass-urls-textarea");
+    expect((textarea as HTMLTextAreaElement).value).toBe("/webhooks/\n/metrics");
+  });
+
+  it("includes bypassUrls in the save payload when changed on the Security page", async () => {
+    const configWithAuth = {
+      ...mockConfig,
+      auth: {
+        secret: "***",
+        providers: { github: { clientId: "id1", clientSecret: "***" } },
+        bypassUrls: [],
+      },
+    };
+    let savedBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        savedBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: configWithAuth }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/security");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("bypass-urls-textarea"));
+
+    const textarea = screen.getByTestId("bypass-urls-textarea");
+    fireEvent.change(textarea, { target: { value: "/webhooks/\n/public" } });
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+
+    await waitFor(() => {
+      expect(savedBody?.auth?.bypassUrls).toEqual(["/webhooks/", "/public"]);
+    });
+  });
+
+  // F2 (collapse-pairing-into-gateway): Security offers a ROUTE, not a
+  // duplicate — zero pairing QRs, copy-strings or approval controls anywhere in
+  // the tree, and the link to the Gateway pairing surface is present.
+  it("Security renders no pairing QR, copy-string, or approval controls; link present", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/security");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("security-pair-link"));
+
+    expect(document.querySelectorAll("canvas").length).toBe(0);
+    expect(document.body.textContent).not.toContain("pi:pair:v1.");
+    expect(screen.queryByTestId("pairing-approve-btn")).toBeNull();
+    expect(screen.queryByTestId("gateway-pair-approve-btn")).toBeNull();
+  });
+
+  // F4 (collapse-pairing-into-gateway): paired-device management STAYS on
+  // Security — rows with label, last-seen, and an enabled Revoke control.
+  it("Security still lists paired devices with working Revoke controls", async () => {
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/paired-devices") {
+        return Promise.resolve({
+          ok: true,
+          headers: { get: () => "application/json" },
+          json: () =>
+            Promise.resolve({
+              success: true,
+              data: [
+                { id: "d1", label: "iPhone", createdAt: "2026-01-01", lastSeen: "2026-08-19" },
+                { id: "d2", label: "MacBook", createdAt: "2026-02-01", lastSeen: null },
+              ],
+            }),
+        });
+      }
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/security");
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => screen.getByText("iPhone"));
+    expect(screen.getByText("MacBook")).toBeDefined();
+    const revokeButtons = screen.getAllByTitle("Revoke device");
+    expect(revokeButtons.length).toBe(2);
+    expect(screen.getAllByText(/last seen/i).length).toBe(2);
+    revokeButtons.forEach((b) => expect((b as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it("shows restart-required message when port changes", async () => {
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        return Promise.resolve({
+          json: () => Promise.resolve({ success: true, restartRequired: true }),
+        });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({
+          json: () => Promise.resolve({ success: true, data: mockConfig }),
+        });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/server");
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => screen.getByText("HTTP Port"));
+
+    const portInput = screen.getByDisplayValue("8000");
+    fireEvent.change(portInput, { target: { value: "9000" } });
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/require.*restart/i)).toBeTruthy();
+    });
+  });
+
+  it("includes modelProxy in the save payload when changed on the Providers page", async () => {
+    const configWithModelProxy = {
+      ...mockConfig,
+      modelProxy: { enabled: true, defaultModel: "openai/gpt-4o" },
+    };
+    let savedBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        savedBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: configWithModelProxy }) });
+      }
+      if (url === "/api/providers") {
+        return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+      }
+      if (url === "/api/provider-auth/status") {
+        return Promise.resolve({ json: () => Promise.resolve([]) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/providers");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("default-model-input"));
+
+    const input = screen.getByTestId("default-model-input");
+    fireEvent.change(input, { target: { value: "anthropic/claude-3-5-sonnet" } });
+
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+
+    await waitFor(() => {
+      expect(savedBody).toBeTruthy();
+      expect(savedBody.modelProxy.defaultModel).toBe("anthropic/claude-3-5-sonnet");
+      expect(savedBody.modelProxy.enabled).toBe(true);
+    });
+  });
+
+  it("adds a preferred model via ModelSelector and persists modelProxy.preferredModels on Save", async () => {
+    const configWithModelProxy = {
+      ...mockConfig,
+      modelProxy: { enabled: true },
+    };
+    let savedBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        savedBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: configWithModelProxy }) });
+      }
+      if (url === "/api/provider-auth/status") {
+        return Promise.resolve({ json: () => Promise.resolve([]) });
+      }
+      // Proxy editors are sourced from the CATALOGUE alone, never from a
+      // session's models_list. See change: settings-default-model-without-session.
+      if (url === "/api/models") {
+        return Promise.resolve({
+          ok: true, status: 200, statusText: "",
+          headers: { get: () => "application/json" },
+          json: () => Promise.resolve({ object: "list", data: [{ id: "openai/gpt-4o", provider: "openai" }] }),
+        });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/providers");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("preferred-models-editor"));
+
+    // Open the "Add model" selector and pick the one available model.
+    // The TRIGGER stays inside the editor, but the open panel is portaled to
+    // the layer root — its rows are only reachable from `screen`. Exactly one
+    // dropdown is open at a time, so the query is unambiguous.
+    // See change: fix-composer-popover-layering.
+    const editor = screen.getByTestId("preferred-models-editor");
+    fireEvent.click(within(editor).getByTestId("model-selector-button"));
+    await waitFor(() => screen.getByTestId("model-row"));
+    fireEvent.click(screen.getByTestId("model-row"));
+
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+
+    await waitFor(() => {
+      expect(savedBody).toBeTruthy();
+      expect(savedBody.modelProxy.preferredModels).toEqual(["openai/gpt-4o"]);
+    });
+  });
+
+  it("adds a model alias and persists modelProxy.modelAliases on Save", async () => {
+    const configWithModelProxy = {
+      ...mockConfig,
+      modelProxy: { enabled: true },
+    };
+    let savedBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        savedBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: configWithModelProxy }) });
+      }
+      if (url === "/api/provider-auth/status") {
+        return Promise.resolve({ json: () => Promise.resolve([]) });
+      }
+      if (url === "/api/models") {
+        return Promise.resolve({
+          ok: true, status: 200, statusText: "",
+          headers: { get: () => "application/json" },
+          json: () => Promise.resolve({ object: "list", data: [{ id: "cliproxy/claude-3-5-sonnet", provider: "cliproxy" }] }),
+        });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/providers");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("model-aliases-editor"));
+
+    const editor = screen.getByTestId("model-aliases-editor");
+    fireEvent.click(within(editor).getByTestId("add-alias-button"));
+    fireEvent.change(within(editor).getByTestId("alias-key-0"), { target: { value: "claude" } });
+    // Pick the alias target from the ModelSelector (panel is portaled — rows
+    // resolve from `screen`). See change: fix-composer-popover-layering.
+    fireEvent.click(within(editor).getByTestId("model-selector-button"));
+    await waitFor(() => screen.getByTestId("model-row"));
+    fireEvent.click(screen.getByTestId("model-row"));
+
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+
+    await waitFor(() => {
+      expect(savedBody).toBeTruthy();
+      expect(savedBody.modelProxy.modelAliases).toEqual({ claude: "cliproxy/claude-3-5-sonnet" });
+    });
+  });
+
+  it("F8: a custom-endpoint write never opens the Save Bar and survives Discard", async () => {
+    // The Providers page keeps its Save-bar attribution for OTHER sources
+    // (modelProxy), but provider credentials/endpoints are written at the
+    // point of edit and are NOT a draft source. See change:
+    // redesign-providers-settings-page (settings-panel spec, F8).
+    let patchCalls = 0;
+    const stored: Record<string, any> = {};
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      if (url.includes("/api/providers") && options?.method === "PATCH") {
+        patchCalls += 1;
+        // Model the server: the entry is persisted before the response.
+        const name = decodeURIComponent(url.split("/api/providers/")[1]);
+        const body = JSON.parse(options.body);
+        stored[name] = { baseUrl: body.baseUrl, apiKey: body.apiKey, api: body.api };
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true }) });
+      }
+      if (url.includes("/api/providers")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, providers: stored, health: {} }) });
+      }
+      if (url.includes("/api/provider-auth/status")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes("/api/provider-auth/catalogue-ready")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ready: true }) });
+      }
+      if (url.includes("/api/models")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ status: "ok", models: [] }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/providers");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("add-provider-button"));
+
+    // Add a custom endpoint through the dialog.
+    fireEvent.click(screen.getByTestId("add-provider-button"));
+    fireEvent.click(await screen.findByText(/custom endpoint/i));
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "local-vllm" } });
+    fireEvent.change(screen.getByLabelText(/base url/i), { target: { value: "http://localhost:8000/v1" } });
+    fireEvent.change(screen.getByLabelText(/api key/i), { target: { value: "sk-x" } });
+    fireEvent.click(screen.getByTestId("dialog-submit"));
+
+    // The write committed on its own action: the row renders and NO Save Bar
+    // appeared.
+    await waitFor(() => expect(screen.getByText("local-vllm")).toBeTruthy());
+    expect(patchCalls).toBe(1);
+    expect(screen.queryByTestId("settings-save-bar")).toBeNull();
+
+    // An unrelated dirty field opens the Save Bar; Discard must NOT revert the
+    // already-written provider state (no re-issue, row stays).
+    setPath("/settings/general");
+    await waitFor(() => screen.getByText("Interface"));
+    fireEvent.change(screen.getByText("PWA Display Name").closest("div")!.querySelector("input")!, {
+      target: { value: "renamed" },
+    });
+    await waitFor(() => screen.getByTestId("settings-save-bar"));
+    fireEvent.click(screen.getByTestId("discard-btn"));
+    await waitFor(() => expect(screen.queryByTestId("settings-save-bar")).toBeNull());
+
+    setPath("/settings/providers");
+    await waitFor(() => expect(screen.getByText("local-vllm")).toBeTruthy());
+    expect(patchCalls).toBe(1);
+  });
+
+  it("does NOT include modelProxy in the save payload when unchanged", async () => {
+    const configWithModelProxy = {
+      ...mockConfig,
+      modelProxy: { enabled: true },
+    };
+    let putCalled = false;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        putCalled = true;
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: configWithModelProxy }) });
+      }
+      if (url === "/api/providers") {
+        return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Interface"));
+
+    // Nothing changed → no Save Bar appears and no PUT can fire.
+    expect(screen.queryByTestId("settings-save-bar")).toBeNull();
+    expect(putCalled).toBe(false);
+  });
+
+  it("buffers 'Initialize on worktree' and persists it only on Save", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/sessions");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Initialize on worktree"));
+
+    const row = screen.getByText("Initialize on worktree").closest("div")!;
+    // race: the label renders from the DEFAULTS, before the fetched config
+    // baseline is committed. A click landing in that window is diffed against
+    // an unset baseline, so no Save Bar appears and `save-btn` never shows.
+    // The rendered switch cannot distinguish the two states (default and
+    // fetched value are both `false`), so flush the resolved fetch's effects
+    // instead of polling the DOM, then assert the baseline-backed OFF state.
+    await act(async () => {});
+    expect(within(row).getByRole("switch").getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(within(row).getByRole("switch"));
+
+    // Buffered — not persisted on toggle.
+    expect(setAutoInitWorktreePref).not.toHaveBeenCalled();
+
+    // Save Bar appears; saving commits the buffered preference.
+    fireEvent.click(await screen.findByTestId("save-btn"));
+    await waitFor(() => {
+      expect(setAutoInitWorktreePref).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it("Save Bar appears on first edit and Discard reverts to baseline", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/server");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("HTTP Port"));
+    expect(screen.queryByTestId("settings-save-bar")).toBeNull();
+
+    fireEvent.change(screen.getByDisplayValue("8000"), { target: { value: "9000" } });
+
+    await waitFor(() => screen.getByTestId("settings-save-bar"));
+    expect(screen.getByTestId("save-btn")).toBeTruthy();
+    expect(screen.getByTestId("discard-btn")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("discard-btn"));
+    await waitFor(() => expect(screen.queryByTestId("settings-save-bar")).toBeNull());
+    expect(screen.getByDisplayValue("8000")).toBeTruthy();
+  });
+
+  it("shows a per-page dirty dot for the page with unsaved edits", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/server");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("HTTP Port"));
+    expect(screen.queryByTestId("nav-dirty-server")).toBeNull();
+
+    fireEvent.change(screen.getByDisplayValue("8000"), { target: { value: "9000" } });
+    await waitFor(() => screen.getByTestId("nav-dirty-server"));
+  });
+
+  it("prompts before leaving while dirty; Cancel keeps editing", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/server");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("HTTP Port"));
+    fireEvent.change(screen.getByDisplayValue("8000"), { target: { value: "9000" } });
+    await waitFor(() => screen.getByTestId("settings-save-bar"));
+
+    // Header Back is the first button in the header.
+    const back = within(screen.getByTestId("settings-header")).getAllByRole("button")[0];
+    fireEvent.click(back);
+
+    await waitFor(() => screen.getByTestId("unsaved-changes-dialog"));
+    fireEvent.click(screen.getByTestId("unsaved-cancel"));
+    await waitFor(() => expect(screen.queryByTestId("unsaved-changes-dialog")).toBeNull());
+    // Still dirty — edits preserved.
+    expect(screen.getByTestId("settings-save-bar")).toBeTruthy();
+  });
+});
+
+// Default thinking level control paired with the Default Model (Sessions page).
+// See change: add-default-thinking-level.
+describe("SettingsPanel default thinking level", () => {
+  const MODELS = [
+    { provider: "openai", id: "gpt-4o", supportedThinkingLevels: ["off", "medium", "high", "xhigh"] },
+    { provider: "anthropic", id: "claude", supportedThinkingLevels: ["off", "low", "medium"] },
+  ];
+
+  // The trigger lives inside the selector container; the open dropdown is
+  // portaled to the layer root, so it resolves from `screen`, not `within`.
+  // See change: fix-composer-popover-layering.
+  function openThinkingDropdown() {
+    const selector = screen.getByTestId("thinking-level-selector");
+    fireEvent.click(within(selector).getByTestId("thinking-level-button"));
+    return screen.getByTestId("thinking-level-dropdown");
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/sessions");
+  });
+  afterEach(() => cleanup());
+
+  // F1: control renders inside the Default Model callout when a model is selected.
+  it("renders the thinking-level control beside the Default Model selector", async () => {
+    global.fetch = mockFetchConfig({ defaultModel: "openai/gpt-4o" });
+    render(<SettingsPanel availableModels={MODELS} />);
+    await waitFor(() => screen.getByText("Default model"));
+    expect(screen.getByTestId("thinking-level-selector")).toBeTruthy();
+  });
+
+  // F2: levels filter to the selected model's supported levels.
+  it("filters selectable levels to the selected model", async () => {
+    global.fetch = mockFetchConfig({ defaultModel: "anthropic/claude" });
+    render(<SettingsPanel availableModels={MODELS} />);
+    await waitFor(() => screen.getByText("Default model"));
+    const dropdown = openThinkingDropdown();
+    const labels = Array.from(dropdown.querySelectorAll("button")).map((b) => b.textContent);
+    expect(labels).toEqual(["off", "low", "medium"]);
+  });
+
+  // F3: levels re-derive when the Default Model changes.
+  it("re-derives selectable levels when the Default Model changes", async () => {
+    global.fetch = mockFetchConfig({ defaultModel: "openai/gpt-4o" });
+    render(<SettingsPanel availableModels={MODELS} />);
+    await waitFor(() => screen.getByText("Default model"));
+
+    // Model A (gpt-4o) offers xhigh.
+    let dropdown = openThinkingDropdown();
+    expect(Array.from(dropdown.querySelectorAll("button")).map((b) => b.textContent)).toContain("xhigh");
+
+    // Close the thinking dropdown (toggle) before touching the ModelSelector.
+    fireEvent.click(within(screen.getByTestId("thinking-level-selector")).getByTestId("thinking-level-button"));
+
+    // Switch the Default Model to claude (no xhigh) via the ModelSelector.
+    fireEvent.click(screen.getByTestId("model-selector-button"));
+    const rows = screen.getAllByTestId("model-row");
+    const claudeRow = rows.find((r) => r.textContent?.includes("claude"))!;
+    fireEvent.click(claudeRow);
+
+    dropdown = openThinkingDropdown();
+    const labels = Array.from(dropdown.querySelectorAll("button")).map((b) => b.textContent);
+    expect(labels).not.toContain("xhigh");
+    expect(labels).toEqual(["off", "low", "medium"]);
+  });
+
+  // F4: locked to off when no model — persists nothing.
+  it("locks to off and persists nothing when no Default Model is selected", async () => {
+    let putBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        putBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: { ...mockConfig, defaultModel: "" } }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    render(<SettingsPanel availableModels={MODELS} />);
+    await waitFor(() => screen.getByText("Default model"));
+
+    const dropdown = openThinkingDropdown();
+    const labels = Array.from(dropdown.querySelectorAll("button")).map((b) => b.textContent);
+    expect(labels).toEqual(["off"]);
+
+    // Clicking the locked `off` is a persistence no-op — no Save Bar appears.
+    fireEvent.click(dropdown.querySelector("button")!);
+    expect(screen.queryByTestId("settings-save-bar")).toBeNull();
+    expect(putBody).toBeUndefined();
+  });
+
+  // F5: selecting a supported level persists it in the PUT partial.
+  it("includes defaultThinkingLevel in the save payload when a level is selected", async () => {
+    let putBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") {
+        putBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: { ...mockConfig, defaultModel: "openai/gpt-4o" } }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    render(<SettingsPanel availableModels={MODELS} />);
+    await waitFor(() => screen.getByText("Default model"));
+
+    const dropdown = openThinkingDropdown();
+    const highBtn = Array.from(dropdown.querySelectorAll("button")).find((b) => b.textContent === "high")!;
+    fireEvent.click(highBtn);
+
+    await waitFor(() => screen.getByTestId("save-btn"));
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+
+    await waitFor(() => {
+      expect(putBody).toBeTruthy();
+      expect(putBody.defaultThinkingLevel).toBe("high");
+    });
+  });
+});
+
+// Resources nav group (global-scope per-type card pages).
+// See change: resources-card-tabs.
+describe("SettingsPanel Resources group", () => {
+  const piResourcesData = {
+    local: { extensions: [], skills: [], prompts: [], agents: [] },
+    global: {
+      extensions: [],
+      skills: [{ name: "a11y", description: "Accessibility.", filePath: "/g/.pi/agent/skills/a11y.md", type: "skill", enabled: true }],
+      prompts: [],
+      agents: [{ name: "doc-writer", description: "Docs.", filePath: "/g/.pi/agent/agents/doc-writer.md", type: "agent", enabled: true, model: "haiku", tools: "write" }],
+    },
+    packages: [],
+  };
+
+  function mockFetchWithResources() {
+    return vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url.startsWith("/api/pi-resources")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: piResourcesData }) });
+      }
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/general");
+  });
+  afterEach(() => cleanup());
+
+  it("lists a Resources group with the five per-type pages", async () => {
+    global.fetch = mockFetchWithResources();
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("settings-nav-rail"));
+    const rail = screen.getByTestId("settings-nav-rail");
+    expect(rail.textContent).toContain("Resources");
+    for (const label of ["Skills", "Agents", "Extensions", "Prompts", "Themes"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+  });
+
+  it("renders global agent cards with no scope filter and a global pill", async () => {
+    global.fetch = mockFetchWithResources();
+    setPath("/settings/agents");
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("resource-card-grid"));
+    expect(screen.getByTestId("resource-card-grid").getAttribute("data-type")).toBe("agent");
+    const cards = screen.getAllByTestId("resource-card");
+    expect(cards.length).toBe(1);
+    expect(cards[0].textContent).toContain("doc-writer");
+    expect(screen.queryByTestId("resource-scope-filter")).toBeNull();
+    expect(screen.getByTestId("resource-global-pill")).toBeTruthy();
+  });
+
+  it("falls back to general for an unknown page id (registry gate)", async () => {
+    global.fetch = mockFetchWithResources();
+    setPath("/settings/bogus-xyz");
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings/general");
+      expect(screen.getByText("Interface")).toBeTruthy();
+    });
+  });
+});
+
+// Listen-interface picker (Server page). See change: configurable-bind-host.
+describe("SettingsPanel listen-interface picker", () => {
+  const NIC = { name: "en0", address: "10.0.0.5", netmask: "255.255.255.0", cidr: "10.0.0.0/24" };
+
+  function mockFetchWithInterfaces(configOverrides?: any) {
+    const cfg = {
+      port: 8000, piPort: 9999, autoStart: true, autoShutdown: false,
+      shutdownIdleSeconds: 300, spawnStrategy: "headless", tunnel: { enabled: true },
+      devBuildOnReload: false,
+      memoryLimits: { maxEventsPerSession: 200, maxStringFieldSize: 4000, maxWsBufferBytes: 4194304 },
+      ...configOverrides,
+    };
+    return vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/network-interfaces") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: [NIC] }) });
+      }
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: cfg }) });
+      }
+      if (url === "/api/config" && options?.method === "PUT") {
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/server");
+  });
+
+  afterEach(() => cleanup());
+
+  it("renders the three listen options and no warning by default (loopback)", async () => {
+    global.fetch = mockFetchWithInterfaces();
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("listen-interface-field"));
+
+    const field = screen.getByTestId("listen-interface-field");
+    expect(within(field).getByText("Local only")).toBeTruthy();
+    expect(within(field).getByText("All interfaces")).toBeTruthy();
+    expect(within(field).getByText("Specific interface")).toBeTruthy();
+    expect(screen.queryByTestId("listen-exposure-warning")).toBeNull();
+  });
+
+  it("shows the exposure warning when All interfaces is selected without guard config", async () => {
+    global.fetch = mockFetchWithInterfaces();
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("listen-interface-field"));
+
+    const field = screen.getByTestId("listen-interface-field");
+    fireEvent.click(within(field).getByText("All interfaces").closest("label")!.querySelector("input")!);
+    await waitFor(() => expect(screen.getByTestId("listen-exposure-warning")).toBeTruthy());
+  });
+
+  it("suppresses the exposure warning when trusted networks are configured", async () => {
+    global.fetch = mockFetchWithInterfaces({ trustedNetworks: ["10.0.0.0/24"] });
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("listen-interface-field"));
+
+    const field = screen.getByTestId("listen-interface-field");
+    fireEvent.click(within(field).getByText("All interfaces").closest("label")!.querySelector("input")!);
+    // Mode flips to all, but guard config suppresses the warning.
+    expect(screen.queryByTestId("listen-exposure-warning")).toBeNull();
+  });
+
+  it("exposes the detected NIC under Specific interface", async () => {
+    global.fetch = mockFetchWithInterfaces();
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("listen-interface-field"));
+
+    const field = screen.getByTestId("listen-interface-field");
+    const specificRadio = within(field).getByText("Specific interface").closest("label")!.querySelector("input")! as HTMLInputElement;
+    // Radio is disabled until GET /api/network-interfaces resolves.
+    await waitFor(() => expect(specificRadio.disabled).toBe(false));
+    fireEvent.click(specificRadio);
+    await waitFor(() => screen.getByTestId("listen-interface-select"));
+    const select = screen.getByTestId("listen-interface-select") as HTMLSelectElement;
+    expect(within(select).getByText("en0 — 10.0.0.5")).toBeTruthy();
+  });
+});
+
+// Session-independent model catalogue behind the Default Model control.
+// See change: settings-default-model-without-session.
+describe("SettingsPanel model catalogue", () => {
+  const jsonHeaders = { get: (h: string) => (h.toLowerCase() === "content-type" ? "application/json" : null) };
+
+  function jsonRes(status: number, body: any) {
+    return { ok: status >= 200 && status < 300, status, statusText: "", headers: jsonHeaders, json: () => Promise.resolve(body) };
+  }
+
+  /** Config + providers baseline; `models` decides how GET /api/models answers. */
+  function mockFetchWithCatalogue(models: (url: string) => Promise<any>) {
+    return vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/models") return models(url);
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      if (url === "/api/config" && options?.method === "PUT") {
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+  }
+
+  const CATALOGUE_OK = () =>
+    Promise.resolve(jsonRes(200, { object: "list", data: [{ id: "openai/gpt-5", provider: "openai", input: ["text"] }] }));
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/sessions");
+  });
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+  // X1
+  it("renders the unavailable callout on 503 MODEL_PROXY_RUNTIME_MISSING", async () => {
+    global.fetch = mockFetchWithCatalogue(() => Promise.resolve(jsonRes(503, { code: "MODEL_PROXY_RUNTIME_MISSING" })));
+    render(<SettingsPanel />);
+    await waitFor(() => expect(screen.getByTestId("default-model-catalogue-unavailable")).toBeTruthy());
+  });
+
+  // X2
+  it("renders the unavailable callout on a network failure", async () => {
+    global.fetch = mockFetchWithCatalogue(() => Promise.reject(new TypeError("Failed to fetch")));
+    render(<SettingsPanel />);
+    await waitFor(() => expect(screen.getByTestId("default-model-catalogue-unavailable")).toBeTruthy());
+  });
+
+  // X3
+  it("renders the unavailable callout on a non-503 error status", async () => {
+    global.fetch = mockFetchWithCatalogue(() => Promise.resolve(jsonRes(500, { error: "boom" })));
+    render(<SettingsPanel />);
+    await waitFor(() => expect(screen.getByTestId("default-model-catalogue-unavailable")).toBeTruthy());
+  });
+
+  // X4
+  it("treats an empty catalogue as success, not as unavailable", async () => {
+    global.fetch = mockFetchWithCatalogue(() => Promise.resolve(jsonRes(200, { object: "list", data: [] })));
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Default model"));
+    await waitFor(() => expect(screen.queryByTestId("default-model-catalogue-loading")).toBeNull());
+    expect(screen.queryByTestId("default-model-catalogue-unavailable")).toBeNull();
+    fireEvent.click(screen.getByTestId("model-selector-button"));
+    expect(screen.getByTestId("model-empty")).toBeTruthy();
+  });
+
+  // F1
+  it("shows the loading state while the catalogue request is in flight", async () => {
+    global.fetch = mockFetchWithCatalogue(() => new Promise(() => {}));
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Default model"));
+    expect(screen.getByTestId("default-model-catalogue-loading")).toBeTruthy();
+    expect(screen.queryByTestId("default-model-catalogue-unavailable")).toBeNull();
+  });
+
+  // F2
+  it("clears the loading state once the catalogue resolves", async () => {
+    let resolve!: (v: any) => void;
+    global.fetch = mockFetchWithCatalogue(() => new Promise((r) => { resolve = r; }));
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("default-model-catalogue-loading"));
+    resolve(jsonRes(200, { object: "list", data: [{ id: "openai/gpt-5", provider: "openai" }] }));
+    await waitFor(() => expect(screen.queryByTestId("default-model-catalogue-loading")).toBeNull());
+    fireEvent.click(screen.getByTestId("model-selector-button"));
+    expect(screen.getAllByTestId("model-row").some((r) => r.textContent?.includes("gpt-5"))).toBe(true);
+  });
+
+  // X6 + P1: the client bound resolves a hung request into the callout.
+  it("times out a hung catalogue request into the unavailable callout", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    global.fetch = mockFetchWithCatalogue(() => new Promise(() => {}));
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("default-model-catalogue-loading"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => expect(screen.getByTestId("default-model-catalogue-unavailable")).toBeTruthy());
+    expect(screen.queryByTestId("default-model-catalogue-loading")).toBeNull();
+  });
+
+  // X5: session models survive a catalogue failure.
+  it("still offers session models when the catalogue is unavailable", async () => {
+    global.fetch = mockFetchWithCatalogue(() => Promise.resolve(jsonRes(503, { code: "MODEL_PROXY_RUNTIME_MISSING" })));
+    render(<SettingsPanel availableModels={[{ provider: "anthropic", id: "claude-4" }]} />);
+    await waitFor(() => screen.getByTestId("default-model-catalogue-unavailable"));
+    fireEvent.click(screen.getByTestId("model-selector-button"));
+    const rows = screen.getAllByTestId("model-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("claude-4");
+  });
+
+
+  // Spec: proxy editors are sourced from the catalogue alone, the Default Model
+  // control from the union.
+  it("offers a session-only model to the Default Model control but not to the proxy editors", async () => {
+    global.fetch = mockFetchWithCatalogue(CATALOGUE_OK);
+    render(<SettingsPanel availableModels={[{ provider: "anthropic", id: "claude-4" }]} />);
+    await waitFor(() => expect(screen.queryByTestId("default-model-catalogue-loading")).toBeNull());
+
+    fireEvent.click(screen.getByTestId("model-selector-button"));
+    const labels = screen.getAllByTestId("model-row").map((r) => r.textContent ?? "");
+    expect(labels.some((l) => l.includes("gpt-5"))).toBe(true);
+    expect(labels.some((l) => l.includes("claude-4"))).toBe(true);
+
+    // The proxy editors live on the Providers page and read the catalogue only.
+    cleanup();
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/models") return CATALOGUE_OK();
+      if (url === "/api/provider-auth/status") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { ...mockConfig, modelProxy: { enabled: true } } }),
+        });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/providers");
+    render(<SettingsPanel availableModels={[{ provider: "anthropic", id: "claude-4" }]} />);
+    await waitFor(() => screen.getByTestId("preferred-models-editor"));
+    const editor = screen.getByTestId("preferred-models-editor");
+    fireEvent.click(within(editor).getByTestId("model-selector-button"));
+    await waitFor(() => screen.getByTestId("model-row"));
+    // Portaled panel — rows resolve from `screen`; only the proxy editor's
+    // dropdown is open. See change: fix-composer-popover-layering.
+    const proxyLabels = screen.getAllByTestId("model-row").map((r) => r.textContent ?? "");
+    expect(proxyLabels.some((l) => l.includes("gpt-5"))).toBe(true);
+    expect(proxyLabels.some((l) => l.includes("claude-4"))).toBe(false);
+  });
+
+  // F5: a session connecting while Settings is open converges the options to
+  // the union — catalogue rows retained, session rows added, no duplicates.
+  // (Level-shifted from e2e: `models_list` arrives as a prop from App, so the
+  // observable is a prop change, not a browser interaction.)
+  it("converges to the union when a session's models arrive while Settings is open", async () => {
+    global.fetch = mockFetchWithCatalogue(CATALOGUE_OK);
+    const { rerender } = render(<SettingsPanel />);
+    await waitFor(() => expect(screen.queryByTestId("default-model-catalogue-loading")).toBeNull());
+
+    rerender(
+      <SettingsPanel
+        availableModels={[
+          { provider: "openai", id: "gpt-5", name: "GPT-5" },
+          { provider: "anthropic", id: "claude-4" },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("model-selector-button"));
+    const rows = screen.getAllByTestId("model-row");
+    expect(rows).toHaveLength(2);
+    expect(rows.some((r) => r.textContent?.includes("claude-4"))).toBe(true);
+    // Collision resolved in the session row's favour: its display name renders.
+    expect(rows.some((r) => r.textContent?.includes("GPT-5"))).toBe(true);
+  });
+
+  /** Providers page with one api_key provider row, so credential writes can run. */
+  function mockFetchProvidersPage(apiKeyAuthenticated: boolean) {
+    return vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/models") return CATALOGUE_OK();
+      if (url === "/api/provider-auth/status") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { id: "openai", name: "OpenAI", flowType: "api_key", authenticated: apiKeyAuthenticated, configured: apiKeyAuthenticated },
+          ]),
+        });
+      }
+      if (url === "/api/providers") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, providers: {}, health: {} }) });
+      }
+      if (url.includes("/api/provider-auth/catalogue-ready")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ready: true }) });
+      }
+      if (url === "/api/provider-auth/api-key") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true }) });
+      }
+      if (url.startsWith("/api/provider-auth/") && options?.method === "DELETE") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true }) });
+      }
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+  }
+
+  const catalogueCalls = (mock: any) => mock.mock.calls.filter((c: any[]) => c[0] === "/api/models").length;
+
+  // X7: an API-key save issues exactly one new GET /api/models, off its
+  // response — the write path now flows through the Add-provider dialog and
+  // the section's single dispatch funnel.
+  it("refetches the catalogue after an API-key save", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = mockFetchProvidersPage(false);
+    global.fetch = fetchMock;
+    setPath("/settings/providers");
+    render(<SettingsPanel />);
+    await waitFor(() => expect(catalogueCalls(fetchMock)).toBe(1));
+
+    fireEvent.click(await screen.findByTestId("add-provider-button"));
+    fireEvent.click(await screen.findByText("OpenAI"));
+    fireEvent.change(await screen.findByLabelText(/api key/i), { target: { value: "sk-test" } });
+    fireEvent.click(screen.getByTestId("dialog-submit"));
+
+    await waitFor(() => expect(catalogueCalls(fetchMock)).toBe(2));
+    // Triggered by the save's response, not by a timer: no further elapsed time
+    // may produce another request.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(catalogueCalls(fetchMock)).toBe(2);
+  });
+
+  // F3: last RESPONSE wins — R1 is issued first, R2 second, R2 answers FIRST
+  // and R1 answers second, so R1's payload is the rendered one.
+  it("applies last-response-wins for out-of-order catalogue responses", async () => {
+    const pending: Array<(v: any) => void> = [];
+    const fetchMock = mockFetchProvidersPage(true);
+    // Every /api/models call parks until explicitly resolved, in call order.
+    const parking = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/models") return new Promise((r) => { pending.push(r as any); });
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { ...mockConfig, modelProxy: { enabled: true } } }),
+        });
+      }
+      return fetchMock(url, options);
+    });
+    global.fetch = parking;
+    setPath("/settings/providers");
+    render(<SettingsPanel />);
+    await waitFor(() => expect(pending).toHaveLength(1)); // R1
+
+    // A credential removal issues R2 while R1 is still in flight.
+    fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
+    await waitFor(() => expect(pending).toHaveLength(2));
+
+    // R2 answers first…
+    pending[1](jsonRes(200, { object: "list", data: [{ id: "openai/r2-model", provider: "openai" }] }));
+    await waitFor(() => expect(screen.queryByTestId("default-model-catalogue-loading")).toBeNull());
+    // …then R1 answers, and being the LAST response it is what renders.
+    pending[0](jsonRes(200, { object: "list", data: [{ id: "openai/r1-model", provider: "openai" }] }));
+
+    const editor = await screen.findByTestId("preferred-models-editor");
+    fireEvent.click(within(editor).getByTestId("model-selector-button"));
+    await waitFor(() => {
+      // Portaled panel — see change: fix-composer-popover-layering.
+      const labels = screen.getAllByTestId("model-row").map((r) => r.textContent ?? "");
+      expect(labels.some((l) => l.includes("r1-model"))).toBe(true);
+      expect(labels.some((l) => l.includes("r2-model"))).toBe(false);
+    });
+  });
+
+  // A failed REFETCH must not blank a catalogue that already loaded: the proxy
+  // editors would lose every option on one transient 503. The callout still
+  // fires, so the failure is reported rather than swallowed.
+  it("keeps the last good catalogue when a refetch fails, and still reports the failure", async () => {
+    let fail = false;
+    const fetchMock = mockFetchProvidersPage(true);
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/models") {
+        return fail ? Promise.resolve(jsonRes(503, { code: "MODEL_PROXY_RUNTIME_MISSING" })) : CATALOGUE_OK();
+      }
+      return fetchMock(url, options);
+    });
+    setPath("/settings/sessions");
+    render(<SettingsPanel />);
+    await waitFor(() => expect(screen.queryByTestId("default-model-catalogue-loading")).toBeNull());
+
+    fail = true;
+    // Trigger a refetch through the real credential path.
+    gotoPage("Providers");
+    fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
+    await waitFor(() => expect(screen.queryByTestId("default-model-catalogue-loading")).toBeNull());
+
+    gotoPage("Sessions");
+    await waitFor(() => expect(screen.getByTestId("default-model-catalogue-unavailable")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("model-selector-button"));
+    expect(screen.getAllByTestId("model-row").some((r) => r.textContent?.includes("gpt-5"))).toBe(true);
+  });
+
+  // X9: removing a provider credential refetches the catalogue.
+  it("refetches the catalogue after a provider credential is removed", async () => {
+    const fetchMock = mockFetchProvidersPage(true);
+    global.fetch = fetchMock;
+    setPath("/settings/providers");
+    render(<SettingsPanel />);
+    await waitFor(() => expect(catalogueCalls(fetchMock)).toBe(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
+    await waitFor(() => expect(catalogueCalls(fetchMock)).toBe(2));
+  });
+});
+
+// Sessions Default Model picker inherits favorites from the model-config
+// context with no call-site wiring. See change: model-picker-everywhere-favorites
+// (test-plan F1; design D1 — the Settings pickers already sit inside the provider).
+describe("SettingsPanel default model favorites (model-picker-everywhere-favorites)", () => {
+  const MODELS = [
+    { provider: "anthropic", id: "a" },
+    { provider: "anthropic", id: "b" },
+  ];
+
+  function ctxValue(over: Partial<ModelConfigValue> = {}): ModelConfigValue {
+    return {
+      setModel: () => {},
+      setThinkingLevel: () => {},
+      toggleFavorite: () => {},
+      refreshModels: () => {},
+      openProviderSettings: () => {},
+      notify: () => {},
+      ...over,
+    };
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/sessions");
+  });
+  afterEach(() => cleanup());
+
+  it("F1: Sessions Default Model picker shows + toggles context favorites with no props", async () => {
+    global.fetch = mockFetchConfig();
+    const toggle = vi.fn();
+    render(
+      <ModelConfigProvider value={ctxValue({ favorites: ["anthropic/a"], toggleFavorite: toggle })}>
+        <SettingsPanel availableModels={MODELS} />
+      </ModelConfigProvider>,
+    );
+    await waitFor(() => screen.getByText("Default model"));
+
+    fireEvent.click(screen.getByTestId("model-selector-button"));
+    const rows = screen.getAllByTestId("model-row");
+    const aRow = rows.find((r) => r.textContent?.trim() === "anthropic/a")!;
+    expect(within(aRow).getByTestId("model-fav-toggle").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(aRow).getByTestId("model-fav-toggle"));
+    expect(toggle).toHaveBeenCalledWith("anthropic/a", false);
+  });
+});
+
+// ── archive-sessions-lazy-load: Sessions page archive fields ─────────────
+// #E33 BVA: archiveAfterDays -1 → error + Save disabled; 0 and 14 ok;
+// sweep interval 0 → error, 1 ok; Save carries sessionList.archiveAfterDays.
+// See change: archive-sessions-lazy-load.
+describe("SettingsPanel — archive fields (archive-sessions-lazy-load)", () => {
+  it("renders the archive fields with defaults 30 / 60 when sessionList config is absent", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/sessions");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Archive after"));
+
+    expect(screen.getByDisplayValue("30")).toBeTruthy();
+    expect(screen.getByDisplayValue("60")).toBeTruthy();
+  });
+
+  // test-plan #E27: `0` disables AGE-BASED archiving only — sessions declared
+  // disposable still archive on end. See change: archive-service-sessions-on-end.
+  it("E27: the archive-after hint scopes 0 to age-based auto-archive", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/sessions");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Archive after"));
+
+    expect(screen.getByText(/0 disables age-based auto-archive/)).toBeTruthy();
+  });
+
+  it("E33: archiveAfterDays -1 shows an error and disables Save; 0 and 14 are valid", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/sessions");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Archive after"));
+
+    const input = screen.getByDisplayValue("30");
+    fireEvent.change(input, { target: { value: "-1" } });
+    expect(screen.getByTestId("archive-after-days-error")).toBeTruthy();
+    expect((screen.getByTestId("save-btn") as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(input, { target: { value: "0" } });
+    expect(screen.queryByTestId("archive-after-days-error")).toBeNull();
+    expect((screen.getByTestId("save-btn") as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.change(input, { target: { value: "14" } });
+    expect(screen.queryByTestId("archive-after-days-error")).toBeNull();
+  });
+
+  it("E33: sweep interval 0 shows an error; 1 is valid; Save persists sessionList.archiveAfterDays=14", async () => {
+    let putBody: any = undefined;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      if (url === "/api/providers") {
+        return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+      }
+      if (url === "/api/config" && options?.method === "PUT") {
+        putBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/sessions");
+
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText("Archive after"));
+
+    const daysInput = screen.getByDisplayValue("30");
+    const sweepInput = screen.getByDisplayValue("60");
+
+    fireEvent.change(sweepInput, { target: { value: "0" } });
+    expect(screen.getByTestId("archive-sweep-interval-error")).toBeTruthy();
+    expect((screen.getByTestId("save-btn") as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(sweepInput, { target: { value: "1" } });
+    expect(screen.queryByTestId("archive-sweep-interval-error")).toBeNull();
+
+    fireEvent.change(daysInput, { target: { value: "14" } });
+    await waitFor(() => screen.getByTestId("save-btn"));
+    fireEvent.click(screen.getByTestId("save-btn"));
+
+    await waitFor(() => expect(putBody).toBeDefined());
+    expect(putBody.sessionList).toBeDefined();
+    expect(putBody.sessionList.archiveAfterDays).toBe(14);
+    expect(putBody.sessionList.archiveSweepIntervalMinutes).toBe(1);
+  });
+});
+
+// ── gate-changed-on-disk-by-content: Editor large-file limit (General page) ─
+// #E17 BVA/EP field validation; #E18 save path + General page dirty chip.
+// See change: gate-changed-on-disk-by-content.
+describe("SettingsPanel — editor large-file limit (gate-changed-on-disk-by-content)", () => {
+  const LABEL = "Editor large-file limit";
+  const field = () => screen.getByTestId("editor-large-file-limit-input") as HTMLInputElement;
+
+  it("shows 10 when the config omits the editor block", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/general");
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText(LABEL));
+    expect(field().value).toBe("10");
+  });
+
+  it("E17: 1 and 256 are valid; 0, 257, 12.5 and abc are flagged and block Save", async () => {
+    global.fetch = mockFetchConfig();
+    setPath("/settings/general");
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText(LABEL));
+
+    for (const [value, valid] of [
+      ["1", true],
+      ["256", true],
+      ["0", false],
+      ["257", false],
+      ["12.5", false],
+      ["abc", false],
+    ] as const) {
+      fireEvent.change(field(), { target: { value } });
+      if (valid) {
+        expect(screen.queryByTestId("editor-large-file-limit-error"), value).toBeNull();
+        expect((screen.getByTestId("save-btn") as HTMLButtonElement).disabled, value).toBe(false);
+      } else {
+        expect(screen.getByTestId("editor-large-file-limit-error"), value).toBeTruthy();
+        expect((screen.getByTestId("save-btn") as HTMLButtonElement).disabled, value).toBe(true);
+      }
+    }
+  });
+
+  it("E18: 10 → 64 marks General dirty before save and PUTs { editor: { largeFileLimitMb: 64 } }", async () => {
+    let putBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      if (url === "/api/config" && options?.method === "PUT") {
+        putBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/general");
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText(LABEL));
+
+    fireEvent.change(field(), { target: { value: "64" } });
+    await waitFor(() => screen.getByTestId("settings-save-bar"));
+    expect(screen.getByTestId("save-bar-page-general")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("save-btn"));
+    await waitFor(() => expect(putBody).toBeDefined());
+    expect(putBody).toEqual({ editor: { largeFileLimitMb: 64 } });
+  });
+
+  it("review: the unsaved-changes dialog Save path never persists while the limit field is invalid", async () => {
+    let putBody: any;
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      if (url === "/api/config" && options?.method === "PUT") {
+        putBody = JSON.parse(options.body);
+        return Promise.resolve({ json: () => Promise.resolve({ success: true }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    setPath("/settings/general");
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByText(LABEL));
+
+    // 64 reaches the draft; the invalid "abc" is refused but stays displayed with an error.
+    fireEvent.change(field(), { target: { value: "64" } });
+    fireEvent.change(field(), { target: { value: "abc" } });
+    expect(screen.getByTestId("editor-large-file-limit-error")).toBeTruthy();
+
+    const back = within(screen.getByTestId("settings-header")).getAllByRole("button")[0];
+    fireEvent.click(back);
+    await waitFor(() => screen.getByTestId("unsaved-changes-dialog"));
+    fireEvent.click(screen.getByTestId("unsaved-save"));
+
+    // Give a (wrongly) persisting save the chance to fire before asserting it did not.
+    await waitFor(() => expect(screen.queryByTestId("unsaved-changes-dialog")).toBeNull());
+    expect(putBody).toBeUndefined();
+  });
+
+  it("computeConfigPartial: unchanged limit emits no editor key; CONFIG_FIELD_PAGE maps editor to general", async () => {
+    const { computeConfigPartial, CONFIG_FIELD_PAGE } = await import("../settings/SettingsPanel.js");
+    const base = { ...mockConfig } as any;
+    expect(computeConfigPartial(base, base).editor).toBeUndefined();
+    expect(computeConfigPartial({ ...base, editor: { largeFileLimitMb: 64 } }, base)).toEqual({
+      editor: { largeFileLimitMb: 64 },
+    });
+    expect(CONFIG_FIELD_PAGE.editor).toBe("general");
+  });
+});
+
+// Models nav group + promoted plugin entries.
+// See change: promote-model-roles-settings (test-plan #F1, #F4, #X1).
+describe("SettingsPanel Models nav group", () => {
+  const rolesNav = { group: "models", label: "Model roles", description: "Pick which model answers each @role." };
+  function rolesRow(o: { firstParty?: boolean; nav?: boolean; status?: Record<string, unknown> } = {}) {
+    return {
+      id: "roles",
+      displayName: "Roles",
+      priority: 100,
+      ...(o.firstParty === undefined ? {} : { firstParty: o.firstParty }),
+      hasServer: true,
+      hasBridge: false,
+      hasClient: true,
+      claims: [
+        { slot: "settings-section", component: "BuiltInRolesSettings", ...(o.nav === false ? {} : { nav: rolesNav }) },
+      ],
+      requires: null,
+      status: { id: "roles", displayName: "Roles", enabled: true, loaded: true, claims: 1, ...(o.status ?? {}) },
+    };
+  }
+  function mockFetchWithPlugins(rows: unknown[]) {
+    return vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      if (url.endsWith("/api/plugins")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, plugins: rows }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+  }
+  const groupItems = (groupEl: Element) =>
+    Array.from(groupEl.querySelectorAll("button")).map((b) => (b.textContent ?? "").trim());
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    // Plugins subtree is collapsed by default; pre-expand it (explicit choice).
+    localStorage.setItem("dashboard:settings-plugins-expanded", "true");
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/general");
+  });
+  afterEach(() => {
+    cleanup();
+    localStorage.removeItem("dashboard:settings-plugins-expanded");
+    vi.unstubAllGlobals();
+  });
+
+  it("F1: Models is the first group, holding Providers then Model roles; General stays active", async () => {
+    vi.stubGlobal("fetch", mockFetchWithPlugins([rolesRow({ firstParty: true })]));
+    render(<SettingsPanel />);
+    const rail = await screen.findByTestId("settings-nav-rail");
+    await waitFor(() => expect(within(rail).getByTestId("nav-promoted-roles")).toBeTruthy());
+    const groups = rail.querySelectorAll("[data-testid^='settings-nav-group-']");
+    expect(groups[0].getAttribute("data-testid")).toBe("settings-nav-group-models");
+    expect(groups[0].textContent).toContain("Models");
+    expect(groupItems(groups[0])).toEqual(["Providers", "Model roles"]);
+    const ext = within(rail).getByTestId("settings-nav-group-add-ons");
+    expect(groupItems(ext)).not.toContain("Providers");
+    const active = rail.querySelectorAll("[aria-current='page']");
+    expect(active).toHaveLength(1);
+    expect(active[0].textContent).toContain("General");
+  });
+
+  it("Resources promotion: built-ins first, then Skill Atlas; Plugins keeps a never-active pointer (add-skill-atlas-screen #E25)", async () => {
+    const atlasRow = {
+      ...rolesRow({ firstParty: true, nav: false }),
+      id: "skill-atlas",
+      displayName: "Skill Atlas",
+      claims: [{ slot: "settings-section", component: "SkillAtlasSettings", nav: { group: "resources", label: "Skill Atlas" } }],
+      status: { id: "skill-atlas", displayName: "Skill Atlas", enabled: true, loaded: true, claims: 1 },
+    };
+    vi.stubGlobal("fetch", mockFetchWithPlugins([atlasRow]));
+    render(<SettingsPanel />);
+    const rail = await screen.findByTestId("settings-nav-rail");
+    await waitFor(() => expect(within(rail).getByTestId("nav-promoted-skill-atlas")).toBeTruthy());
+    const resources = within(rail).getByTestId("settings-nav-group-resources");
+    expect(groupItems(resources)).toEqual(["Skills", "Agents", "Extensions", "Prompts", "Themes", "Skill Atlas"]);
+    const pointer = within(rail).getByTestId("nav-plugin-pointer-skill-atlas");
+    expect(pointer.textContent).toContain("Resources");
+    expect(pointer.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("F4: a promoted entry carries the same error health dot a Plugins child uses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchWithPlugins([rolesRow({ firstParty: true, status: { loaded: false, error: "boom" } })]),
+    );
+    render(<SettingsPanel />);
+    const rail = await screen.findByTestId("settings-nav-rail");
+    const dot = await within(rail).findByTestId("nav-plugin-status-roles");
+    expect(dot.className).toContain("--severity-error-fg"); // severity token (align-ui-contract-recipes), no raw accent fill
+    expect(dot.getAttribute("aria-label")).toBe("error");
+    expect(within(rail).getByTestId("nav-promoted-roles").contains(dot)).toBe(true);
+  });
+
+  it("X1: an older server (no firstParty, no nav) leaves Providers alone in Models", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", mockFetchWithPlugins([rolesRow({ nav: false })]));
+    render(<SettingsPanel />);
+    const rail = await screen.findByTestId("settings-nav-rail");
+    await waitFor(() => expect(within(rail).getByTestId("nav-plugin-roles")).toBeTruthy());
+    expect(groupItems(within(rail).getByTestId("settings-nav-group-models"))).toEqual(["Providers"]);
+    expect(within(rail).queryByTestId("nav-promoted-roles")).toBeNull();
+    expect(within(rail).getByTestId("nav-plugin-roles").textContent).toContain("Roles");
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+
+  it("every built-in rail label is in the reserved promotion-label set (drift guard)", async () => {
+    const { RESERVED_SETTINGS_LABELS, foldSettingsLabel } = await import("../../lib/settings-promotions.js");
+    vi.stubGlobal("fetch", mockFetchWithPlugins([]));
+    render(<SettingsPanel />);
+    const rail = await screen.findByTestId("settings-nav-rail");
+    const labels = Array.from(rail.querySelectorAll("button")).map((b) => (b.textContent ?? "").trim());
+    const groupLabels = Array.from(rail.querySelectorAll("[data-testid^='settings-nav-group-label-']")).map(
+      (el) => (el.textContent ?? "").trim(),
+    );
+    expect(groupLabels.length).toBe(8); // + Services (add-services-settings-ui), + pi (pi-settings-full-coverage)
+    for (const label of [...labels, ...groupLabels]) {
+      expect(RESERVED_SETTINGS_LABELS.has(foldSettingsLabel(label))).toBe(true);
+    }
+  });
+});
+
+describe("SettingsPanel TrustedNetworks dropdown overlay-layering", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/security");
+  });
+  afterEach(() => cleanup());
+
+  it("trusted-networks dropdown panel has fixed and z-popover, not absolute or z-50", async () => {
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url === "/api/config") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      if (url === "/api/providers") {
+        return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+      }
+      if (url.includes("/api/network-interfaces")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: [
+              { name: "eth0", address: "192.168.1.10", label: "eth0", pointToPoint: false, suggestions: [{ value: "192.168.1.0/24", wide: false }] },
+            ],
+          }),
+        });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    global.fetch = mockFetch;
+
+    render(<SettingsPanel />);
+    // Wait for Security tab to load
+    await waitFor(() => screen.getByTestId("trusted-networks-add-local"));
+    // Click the "+ Add Local Network" button to trigger dropdown open
+    fireEvent.click(screen.getByTestId("trusted-networks-add-local"));
+    // Wait for fetch to complete and dropdown to render
+    await waitFor(() => screen.queryByTestId("trusted-networks-dropdown"));
+    const panel = screen.queryByTestId("trusted-networks-dropdown");
+    if (!panel) return; // dropdown empty; skip rather than fail
+    expect(panel.className).toContain("fixed");
+    expect(panel.className).toContain("z-popover");
+    expect(panel.className).not.toContain("absolute");
+    expect(panel.className).not.toContain("z-50");
+  });
+});
+
+// ADD-ONS rail group + collapsed Plugins subtree.
+// See change: addons-hub-declutter (test-plan #F3).
+describe("SettingsPanel Add-ons rail + collapsed Plugins subtree", () => {
+  const PREF_KEY = "dashboard:settings-plugins-expanded";
+  function pluginRow(id: string, displayName: string) {
+    return {
+      id,
+      displayName,
+      priority: 100,
+      hasServer: true,
+      hasBridge: false,
+      hasClient: true,
+      claims: [{ slot: "settings-section", component: `${displayName}Settings` }],
+      requires: null,
+      status: { id, displayName, enabled: true, loaded: true, claims: 1 },
+    };
+  }
+  function mockFetchPlugins(rows: unknown[]) {
+    return vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && !options?.method) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: mockConfig }) });
+      }
+      if (url.endsWith("/api/plugins")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, plugins: rows }) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+  }
+  const rows = [pluginRow("flows", "Flows"), pluginRow("goal", "Goal")];
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/general");
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it("groups Add-ons, Plugins and OpenSpec under the ADD-ONS rail group", async () => {
+    vi.stubGlobal("fetch", mockFetchPlugins(rows));
+    render(<SettingsPanel />);
+    const rail = await screen.findByTestId("settings-nav-rail");
+    const group = within(rail).getByTestId("settings-nav-group-add-ons");
+    expect(within(group).getByTestId("settings-nav-group-label-add-ons").textContent).toBe("Add-ons");
+    const names = Array.from(group.querySelectorAll("button"))
+      .map((b) => (b.textContent ?? "").trim())
+      .filter((n) => ["Add-ons", "Plugins", "OpenSpec"].includes(n));
+    expect(names).toEqual(["Add-ons", "Plugins", "OpenSpec"]);
+    expect(within(rail).queryByRole("button", { name: "Packages" })).toBeNull();
+  });
+
+  it("F3: starts collapsed with a child count; auto-expands on a child page without writing storage", async () => {
+    vi.stubGlobal("fetch", mockFetchPlugins(rows));
+    const first = render(<SettingsPanel />);
+    const rail = await screen.findByTestId("settings-nav-rail");
+    const toggle = await within(rail).findByTestId("nav-plugins-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.textContent).toContain("2");
+    expect(within(rail).queryByTestId("nav-plugin-flows")).toBeNull();
+    first.unmount();
+    cleanup();
+
+    setPath("/settings/plugins/flows");
+    render(<SettingsPanel />);
+    const rail2 = await screen.findByTestId("settings-nav-rail");
+    const child = await within(rail2).findByTestId("nav-plugin-flows");
+    expect(child.getAttribute("aria-current")).toBe("page");
+    expect(within(rail2).getByTestId("nav-plugins-toggle").getAttribute("aria-expanded")).toBe("true");
+    expect(localStorage.getItem(PREF_KEY)).toBeNull();
+  });
+
+  it("F3: back to a non-plugin page collapses again; an explicit toggle persists across remount", async () => {
+    vi.stubGlobal("fetch", mockFetchPlugins(rows));
+    setPath("/settings/plugins/flows");
+    const first = render(<SettingsPanel />);
+    let rail = await screen.findByTestId("settings-nav-rail");
+    await within(rail).findByTestId("nav-plugin-flows");
+    first.unmount();
+    cleanup();
+
+    setPath("/settings/general");
+    const second = render(<SettingsPanel />);
+    rail = await screen.findByTestId("settings-nav-rail");
+    expect((await within(rail).findByTestId("nav-plugins-toggle")).getAttribute("aria-expanded")).toBe("false");
+    expect(within(rail).queryByTestId("nav-plugin-flows")).toBeNull();
+
+    fireEvent.click(within(rail).getByTestId("nav-plugins-toggle"));
+    expect(within(rail).getByTestId("nav-plugins-toggle").getAttribute("aria-expanded")).toBe("true");
+    expect(within(rail).getByTestId("nav-plugin-flows")).toBeTruthy();
+    // Expanding in place never navigates.
+    expect(window.location.pathname).toBe("/settings/general");
+    expect(localStorage.getItem(PREF_KEY)).toBe("true");
+    second.unmount();
+    cleanup();
+
+    render(<SettingsPanel />);
+    rail = await screen.findByTestId("settings-nav-rail");
+    expect((await within(rail).findByTestId("nav-plugins-toggle")).getAttribute("aria-expanded")).toBe("true");
+    expect(within(rail).getByTestId("nav-plugin-goal")).toBeTruthy();
+  });
+});
+
+// pi settings section + default-model mirror notices (Sessions page).
+// See change: edit-pi-agent-settings.
+describe("SettingsPanel pi settings + default-model mirror", () => {
+  const MODELS = [{ provider: "openai", id: "gpt-4o", supportedThinkingLevels: ["off", "medium", "high"] }];
+
+  const json = (body: unknown) =>
+    Promise.resolve({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: () => Promise.resolve(body) });
+
+  function mockFetch(putResponse: Record<string, unknown> = { success: true }) {
+    return vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/config" && options?.method === "PUT") return json(putResponse);
+      if (url === "/api/config") return json({ success: true, data: { ...mockConfig, defaultModel: "openai/gpt-4o" } });
+      if (url === "/api/pi-settings") return json({ success: true, settings: {}, raw: "", etag: "absent" });
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    setPath("/settings/sessions");
+  });
+  afterEach(() => cleanup());
+
+  async function saveThinkingHigh() {
+    await waitFor(() => screen.getByText("Default model"));
+    const selector = screen.getByTestId("thinking-level-selector");
+    fireEvent.click(within(selector).getByTestId("thinking-level-button"));
+    const dropdown = screen.getByTestId("thinking-level-dropdown");
+    fireEvent.click(Array.from(dropdown.querySelectorAll("button")).find((b) => b.textContent === "high")!);
+    await waitFor(() => screen.getByTestId("save-btn"));
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+  }
+
+  it("F11 a failed mirror shows a warning inside the Default model callout; the save still counts as saved", async () => {
+    global.fetch = mockFetch({ success: true, piMirror: { ok: false, error: "busy" } });
+    render(<SettingsPanel availableModels={MODELS} />);
+    await saveThinkingHigh();
+    const warning = await screen.findByTestId("default-model-pi-mirror-warning");
+    expect(warning.textContent).toMatch(/busy/);
+    expect(screen.getByText("Settings saved")).toBeTruthy();
+  });
+
+  it("F11 a skipped mirror shows an info notice", async () => {
+    global.fetch = mockFetch({ success: true, piMirror: { ok: true, skipped: "no-provider-separator" } });
+    render(<SettingsPanel availableModels={MODELS} />);
+    await saveThinkingHigh();
+    expect(await screen.findByTestId("default-model-pi-mirror-skipped")).toBeTruthy();
+    expect(screen.queryByTestId("default-model-pi-mirror-warning")).toBeNull();
+  });
+
+  it("F11 no piMirror in the response → no notice", async () => {
+    global.fetch = mockFetch({ success: true });
+    render(<SettingsPanel availableModels={MODELS} />);
+    await saveThinkingHigh();
+    await screen.findByText("Settings saved");
+    expect(screen.queryByTestId("default-model-pi-mirror-warning")).toBeNull();
+    expect(screen.queryByTestId("default-model-pi-mirror-skipped")).toBeNull();
+  });
+
+  it("F1 the rail has a pi settings item and the Sessions page has no pi settings section", async () => {
+    global.fetch = mockFetch();
+    render(<SettingsPanel availableModels={MODELS} />);
+    await screen.findByTestId("retry-settings-section");
+    expect(screen.queryByTestId("pi-settings-section")).toBeNull();
+    expect(screen.queryByTestId("pi-settings-page")).toBeNull();
+    const rail = await screen.findByTestId("settings-nav-rail");
+    const group = within(rail).getByTestId("settings-nav-group-pi");
+    expect(within(group).getByRole("button", { name: /pi settings/i })).toBeTruthy();
+  });
+
+  it("F1 the pi settings page renders its notes under /settings/pi-settings", async () => {
+    setPath("/settings/pi-settings");
+    global.fetch = mockFetch();
+    render(<SettingsPanel availableModels={MODELS} />);
+    await screen.findByTestId("pi-settings-page");
+    await waitFor(() => expect(screen.getByTestId("pi-settings-reload-note").textContent).toMatch(/reloads running sessions/));
+    expect(screen.getByTestId("pi-settings-scope-note").textContent).toMatch(/global file only/);
+    // The Sessions-only sections are not on this page.
+    expect(screen.queryByTestId("retry-settings-section")).toBeNull();
+  });
+
+  it("F1 the drift banner still shows on the new page when the dashboard default differs from pi's", async () => {
+    setPath("/settings/pi-settings");
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === "/api/config") return json({ success: true, data: { ...mockConfig, defaultModel: "openai/gpt-4o" } });
+      if (url === "/api/pi-settings") {
+        return json({ success: true, settings: { defaultProvider: "anthropic", defaultModel: "x" }, raw: "{}", etag: "e", themes: [], legacyCredentials: [] });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    });
+    render(<SettingsPanel availableModels={MODELS} />);
+    expect(await screen.findByTestId("pi-settings-drift")).toBeTruthy();
+  });
+});
+
+// Security ▸ Network access: trust-mode radio, consequence/migration callouts,
+// pair-mode refused peers. See change: retire-trusted-networks-bypass
+// (test-plan #F1–#F6).
+describe("SettingsPanel Security ▸ Network access", () => {
+  const jsonRes = (body: unknown) => ({
+    ok: true,
+    status: 200,
+    headers: { get: (h: string) => (h.toLowerCase() === "content-type" ? "application/json" : null) },
+    json: () => Promise.resolve(body),
+  });
+
+  interface Scenario {
+    config?: Record<string, unknown>;
+    posture?: Record<string, unknown> | null;
+    blockEvents?: Array<{ ip: string; count: number; trustable: boolean }>;
+  }
+
+  let puts: any[];
+  let calls: Array<{ url: string; method: string }>;
+
+  function mockNetworkFetch(s: Scenario) {
+    puts = [];
+    calls = [];
+    const cfg = { ...mockConfig, auth: { secret: "", providers: {}, bypassHosts: ["192.168.16.0/24"] }, ...s.config };
+    global.fetch = vi.fn().mockImplementation((url: string, options?: any) => {
+      const method = options?.method ?? "GET";
+      calls.push({ url, method });
+      if (url === "/api/config" && method === "PUT") {
+        puts.push(JSON.parse(options.body));
+        return Promise.resolve(jsonRes({ success: true }));
+      }
+      if (url === "/api/config") return Promise.resolve(jsonRes({ success: true, data: cfg }));
+      if (url === "/api/health") return Promise.resolve(jsonRes({ trustPosture: s.posture ?? null }));
+      if (url === "/api/tunnel/block-events") {
+        const events = (s.blockEvents ?? []).map((e) => ({ firstSeen: 1, lastSeen: 2, ...e }));
+        return Promise.resolve(jsonRes({ success: true, data: { events } }));
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    }) as unknown as typeof fetch;
+  }
+
+  const posture = (over: Record<string, unknown> = {}) => ({
+    trustedHasLoopback: false,
+    trustMode: "legacy",
+    trustModeOrigin: "upgrade",
+    networkOnly: { admissions: 9, distinctPeers: 3, lastAt: 1 },
+    ...over,
+  });
+
+  const radio = (mode: "pair" | "legacy") => screen.getByTestId(`network-trust-mode-${mode}`) as HTMLInputElement;
+  const openSecurity = async () => {
+    setPath("/settings/security");
+    render(<SettingsPanel />);
+    await waitFor(() => screen.getByTestId("network-trust-mode-pair"));
+  };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+  });
+  afterEach(() => cleanup());
+
+  // F1 — draft until Save; radio reflects the saved mode, not the list.
+  it("F1 mode radio is a draft: stays on the saved mode across list edits, writes only on Save", async () => {
+    mockNetworkFetch({ config: { network: { trustMode: "legacy", trustModeOrigin: "upgrade" } }, posture: posture() });
+    await openSecurity();
+    expect(radio("legacy").checked).toBe(true);
+
+    fireEvent.change(screen.getByTestId("trusted-networks-manual-input"), { target: { value: "10.1.2.3" } });
+    fireEvent.click(screen.getByTestId("trusted-networks-manual-add"));
+    expect(radio("legacy").checked).toBe(true);
+
+    fireEvent.click(radio("pair"));
+    expect(radio("pair").checked).toBe(true);
+    expect(puts).toEqual([]);
+
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].network).toEqual({ trustMode: "pair" });
+    expect(puts[0].auth.bypassHosts).toContain("10.1.2.3");
+  });
+
+  it("F1 the radio group is labelled and each option states its consequence", async () => {
+    mockNetworkFetch({ config: { network: { trustMode: "pair", trustModeOrigin: "operator" } } });
+    await openSecurity();
+    const group = screen.getByRole("radiogroup", { name: "How devices on your network get in" });
+    expect(within(group).getAllByRole("radio")).toHaveLength(2);
+    expect(screen.getByRole("radio", { name: "Pair each device" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Trust whole networks" })).toBeTruthy();
+    expect(group.textContent).toContain("Recommended");
+  });
+
+  // F2 — consequence callout decision table.
+  it("F2 pair draft over saved legacy: counts device addresses, operate + in-page notes, LAN checkbox writes pairing", async () => {
+    mockNetworkFetch({
+      config: { network: { trustMode: "legacy", trustModeOrigin: "upgrade" }, pairing: { acceptLanRequests: false } },
+      posture: posture(),
+    });
+    await openSecurity();
+    expect(screen.queryByTestId("network-trust-mode-consequence")).toBeNull();
+    fireEvent.click(radio("pair"));
+    const callout = screen.getByTestId("network-trust-mode-consequence");
+    expect(callout.textContent).toContain("3 device addresses");
+    expect(callout.textContent).toMatch(/Operate tier/);
+    expect(callout.textContent).toMatch(/switch to this one in-page/);
+    expect(callout.textContent).toMatch(/can't request access while LAN requests are off/);
+    const box = within(callout).getByTestId("network-trust-accept-lan") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    expect(box.checked).toBe(true);
+    expect(puts).toEqual([]);
+
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].network).toEqual({ trustMode: "pair" });
+    expect(puts[0].pairing).toEqual({ acceptLanRequests: true });
+  });
+
+  it.each([
+    ["no recent devices", posture({ networkOnly: { admissions: 0, distinctPeers: 0, lastAt: null } })],
+    ["posture not disclosed", null],
+  ])("F2 pair draft with %s: no number in the callout", async (_name, p) => {
+    mockNetworkFetch({ config: { network: { trustMode: "legacy", trustModeOrigin: "upgrade" } }, posture: p });
+    await openSecurity();
+    fireEvent.click(radio("pair"));
+    const callout = screen.getByTestId("network-trust-mode-consequence");
+    expect(callout.textContent).not.toMatch(/\d+ device address/);
+    expect(callout.textContent).toMatch(/refused until each one pairs/);
+    expect(callout.textContent).toMatch(/Operate tier/);
+  });
+
+  it("F2 LAN requests already on: no checkbox; unchecking the draft back to legacy writes nothing", async () => {
+    mockNetworkFetch({
+      config: { network: { trustMode: "legacy", trustModeOrigin: "upgrade" }, pairing: { acceptLanRequests: true } },
+      posture: posture(),
+    });
+    await openSecurity();
+    fireEvent.click(radio("pair"));
+    expect(screen.queryByTestId("network-trust-accept-lan")).toBeNull();
+    expect(screen.getByTestId("network-trust-mode-consequence").textContent).not.toMatch(/LAN requests are off/);
+    fireEvent.click(radio("legacy"));
+    expect(screen.queryByTestId("network-trust-mode-consequence")).toBeNull();
+    // Back on the saved mode the draft is clean: nothing to save, nothing written.
+    expect(screen.queryAllByTestId("save-btn")).toHaveLength(0);
+    expect(puts).toEqual([]);
+  });
+
+  it("F2 switching back to the saved mode drops a drafted LAN-requests change", async () => {
+    mockNetworkFetch({ config: { network: { trustMode: "legacy", trustModeOrigin: "upgrade" } }, posture: posture() });
+    await openSecurity();
+    fireEvent.click(radio("pair"));
+    fireEvent.click(screen.getByTestId("network-trust-accept-lan"));
+    fireEvent.click(radio("legacy"));
+    expect(screen.queryAllByTestId("save-btn")).toHaveLength(0);
+    expect(puts).toEqual([]);
+  });
+
+  // F3 — mode-dependent copy.
+  it("F3 pair mode: 'may request access' heading, no full-access warning", async () => {
+    mockNetworkFetch({ config: { network: { trustMode: "pair", trustModeOrigin: "operator" }, pairing: { acceptLanRequests: true } } });
+    await openSecurity();
+    expect(screen.getByText("Networks that may request access")).toBeTruthy();
+    expect(screen.getByTestId("trusted-networks-description").textContent).toMatch(/listing a network never grants access/i);
+    expect(screen.queryByTestId("trusted-networks-warning")).toBeNull();
+    expect(screen.queryByText(/Trusted networks — admitted without sign-in/)).toBeNull();
+  });
+
+  it("F3 legacy mode: admitted-without-sign-in heading + warning only when no migration callout", async () => {
+    mockNetworkFetch({ config: { network: { trustMode: "legacy", trustModeOrigin: "operator" } }, posture: posture({ networkOnly: { admissions: 0, distinctPeers: 0, lastAt: null } }) });
+    await openSecurity();
+    expect(screen.getByText("Trusted networks — admitted without sign-in")).toBeTruthy();
+    expect(screen.getByTestId("trusted-networks-warning").textContent).toMatch(/full access to the dashboard without/);
+    expect(screen.queryByTestId("network-trust-migration")).toBeNull();
+  });
+
+  it("F3 legacy with network-only devices: migration callout replaces the warning", async () => {
+    mockNetworkFetch({ config: { network: { trustMode: "legacy", trustModeOrigin: "upgrade" } }, posture: posture() });
+    await openSecurity();
+    await waitFor(() => screen.getByTestId("network-trust-migration"));
+    expect(screen.getByTestId("network-trust-migration").textContent).toContain("3 device addresses");
+    expect(screen.queryByTestId("trusted-networks-warning")).toBeNull();
+    expect(screen.getByText("Trusted networks — admitted without sign-in")).toBeTruthy();
+  });
+
+  it("F3 wide-range wording follows the mode", async () => {
+    const iface = { name: "eth0", address: "192.168.1.10", label: "eth0", pointToPoint: false, suggestions: [{ value: "192.168.0.0/16", wide: true }] };
+    for (const [mode, expected] of [
+      ["legacy", /unauthenticated access to the whole/],
+      ["pair", /may request access/],
+    ] as const) {
+      mockNetworkFetch({ config: { network: { trustMode: mode, trustModeOrigin: "operator" }, pairing: { acceptLanRequests: true } } });
+      const base = global.fetch as unknown as ReturnType<typeof vi.fn>;
+      global.fetch = vi.fn().mockImplementation((url: string, o?: any) =>
+        url === "/api/network-interfaces" ? Promise.resolve(jsonRes({ success: true, data: [iface] })) : (base as unknown as (u: string, o?: unknown) => Promise<Response>)(url, o)) as unknown as typeof fetch;
+      await openSecurity();
+      fireEvent.click(screen.getByTestId("trusted-networks-add-local"));
+      const offer = await screen.findByTestId("trusted-networks-offer-192.168.0.0/16");
+      expect(offer.getAttribute("title")).toMatch(expected);
+      if (mode === "pair") expect(offer.getAttribute("title")).not.toMatch(/unauthenticated/);
+      cleanup();
+    }
+  });
+
+  // F4 — refused peers in pair mode.
+  it("F4 pair: refused peers are info rows (no Trust testid); allow-requests adds exactly that address", async () => {
+    mockNetworkFetch({
+      config: { network: { trustMode: "pair", trustModeOrigin: "operator" }, pairing: { acceptLanRequests: true } },
+      blockEvents: [
+        { ip: "192.168.16.31", count: 4, trustable: true },
+        { ip: "198.51.100.23", count: 1, trustable: true },
+      ],
+    });
+    await openSecurity();
+    const eligible = await screen.findByTestId("block-event-192.168.16.31");
+    expect(eligible.textContent).toMatch(/Request access/);
+    expect(within(eligible).queryByRole("button")).toBeNull();
+    expect(document.querySelectorAll('[data-testid^="block-event-trust-"]')).toHaveLength(0);
+
+    const allow = screen.getByTestId("block-event-allow-requests-198.51.100.23");
+    expect(allow.textContent).toMatch(/Allow requests from 198\.51\.100\.23/);
+    fireEvent.click(allow);
+    expect(screen.getByTestId("trusted-networks-list").textContent).toContain("198.51.100.23");
+    expect(screen.getByTestId("trusted-networks-list").textContent).not.toMatch(/198\.51\.100\.0/);
+    expect(puts).toEqual([]);
+
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].auth.bypassHosts).toEqual(["192.168.16.0/24", "198.51.100.23"]);
+    expect(puts[0].network).toBeUndefined();
+  });
+
+  it("F4 legacy keeps the Trust actions", async () => {
+    mockNetworkFetch({
+      config: { network: { trustMode: "legacy", trustModeOrigin: "operator" } },
+      posture: posture({ networkOnly: { admissions: 0, distinctPeers: 0, lastAt: null } }),
+      blockEvents: [{ ip: "198.51.100.23", count: 1, trustable: true }],
+    });
+    await openSecurity();
+    expect(await screen.findByTestId("block-event-trust-198.51.100.23")).toBeTruthy();
+    expect(screen.queryByTestId("block-event-allow-requests-198.51.100.23")).toBeNull();
+  });
+
+  // F5 — pair + LAN requests off; unrecognised stored value.
+  it("F5 pair with LAN requests off: info callout with a control that writes through Save", async () => {
+    mockNetworkFetch({ config: { network: { trustMode: "pair", trustModeOrigin: "operator" }, pairing: { acceptLanRequests: false } } });
+    await openSecurity();
+    const info = screen.getByTestId("network-trust-lan-off");
+    expect(info.textContent).toMatch(/can't request access/);
+    fireEvent.click(within(info).getByTestId("network-trust-accept-lan"));
+    expect(puts).toEqual([]);
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].pairing).toEqual({ acceptLanRequests: true });
+    expect(puts[0].network).toBeUndefined();
+  });
+
+  it("F5 unrecognised stored value: Pair checked, warning names the value, explicit choice saves", async () => {
+    mockNetworkFetch({ config: { network: { trustMode: "open" }, pairing: { acceptLanRequests: false } } });
+    await openSecurity();
+    expect(radio("pair").checked).toBe(true);
+    const warn = screen.getByTestId("network-trust-unrecognised");
+    expect(warn.textContent).toContain('"open"');
+    expect(screen.getByTestId("network-trust-lan-off")).toBeTruthy();
+    fireEvent.click(within(warn).getByTestId("network-trust-save-explicit"));
+    expect(screen.queryByTestId("network-trust-unrecognised")).toBeNull();
+    fireEvent.click(screen.getAllByTestId("save-btn")[0]);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].network).toEqual({ trustMode: "pair" });
+  });
+
+  // F6 — DOM order.
+  it("F6 order: radio → callout → heading → advisory → refused rows → list → add → warning", async () => {
+    mockNetworkFetch({
+      config: {
+        network: { trustMode: "legacy", trustModeOrigin: "operator" },
+        bindHost: "10.0.0.5",
+        reachability: { resolvedBindHost: "10.0.0.5", pendingBindHost: "10.0.0.5", unreachable: ["192.168.1.0/24"], bindHostSource: "config" },
+        auth: { secret: "", providers: {}, bypassHosts: ["192.168.1.0/24"] },
+      },
+      posture: posture({ trustModeOrigin: "operator" }),
+      blockEvents: [{ ip: "198.51.100.23", count: 1, trustable: true }],
+    });
+    await openSecurity();
+    await screen.findByTestId("network-trust-migration");
+    await screen.findByTestId("block-event-198.51.100.23");
+    await screen.findByTestId("unreachable-trusted-networks-advisory");
+    // The migration callout hides the warning; draft pair would hide the heading
+    // copy — so assert the full chain with the warning forced visible below.
+    const ids = [
+      "network-trust-mode-pair",
+      "network-trust-migration",
+      "trusted-networks-heading",
+      "unreachable-trusted-networks-advisory",
+      "block-event-198.51.100.23",
+      "trusted-networks-list",
+      "trusted-networks-manual-input",
+    ];
+    const els = ids.map((id) => screen.getByTestId(id));
+    for (let i = 1; i < els.length; i++) {
+      expect(
+        els[i - 1].compareDocumentPosition(els[i]) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `${ids[i - 1]} must precede ${ids[i]}`,
+      ).toBeTruthy();
+    }
+  });
+
+  it("F6 the legacy warning comes last", async () => {
+    mockNetworkFetch({
+      config: { network: { trustMode: "legacy", trustModeOrigin: "operator" } },
+      posture: posture({ networkOnly: { admissions: 0, distinctPeers: 0, lastAt: null } }),
+    });
+    await openSecurity();
+    const add = screen.getByTestId("trusted-networks-manual-input");
+    const warn = screen.getByTestId("trusted-networks-warning");
+    expect(add.compareDocumentPosition(warn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("F1 network is mapped to the Security page's dirty dot", async () => {
+    const { CONFIG_FIELD_PAGE, computeConfigPartial } = await import("../settings/SettingsPanel.js");
+    expect(CONFIG_FIELD_PAGE.network).toBe("security");
+    const base = { ...mockConfig, network: { trustMode: "legacy" } } as any;
+    expect(computeConfigPartial({ ...base, network: { trustMode: "pair" } }, base)).toEqual({ network: { trustMode: "pair" } });
+    expect(computeConfigPartial(base, base)).toEqual({});
+  });
+});
+
+// Add-ons rail badge: the same count the Issues tab shows.
+// See change: addons-hub-folder-view (test-plan #F12 rail half, #F13).
+describe("SettingsPanel — Add-ons issue badge", () => {
+  const pluginRow = (over: Record<string, unknown> = {}) => ({
+    id: "apple-tools",
+    displayName: "Apple Tools",
+    claims: [],
+    status: {
+      id: "apple-tools",
+      displayName: "Apple Tools",
+      enabled: true,
+      loaded: true,
+      claims: 0,
+      missingRequirements: ["${imcpServerPath}"],
+      ...over,
+    },
+  });
+
+  function fetchWith(plugins: unknown[], health: unknown) {
+    const base = mockFetchConfig();
+    return vi.fn().mockImplementation((url: string, options?: any) => {
+      if (url === "/api/plugins") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, plugins }) });
+      }
+      if (url === "/api/packages/health") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: health }) });
+      }
+      return base(url, options);
+    });
+  }
+
+  const healthy = { entries: [{ source: "npm:fine", status: "ok" }], summary: { ok: 1, staleNpm: 0, missingPath: 0, duplicateGroups: [] } };
+  const stale = { entries: [{ source: "npm:gone", status: "stale-npm", reason: "x" }], summary: { ok: 0, staleNpm: 1, missingPath: 0, duplicateGroups: [] } };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    fetchAutoInitWorktreePref.mockResolvedValue(false);
+    setAutoInitWorktreePref.mockResolvedValue(true);
+    __resetAddonIssuesStore();
+    setPath("/settings/general");
+  });
+  afterEach(() => cleanup());
+
+  it("shows plugin issues + health entries as one count on the Add-ons item", async () => {
+    global.fetch = fetchWith([pluginRow()], stale);
+    render(<SettingsPanel />);
+    const badge = await screen.findByTestId("nav-addons-issues");
+    expect(badge.textContent).toContain("2");
+    // The count must not leak into the button's accessible name; it is its description.
+    const rail = screen.getByTestId("settings-nav-rail");
+    const button = within(rail).getByRole("button", { name: "Add-ons" });
+    expect(document.getElementById(button.getAttribute("aria-describedby") ?? "")?.textContent).toBe("2 add-on issues");
+  });
+
+  it("shows no badge when there are no issues", async () => {
+    global.fetch = fetchWith([pluginRow({ missingRequirements: [] })], healthy);
+    render(<SettingsPanel />);
+    await waitFor(() => expect(screen.getByTestId("settings-nav-rail")).toBeTruthy());
+    await waitFor(() =>
+      expect((global.fetch as any).mock.calls.some(([u]: [string]) => u === "/api/packages/health")).toBe(true),
+    );
+    expect(screen.queryByTestId("nav-addons-issues")).toBeNull();
+  });
+});

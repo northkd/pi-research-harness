@@ -1,0 +1,21 @@
+{
+  "name": "pi-research-loop-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Goal-fixed research loop: charter, attempt ledger, deterministic stuck detection, narrowing, and bounded strategist packets for Pi",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test ../../tests/workbench-sync-proxy.test.mjs ../../tests/workbench-sync-launch.test.mjs",
+    "validate": "node scripts/validate-model-policy.mjs",
+    "skills-index": "node scripts/build-skills-index.mjs",
+    "lease": "node scripts/browser-lease.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

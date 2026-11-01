@@ -16,7 +16,8 @@
     "Machine-specific dashboard-source unit assertion omitted; actual SDK separately checks foreground idle",
     "No private project state, review packets, transcripts, raw logs, runtime/deployment records or authenticated model tests exported",
     "Historical SDK gates retained with portable dependency roots; real model/host claims remain separate from mocks",
-    "Remove four trailing spaces inherited from local author-owned source/tests; no behavioral change"
+    "Remove four trailing spaces inherited from local author-owned source/tests; no behavioral change",
+    "macOS capture reports OS total/free memory separately; Linux-only resource admission remains fail-closed"
   ],
   "liveNewModelRoundtrip": "NOT_RUN",
   "persistentWorkflowHumanAdjudication": "NOT_IMPLEMENTED",
@@ -68,7 +69,7 @@
     },
     {
       "path": "src/capture.mjs",
-      "sha256": "7948bd754c83f3ccad727b6517ecb82d5ad60c48db366c66396013aa8aeaedea",
+      "sha256": "431d04ce5c01f8f16bc383fbf7391b46b24b1ee610904df052273ade5de0a1cf",
       "localSourceSha256": "02704f09bda900fa20c65b6c172cff4093a1f3d07f1783a726258e93be41fd01"
     },
     {

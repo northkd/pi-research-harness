@@ -10,10 +10,12 @@ export function makeSettings(template, repo, options = {}) {
   settings.packages = [...settings.packages, repo];
   // The adapter owns configured MCP tools; avoid duplicate builtin discovery.
   settings.extensions = ['-builtin:mcp'];
-  if (options.dashboard) settings.packages.push(path.join(repo, '.runtime/dashboard-source/packages/extension'));
+  const dashboardSource = options.dashboardSource ?? path.join(repo, '.runtime/dashboard-source');
+  if (!path.isAbsolute(dashboardSource)) throw new Error('Dashboard source must be an absolute path');
+  if (options.dashboard) settings.packages.push(path.join(dashboardSource, 'packages/extension'));
   if (options.dashboardPlugins) {
     if (!options.dashboard) throw new Error('Dashboard plugin bridges require dashboard mode');
-    const base = path.join(repo, '.runtime/dashboard-source/packages');
+    const base = path.join(dashboardSource, 'packages');
     const bridges = {
       'dashboard-automation': path.join(base, 'automation-plugin/src/bridge/index.ts'),
       'dashboard-flows': path.join(base, 'flows-plugin/src/bridge/index.ts'),
@@ -76,6 +78,6 @@ export async function configure(repo, agentDir, options = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const flags = new Set(process.argv.slice(2));
   const agentDir=path.resolve(process.env.PI_RESEARCH_AGENT_DIR || path.join(os.homedir(),'.local/share/pi-research-harness/agent'));
-  const result=await configure(repositoryRoot,agentDir,{dashboard:flags.has('--with-dashboard') || flags.has('--with-dashboard-plugins'),dashboardPlugins:flags.has('--with-dashboard-plugins'),bundledSkills:flags.has('--with-bundled-skills'),browser:flags.has('--with-browser'),image:flags.has('--enable-image-generation'),dryRun:flags.has('--dry-run')});
+  const result=await configure(repositoryRoot,agentDir,{dashboard:flags.has('--with-dashboard') || flags.has('--with-dashboard-plugins'),dashboardPlugins:flags.has('--with-dashboard-plugins'),dashboardSource:process.env.PI_RESEARCH_DASHBOARD_SOURCE,bundledSkills:flags.has('--with-bundled-skills'),browser:flags.has('--with-browser'),image:flags.has('--enable-image-generation'),dryRun:flags.has('--dry-run')});
   console.log(JSON.stringify(result,null,2));
 }

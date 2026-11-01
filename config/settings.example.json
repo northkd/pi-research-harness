@@ -7,7 +7,7 @@
     "keepRecentTokens": 20000
   },
   "packages": [
-    "npm:pi-subagents@0.76.1",
+    "npm:pi-subagents@0.79.2",
     "npm:pi-background-tasks@2.6.9",
     {
       "source": "npm:@companion-ai/feynman@0.5.22",
@@ -72,19 +72,45 @@
       "research-agy-sci": {
         "thinking": false
       },
-      "evidence-auditor": {"thinking": "max"},
-      "oracle": {"thinking": "max"},
-      "advisor": {"thinking": "max"},
-      "researcher": {"thinking": "max"},
-      "reviewer": {"thinking": "max"},
-      "worker": {"thinking": "max"},
-      "developer": {"thinking": "max"},
-      "coder": {"thinking": "max"},
-      "implementer": {"thinking": "max"},
-      "develop": {"thinking": "max"},
-      "verifier": {"thinking": "max"},
-      "writer": {"thinking": "max"},
-      "scout": {"thinking": "max"}
+      "evidence-auditor": {
+        "thinking": "max"
+      },
+      "oracle": {
+        "thinking": "max"
+      },
+      "advisor": {
+        "thinking": "max"
+      },
+      "researcher": {
+        "thinking": "max"
+      },
+      "reviewer": {
+        "thinking": "max"
+      },
+      "worker": {
+        "thinking": "max"
+      },
+      "developer": {
+        "thinking": "max"
+      },
+      "coder": {
+        "thinking": "max"
+      },
+      "implementer": {
+        "thinking": "max"
+      },
+      "develop": {
+        "thinking": "max"
+      },
+      "verifier": {
+        "thinking": "max"
+      },
+      "writer": {
+        "thinking": "max"
+      },
+      "scout": {
+        "thinking": "max"
+      }
     }
   }
 }

@@ -1,0 +1,2690 @@
+/**
+ * Shared configuration module for PI Dashboard.
+ * Used by both the server CLI and bridge extension.
+ */
+
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { type AcpAgentConfig, type AcpSettings, DEFAULT_ACP_SETTINGS, parseAcpAgents, parseAcpSettings } from "./acp/acp-config.js";
+import { MAX_PREVIEW_BYTES } from "./file-kind.js";
+import {
+  DEFAULT_SERVER_HEAP,
+  DEFAULT_SESSION_HEAP,
+  MIN_HEAP_MB,
+  type ServerHeapConfig,
+  type SessionHeapConfig,
+} from "./heap-limits.js";
+import type { HostGateMode } from "./host-admission.js";
+import { DEFAULT_MEMORY_LIMITS, type MemoryLimitsConfig, MIN_REPLAY_WINDOW, type ReplayWindowMode } from "./memory-limits.js";
+import type { WindowsGitSourceSetting } from "./platform/select-git-source.js";
+import { inferPlatform, pathKey } from "./session-group-path.js";
+import { isTier, type Tier } from "./tiers.js";
+import {
+  providerSupportsMode,
+  type TunnelMode,
+  type TunnelProviderId,
+} from "./tunnel-provider.js";
+import { clampVaultGraceHours, VAULT_GRACE_DEFAULT_HOURS } from "./vault-delivery.js";
+
+export type { WindowsGitSourceSetting } from "./platform/select-git-source.js";
+
+export const CONFIG_DIR = path.join(os.homedir(), ".pi", "dashboard");
+export const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
+
+export type SpawnStrategy = "tmux" | "headless";
+
+/**
+ * Host-admission rollout mode. `report` logs a would-refuse line and lets the
+ * request through; `enforce` refuses it. See change: add-host-allowlist-admission.
+ */
+export type { HostGateMode };
+
+export interface HostGateConfig {
+  mode: HostGateMode;
+}
+
+const HOST_GATE_MODES: HostGateMode[] = ["report", "enforce"];
+
+/**
+ * Validate a raw `hostGate.mode`. Absent (`undefined`) → `absentDefault`
+ * (`enforce`); a recognised string → itself; anything else (typo, wrong type)
+ * → `report`, so a mistyped config cannot lock the operator out.
+ * See change: harden-server-request-surfaces.
+ */
+export function parseHostGateMode(
+  raw: unknown,
+  absentDefault: HostGateMode = "enforce",
+): HostGateMode {
+  if (raw === undefined) return absentDefault;
+  return typeof raw === "string" && (HOST_GATE_MODES as string[]).includes(raw)
+    ? (raw as HostGateMode)
+    : "report";
+}
+
+/**
+ * Policy applied when a bridge re-registers a session after a dashboard
+ * restart (i.e. the `session_register` carries `registerReason: "reattach"`).
+ *
+ * - `"always"` (default) — unconditionally move the session to the front
+ *   of `sessionOrder` for its cwd.
+ * - `"streaming-only"` — only move-to-front when the session's status is
+ *   currently `"streaming"`.
+ * - `"preserve"` — leave `sessionOrder` untouched (legacy behavior).
+ *
+ * See change: reattach-move-to-front.
+ */
+export type ReattachPlacement = "preserve" | "streaming-only" | "always";
+
+const VALID_REATTACH_PLACEMENTS: ReattachPlacement[] = [
+  "preserve",
+  "streaming-only",
+  "always",
+];
+
+export const DEFAULT_REATTACH_PLACEMENT: ReattachPlacement = "always";
+
+/**
+ * Cold-start behavior when sessions were interrupted by an unclean host
+ * shutdown. `off` — classify but never surface. `ask` — broadcast one
+ * recovery offer (default). `auto` — resume all candidates without prompting.
+ * See change: reopen-sessions-after-shutdown.
+ */
+export type ReopenSessionsAfterShutdown = "off" | "ask" | "auto";
+const VALID_REOPEN_MODES: ReopenSessionsAfterShutdown[] = ["off", "ask", "auto"];
+export const DEFAULT_REOPEN_SESSIONS_AFTER_SHUTDOWN: ReopenSessionsAfterShutdown = "ask";
+export function parseReopenSessionsAfterShutdown(raw: unknown): ReopenSessionsAfterShutdown {
+  return VALID_REOPEN_MODES.includes(raw as ReopenSessionsAfterShutdown)
+    ? (raw as ReopenSessionsAfterShutdown)
+    : DEFAULT_REOPEN_SESSIONS_AFTER_SHUTDOWN;
+}
+
+/**
+ * Validate a raw value against the {@link ReattachPlacement} union.
+ * Anything outside the union (including `undefined`, numbers, objects)
+ * falls back to {@link DEFAULT_REATTACH_PLACEMENT}.
+ */
+export function parseReattachPlacement(raw: unknown): ReattachPlacement {
+  return typeof raw === "string" && (VALID_REATTACH_PLACEMENTS as string[]).includes(raw)
+    ? (raw as ReattachPlacement)
+    : DEFAULT_REATTACH_PLACEMENT;
+}
+
+export interface AuthProviderConfig {
+  clientId: string;
+  clientSecret: string;
+  issuerUrl?: string;
+  name?: string;
+}
+
+/**
+ * Multi-user identity plane (openspec: add-multi-user-identity-plane).
+ *
+ * There is NO mode flag. The plane activates purely on the bundled
+ * `keycloak-resolver` plugin being enabled AND configured; this block only
+ * carries the host-owned TRUST GRANTS and timeouts, all optional. An absent
+ * `identity` block ⇒ empty trust list, no policy ⇒ inert (today's behavior).
+ */
+export interface IdentityConfig {
+  /**
+   * Plugin ids permitted to register a principal resolver, IN ADDITION to the
+   * bundled `keycloak-resolver`. A self-declared `manifest.priority` grants
+   * nothing — trust is only this operator-controlled list. Default `[]`.
+   */
+  trustedResolverPlugins: string[];
+  /**
+   * The single plugin id permitted to register the OPTIONAL host access
+   * policy (non-session roads). Unset ⇒ no policy ⇒ non-session roads ungated.
+   */
+  trustedPolicyPlugin?: string;
+  /** Per-resolver dispatch budget (ms). Default 2000, clamped [100, 5000]. */
+  resolverTimeoutMs: number;
+  /** Per-policy-call budget (ms). Default 500, clamped [50, 2000]. */
+  policyTimeoutMs: number;
+}
+
+/** How a network match (`trustedNetworks` / `auth.bypassHosts`) is treated. See change: retire-trusted-networks-bypass. */
+export type TrustMode = "pair" | "legacy";
+/** Who decided the stored mode: the one-time boot decision or an operator write. */
+export type TrustModeOrigin = "upgrade" | "operator";
+
+/**
+ * `network` config block. Both fields are STRING passthrough at parse time: an
+ * unrecognised `trustMode` must survive a load/save round trip untouched and be
+ * judged by {@link resolveTrustMode} (fail closed), never silently dropped.
+ * See change: retire-trusted-networks-bypass (design D2).
+ */
+export interface NetworkConfig {
+  trustMode?: string;
+  trustModeOrigin?: string;
+}
+
+/** Result of {@link resolveTrustMode}. `mode: null` = no stored value at all. */
+export interface ResolvedTrustMode {
+  /** The effective mode, or `null` when nothing is stored (the caller supplies the fallback). */
+  mode: TrustMode | null;
+  /** `null` for an unrecognised stored value or when nothing is stored. */
+  origin: TrustModeOrigin | null;
+  /** The stored value when present but unrecognised, else `null`. */
+  unrecognised: string | null;
+}
+
+/**
+ * Read the trust mode out of a config. Absent → `{ mode: null }`;
+ * present-but-unrecognised → `pair` (fail closed) with the offending value
+ * reported; a stored mode without an origin (a hand edit) reads `operator`.
+ */
+export function resolveTrustMode(config: { network?: NetworkConfig } | null | undefined): ResolvedTrustMode {
+  const raw = config?.network?.trustMode;
+  if (raw === undefined || raw === null) return { mode: null, origin: null, unrecognised: null };
+  if (raw === "pair" || raw === "legacy") {
+    return { mode: raw, origin: config?.network?.trustModeOrigin === "upgrade" ? "upgrade" : "operator", unrecognised: null };
+  }
+  return { mode: "pair", origin: null, unrecognised: String(raw) };
+}
+
+function parseNetworkConfig(raw: any): NetworkConfig | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: NetworkConfig = {};
+  // Any stored value passes through (stringified): a hand-edited `true` / `1` must
+  // read as UNRECOGNISED (fail closed to `pair`), not as "nothing stored" (`legacy`).
+  if (raw.trustMode !== undefined && raw.trustMode !== null) out.trustMode = String(raw.trustMode);
+  if (typeof raw.trustModeOrigin === "string") out.trustModeOrigin = raw.trustModeOrigin;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export interface AuthConfig {
+  secret: string;
+  providers: Record<string, AuthProviderConfig>;
+  allowedUsers?: string[];
+  bypassUrls?: string[];
+  bypassHosts?: string[];
+  /**
+   * Manifest ids of NON-bundled plugins trusted to mount `serveApp` apps (bundled
+   * plugins are trusted by package-directory membership). Read at activation
+   * (restart-effective). Default `[]`. See change: add-plugin-capability-routes (D2).
+   */
+  capabilityRoutePlugins?: string[];
+  /** Base URL for OAuth redirect URIs — overrides the tunnel URL when set. */
+  redirectBaseUrl?: string;
+  /** Admin email override — can list/revoke every user's proxy API keys. */
+  admin?: string;
+  /**
+   * OIDC `groups` claim → session tier. Configured ⇒ highest matching tier
+   * wins and no match refuses login (fail closed). Absent ⇒ legacy
+   * behaviour (`allowedUsers`, tier `operate`).
+   * See change: add-passkey-user-auth (D4).
+   */
+  groupTiers?: Record<string, Tier>;
+  /**
+   * Native passkey sign-in (user directory, invite QR, sign-in-with-phone).
+   * Inert unless `enabled`. See change: add-passkey-user-auth.
+   */
+  passkeys?: { enabled: boolean };
+}
+
+
+/**
+ * V8 heap-sizing types + defaults follow the same browser-safe split, for the
+ * same reason. DISTINCT from `memoryLimits` above, which bounds the EVENT
+ * STORE and has nothing to do with V8.
+ * See change: bound-session-heap-and-gc-telemetry (D7).
+ */
+export {
+  DEFAULT_SERVER_HEAP,
+  DEFAULT_SESSION_HEAP,
+  HEAP_WARN_ABOVE_MB,
+  MIN_HEAP_MB,
+  type ServerHeapConfig,
+  type SessionHeapConfig,
+  SUBAGENT_HEAP_GUIDANCE_MB,
+  subagentHeapBudget,
+} from "./heap-limits.js";
+/**
+ * Memory-limit types + defaults live in a BROWSER-SAFE module and are
+ * re-exported here so existing `config.js` importers are unaffected. The client
+ * settings panel needs `DEFAULT_MEMORY_LIMITS` as a VALUE, and a value import of
+ * THIS module would drag `node:fs`/`node:os`/`node:path` into the browser
+ * bundle — a blank page at boot, not a build error.
+ * See change: fix-lazy-history-backfill-ux (D7).
+ */
+export {
+  DEFAULT_MEMORY_LIMITS,
+  type MemoryLimitsConfig,
+  MIN_REPLAY_WINDOW,
+  type ReplayWindowMode,
+} from "./memory-limits.js";
+
+/**
+ * Server push notifications (Web Push / FCM / webhook). Opt-in: a missing or
+ * partial block parses as disabled. See change: add-server-push-notifications.
+ */
+export interface PushConfig {
+  /** Default false. Only a strict `true` enables push. */
+  enabled: boolean;
+  /** Per-(session, webhook token) coalescing window. Default 30 000, clamped 5 000–300 000. */
+  coalesceWindowMs: number;
+  fcm?: { serviceAccountPath: string };
+  /** VAPID `mailto:` subject. Web Push is disabled without it. */
+  webPush?: { contactEmail: string };
+}
+
+export const DEFAULT_PUSH_COALESCE_WINDOW_MS = 30_000;
+
+export interface OpenSpecPollConfig {
+  /**
+   * Master gate. When `false`, the dashboard treats OpenSpec as fully disabled
+   * across the dashboard — no polling, the OPENSPEC session-card subcard hides
+   * everywhere, and `openspec_refresh` is a no-op. Other tuning fields below
+   * retain their meaning but are ignored at runtime when this is `false`.
+   *
+   * Default `true` for backwards compatibility. Existing configs without this
+   * field behave exactly as before. See change: auto-hide-empty-session-subcards.
+   */
+  enabled: boolean;
+  /** Poll interval in seconds. Default 60. Clamped to [5, 3600]. */
+  pollIntervalSeconds: number;
+  /** Max concurrent `openspec` CLI invocations across all dirs. Default 3. Clamped to [1, 16]. */
+  maxConcurrentSpawns: number;
+  /** `"mtime"` skips re-polling unchanged changes; `"always"` polls unconditionally. Default `"mtime"`. */
+  changeDetection: "mtime" | "always";
+  /** Max per-directory phase jitter in seconds. 0 disables jitter. Default 5. Clamped to [0, 60]. */
+  jitterSeconds: number;
+  /**
+   * When `true` (the default) the periodic / gated poll path runs per-change
+   * artifact derivation and payload serialization in a `worker_threads`
+   * worker, off the main event loop. When `false`, derivation runs in-process
+   * exactly as on the pre-worker path — used as a permanent escape hatch for
+   * environments where `worker_threads` is unavailable (e.g. constrained
+   * bundles). The in-process fallback also activates automatically on worker
+   * spawn/crash/timeout regardless of this flag. See change:
+   * offload-openspec-poll-to-worker.
+   */
+  useWorker: boolean;
+  /**
+   * Cwds for which OpenSpec is suppressed entirely — no polling, no
+   * affordance on any surface. Default `[]`. Entries are normalized with the
+   * same `pathKey` normalization pinned directories use, so `/a/b/` and
+   * `/a/b` collapse to one entry. See change: add-openspec-init-affordances.
+   */
+  optOutDirectories: string[];
+  /**
+   * Fleet-level escape for the ABSENT initialization offer. When `false`, a
+   * directory without OpenSpec renders no affordance anywhere while
+   * BROKEN/STALE/READY keep working. Distinct from `enabled`, which disables
+   * the feature outright. Default `true`. See change:
+   * add-openspec-init-affordances.
+   */
+  offerInitialization: boolean;
+  /**
+   * Dashboard-managed `pi-spec-driven` workflow schema settings. See change:
+   * add-pi-spec-driven-schema.
+   */
+  workflowSchema: {
+    /**
+     * When `true`, a dashboard-performed init of a directory that had no
+     * `openspec/` also enables the `pi-spec-driven` schema. Never runs on
+     * repair/overwrite. Default `false`.
+     */
+    defaultForNewProjects: boolean;
+  };
+}
+
+/**
+ * Credential-vault delivery switches. Held here, NOT in the vault file, so the
+ * emergency switch still works while the vault is corrupt.
+ * See change: add-credential-vault (D2).
+ */
+export interface VaultConfig {
+  /** Master delivery switch. `false` withdraws values from every connected session. Default `true`. */
+  deliveryEnabled: boolean;
+  /** Hours a bridge keeps delivered values while the hub is unreachable. Clamped to [1, 168]. Default 24. */
+  offlineGraceHours: number;
+}
+
+export const DEFAULT_VAULT_CONFIG: VaultConfig = { deliveryEnabled: true, offlineGraceHours: VAULT_GRACE_DEFAULT_HOURS };
+
+/**
+ * Editor pane config. `largeFileLimitMb` gates the rich viewers' too-large
+ * fallback only; the digest ceiling (256 MiB) and office conversion caps stay
+ * fixed. See change: gate-changed-on-disk-by-content (D6).
+ */
+export interface EditorConfig {
+  /** Rich-viewer too-large threshold in MiB. Integer, clamped to [1, 256]. Default 10. */
+  largeFileLimitMb: number;
+}
+
+export const EDITOR_LARGE_FILE_LIMIT_MIN_MB = 1;
+export const EDITOR_LARGE_FILE_LIMIT_MAX_MB = 256;
+
+export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
+  largeFileLimitMb: MAX_PREVIEW_BYTES / (1024 * 1024),
+};
+
+export function parseEditorConfig(raw: any): EditorConfig {
+  const fallback = DEFAULT_EDITOR_CONFIG.largeFileLimitMb;
+  const v = raw && typeof raw === "object" ? raw.largeFileLimitMb : undefined;
+  const n = typeof v === "number" && Number.isFinite(v) ? Math.round(v) : fallback;
+  return {
+    largeFileLimitMb: Math.min(EDITOR_LARGE_FILE_LIMIT_MAX_MB, Math.max(EDITOR_LARGE_FILE_LIMIT_MIN_MB, n)),
+  };
+}
+
+export const DEFAULT_OPENSPEC_POLL: OpenSpecPollConfig = {
+  enabled: true,
+  // 60s baseline: even after local derivation kills the per-change spawn
+  // storm, a larger interval reduces churn for large change sets.
+  // See change: optimize-openspec-poll-derive-artifacts-locally.
+  pollIntervalSeconds: 60,
+  maxConcurrentSpawns: 3,
+  changeDetection: "mtime",
+  useWorker: true,
+  jitterSeconds: 5,
+  optOutDirectories: [],
+  offerInitialization: true,
+  workflowSchema: { defaultForNewProjects: false },
+};
+
+// ── Grammar / spell check ───────────────────────────────────────────
+
+// Composer grammar/spell-check config moved into the grammar plugin
+// (packages/grammar-plugin) — persisted under `plugins.grammar.*`, not core.
+// See change: make-grammar-fully-plugin-contained.
+
+export interface SessionsConfig {
+  /**
+   * When `true` (the default) session-event hydration (JSONL parse + replay)
+   * runs in a `worker_threads` worker, off the main event loop. When `false`,
+   * hydration runs in-process exactly as on the pre-worker path — a permanent
+   * escape hatch for environments where `worker_threads` is unavailable. The
+   * in-process fallback also activates automatically on worker
+   * spawn/crash/timeout regardless of this flag. See change:
+   * offload-session-events-load-to-worker.
+   */
+  useLoadWorker: boolean;
+}
+
+export const DEFAULT_SESSIONS: SessionsConfig = {
+  useLoadWorker: true,
+};
+
+/**
+ * Session-list archival policy. Drives the boot scan's ended+hidden migration
+ * and the runtime auto-archive sweeper. `archiveAfterDays = 0` disables
+ * age-based auto-archive; values are read live (no restart). See change:
+ * archive-sessions-lazy-load.
+ */
+export interface SessionListConfig {
+  /** Ended sessions whose reference age exceeds this many days are archived. `0` = never. */
+  archiveAfterDays: number;
+  /** Runtime sweep cadence in minutes. */
+  archiveSweepIntervalMinutes: number;
+  /**
+   * Archive a session declared `archiveOnEnd` (plugin service sessions) shortly
+   * after it ends, plus the boot backfill. Orthogonal to `archiveAfterDays`.
+   * See change: archive-service-sessions-on-end.
+   */
+  archiveServiceSessionsOnEnd: boolean;
+}
+
+export const DEFAULT_SESSION_LIST: SessionListConfig = {
+  archiveAfterDays: 30,
+  archiveSweepIntervalMinutes: 60,
+  archiveServiceSessionsOnEnd: true,
+};
+
+export const SESSION_LIST_LIMITS = {
+  archiveAfterDays: { min: 0, max: 3650 },
+  archiveSweepIntervalMinutes: { min: 1, max: 1440 },
+} as const;
+
+export interface KeeperLogConfig {
+  /**
+   * When `true`, per-session keepers archive pi's stdout/stderr (including full
+   * model API frames) into `keeper-<sessionId>.log`. When `false` (the default),
+   * pi's stdout/stderr are discarded; the keeper still writes its own lifecycle
+   * log lines. Debug-only — capture grows unbounded on disk.
+   * See change: add-keeper-output-capture-toggle.
+   */
+  capturePiOutput: boolean;
+  /**
+   * Per-session keeper-log size cap in bytes. At/over the cap the keeper
+   * truncates its log IN PLACE (`ftruncate(fd, 0)`) — no rename, no retained
+   * generation. The bound is steady-state, not instantaneous: a burst writer
+   * overshoots by one `checkIntervalMs` of output before the next check fires.
+   * Plumbed to the CJS keeper as `PI_KEEPER_LOG_MAX_BYTES` (the keeper cannot
+   * import this module). See change: fix-runaway-keeper-log-growth (D2/D7).
+   */
+  maxBytes: number;
+  /**
+   * Keeper-log size-check cadence in milliseconds. Drives both triggers: the
+   * throttled check inside the keeper's `log()` and the keeper's unref'd
+   * interval timer (child-driven growth produces no `log()` calls). Plumbed
+   * to the keeper as `PI_KEEPER_LOG_CHECK_INTERVAL_MS`.
+   * See change: fix-runaway-keeper-log-growth (D3/D7).
+   */
+  checkIntervalMs: number;
+}
+
+export const DEFAULT_KEEPER_LOG: KeeperLogConfig = {
+  capturePiOutput: false,
+  maxBytes: 134217728, // 128 MiB
+  checkIntervalMs: 5000,
+};
+
+// ── Embed session lifecycle ─────────────────────────────────────────
+
+/**
+ * Server-side lifecycle controls for machine-fronted (`ephemeral`) sessions:
+ * idempotent acquire, the idle reaper, and active-session caps. Disabled by
+ * default (D8) — every numeric threshold is inert while `enabled` is false, so
+ * an upgrade is byte-for-byte behavior-preserving until an operator opts in.
+ * Thresholds are seconds on the wire; the reaper converts to ms. Lives under
+ * `~/.pi/dashboard/config.json` `embedLifecycle`.
+ * See change: add-embed-session-lifecycle.
+ */
+export interface EmbedLifecycleConfig {
+  /** Master toggle. Default false — reaper, caps, and server-side acquire dormant. */
+  enabled: boolean;
+  /** Idle reap threshold: reap a quiescent ephemeral session after this idle. */
+  idleTimeoutSeconds: number;
+  /** Phantom force-reap ceiling: a run streaming longer than this without settling is wedged. */
+  hardCeilingSeconds: number;
+  /** Post-spawn/resume grace window before a fresh session is reap-eligible. */
+  graceWindowSeconds: number;
+  /** Reaper sweep cadence. */
+  sweepIntervalSeconds: number;
+  /** Bounded acquire-coalescing timeout: reject if `session_register` never arrives. */
+  registerTimeoutSeconds: number;
+  /** Per-visitor active-ephemeral cap (fairness bound for trusted identities). */
+  maxActiveEmbedSessionsPerVisitor: number;
+  /** Global active-ephemeral cap (the HARD security bound against spoofed identities). */
+  maxActiveEmbedSessionsGlobal: number;
+}
+
+export const DEFAULT_EMBED_LIFECYCLE: EmbedLifecycleConfig = {
+  enabled: false,
+  idleTimeoutSeconds: 1800,
+  hardCeilingSeconds: 3600,
+  graceWindowSeconds: 30,
+  sweepIntervalSeconds: 60,
+  registerTimeoutSeconds: 30,
+  maxActiveEmbedSessionsPerVisitor: 5,
+  maxActiveEmbedSessionsGlobal: 50,
+};
+
+export interface KnownServer {
+  host: string;
+  port: number;
+  label?: string;
+  addedAt: string; // ISO timestamp
+  /**
+   * Server identity pinned for this entry (`sha256:<b64url>`), set only after
+   * the server proved it through the identity challenge. At most one entry per
+   * (fingerprint, port). See change: stabilize-mdns-server-identity.
+   */
+  fingerprint?: string;
+}
+
+// ── Model Proxy ─────────────────────────────────────────────────────
+
+export interface ProxyApiKey {
+  id: string;
+  label: string;
+  createdBy?: string;
+  scopes?: string[];
+  createdAt: number;
+  lastUsedAt?: number;
+  expiresAt?: number;
+  revokedAt?: number;
+  hash: string;
+}
+
+/**
+ * One configured TLS certificate source. `type` is a registered source type
+ * (server-side registry); the rest is type-specific and validated by that type.
+ * `id` is optional on disk — the tailscale type defaults to `"tailscale"`.
+ */
+export interface TlsSourceEntry {
+  type: string;
+  id?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * ACME (DNS-01) certificate source entry stored in `tls.sources[]` (type "acme").
+ * Solver secrets are NEVER stored here — they live in the credential vault
+ * (namespace `tls:<id>`). `configured` is a read-only projection on
+ * `GET /api/config`, stripped on write.
+ * See change: add-acme-dns01-certs (design D5).
+ */
+export type AcmeSolverConfig =
+  | { type: "cloudflare"; zoneId?: string; configured?: boolean }
+  | { type: "acme-dns"; server: string; subdomain: string; fulldomain: string; configured?: boolean };
+
+export interface AcmeSourceEntry extends TlsSourceEntry {
+  type: "acme";
+  id: string;
+  domains: string[];
+  email: string;
+  agreeTos: boolean;
+  /** `staging` | `production` | canonical `https://` directory URL. */
+  directory: string;
+  /** Operator assertion; only meaningful for a custom directory. */
+  advertise?: boolean;
+  solver: AcmeSolverConfig;
+}
+
+/**
+ * Optional native TLS listener (second port serving the same routes).
+ * Absent block = off. See change: add-tailscale-cert-tls.
+ */
+export interface TlsConfig {
+  enabled: boolean;
+  /** Listen port. Default 8443. */
+  port: number;
+  /** Bind address (IP literal or `localhost`). Default `127.0.0.1`, independent of `bindHost`. */
+  host: string;
+  /** Certificate sources, in ownership-priority order. */
+  sources: TlsSourceEntry[];
+}
+
+export const DEFAULT_TLS_PORT = 8443;
+export const DEFAULT_TLS_HOST = "127.0.0.1";
+
+export const DEFAULT_TLS: TlsConfig = {
+  enabled: false,
+  port: DEFAULT_TLS_PORT,
+  host: DEFAULT_TLS_HOST,
+  sources: [],
+};
+
+/** Tolerant loader for the `tls` block: bad fields fall back to their defaults. */
+export function parseTlsConfig(raw: unknown): TlsConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_TLS, sources: [] };
+  const r = raw as Record<string, unknown>;
+  const port =
+    typeof r.port === "number" && Number.isInteger(r.port) && r.port >= 1 && r.port <= 65535
+      ? r.port
+      : DEFAULT_TLS_PORT;
+  const sources = Array.isArray(r.sources)
+    ? r.sources.filter(
+        (e): e is TlsSourceEntry => !!e && typeof e === "object" && !Array.isArray(e),
+      )
+    : [];
+  return {
+    enabled: r.enabled === true,
+    port,
+    host: typeof r.host === "string" && r.host.trim() ? r.host.trim() : DEFAULT_TLS_HOST,
+    sources,
+  };
+}
+
+export interface ModelProxyConfig {
+  /** Master toggle. Default true. */
+  enabled: boolean;
+  /** Default model for requests that omit it. */
+  defaultModel?: string;
+  /**
+   * Ordered list of fully-qualified `provider/id`s. The first *available*
+   * entry is used when a request omits `model` or names an unresolved model.
+   * Supersedes `defaultModel` when both are set and an entry is available.
+   * See change: fix-and-prefer-model-proxy-resolution.
+   */
+  preferredModels?: string[];
+  /**
+   * Alias → fully-qualified `provider/id`, expanded (exact key match) before
+   * parsing. Lets a caller send `claude` and route to `anthropic/claude-3.5-sonnet`.
+   * See change: fix-and-prefer-model-proxy-resolution.
+   */
+  modelAliases?: Record<string, string>;
+  /** Optional second port for /v1/* routes (for SDKs that hardcode path-prefix-less base URLs). */
+  secondPort?: number;
+  /** Server-wide max concurrent streams. Default 16. Clamped [1, 256]. */
+  maxConcurrentStreams: number;
+  /** Per-API-key max concurrent streams. Default 4. Clamped [1, 64]. */
+  perKeyConcurrentStreams: number;
+  /** Per-provider concurrency caps. Keys are provider names. */
+  perProviderCaps?: Record<string, number>;
+  /** Enable JSONL request logging. Default false. */
+  logRequests: boolean;
+  /** Proxy API keys (stored hashed). */
+  apiKeys: ProxyApiKey[];
+}
+
+export const DEFAULT_MODEL_PROXY: ModelProxyConfig = {
+  enabled: true,
+  maxConcurrentStreams: 16,
+  perKeyConcurrentStreams: 4,
+  logRequests: false,
+  apiKeys: [],
+};
+
+
+/**
+ * Terminal (PTY) bounds. See change: harden-server-capability-bounds (D3).
+ * Read at `createTerminalManager` time (restart to apply).
+ */
+export interface TerminalsConfig {
+  /** Global cap on live PTYs (tab + inline). */
+  maxConcurrent: number;
+  /** Per-owner cap; applies only while the identity plane stamps owners. */
+  maxPerOwner: number;
+  /** An inline (ephemeral) PTY with no attached client this long is reaped. */
+  inlineOrphanTtlMs: number;
+}
+
+export const DEFAULT_TERMINALS_CONFIG: TerminalsConfig = {
+  maxConcurrent: 32,
+  maxPerOwner: 16,
+  inlineOrphanTtlMs: 600_000,
+};
+
+/**
+ * Remote folder-picker confinement. `confineRemote` (default true): requests that are
+ * not genuinely local are confined to the shared roots. `false` = operator opt-out
+ * (the Docker e2e harness, whose browser is a remote peer but needs the whole tree).
+ * Read at server start (restart to apply). See change: harden-server-capability-bounds.
+ */
+export interface BrowseConfig {
+  confineRemote: boolean;
+}
+
+export const DEFAULT_BROWSE_CONFIG: BrowseConfig = { confineRemote: true };
+
+/** Only an explicit `false` disables confinement; anything else keeps the safe default. */
+export function parseBrowseConfig(raw: unknown): BrowseConfig {
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return { confineRemote: o.confineRemote !== false };
+}
+
+/** Invalid values already warned about: `loadConfig()` re-parses on every call, so warn once per distinct bad value. */
+const warnedTerminals = new Set<string>();
+
+/** A positive integer, else the default with one warn line (fail-safe, never throws). */
+function terminalsInt(raw: unknown, key: keyof TerminalsConfig): number {
+  const fallback = DEFAULT_TERMINALS_CONFIG[key];
+  if (raw === undefined) return fallback;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) return raw;
+  const seen = `${key}=${JSON.stringify(raw)}`;
+  if (!warnedTerminals.has(seen)) {
+    warnedTerminals.add(seen);
+    console.warn(`[config] terminals.${key} must be an integer >= 1 (got ${JSON.stringify(raw)}); using ${fallback}`);
+  }
+  return fallback;
+}
+
+export function parseTerminalsConfig(raw: unknown): TerminalsConfig {
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    maxConcurrent: terminalsInt(o.maxConcurrent, "maxConcurrent"),
+    maxPerOwner: terminalsInt(o.maxPerOwner, "maxPerOwner"),
+    inlineOrphanTtlMs: terminalsInt(o.inlineOrphanTtlMs, "inlineOrphanTtlMs"),
+  };
+}
+
+/**
+ * Plugin-specific config namespace.
+ * Lives at ~/.pi/dashboard/config.json#plugins.<id>.*
+ */
+export interface KrokiConfig {
+  /** Base URL of a Kroki instance used for diagram rendering. */
+  url?: string;
+  /** Opt-in to rendering via the public kroki.io when no URL is configured. Default false. */
+  allowRemote: boolean;
+}
+
+export const DEFAULT_KROKI_CONFIG: KrokiConfig = {
+  allowRemote: false,
+};
+
+export function parseKrokiConfig(raw: unknown): KrokiConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_KROKI_CONFIG };
+  const r = raw as Record<string, unknown>;
+  const url = typeof r.url === "string" && r.url.trim() ? r.url.trim() : undefined;
+  const allowRemote = r.allowRemote === true;
+  return {
+    ...(url ? { url } : {}),
+    allowRemote,
+  };
+}
+
+/**
+ * On-demand AI mermaid repair settings. `model` is `provider/id` (id verbatim,
+ * no `:level`). `enabled` is the RESOLVED flag: configured-on but unusable
+ * (no model / `@role`) resolves to `false` with a `disabledReason`.
+ * See change: add-mermaid-ai-repair.
+ */
+export interface MermaidRepairConfig {
+  enabled: boolean;
+  model?: string;
+  maxChars: number;
+  timeoutMs: number;
+  disabledReason?: "no_model" | "role_refs_unsupported";
+}
+
+export const DEFAULT_MERMAID_REPAIR: MermaidRepairConfig = {
+  enabled: false,
+  maxChars: 20000,
+  timeoutMs: 30000,
+};
+
+export function parseMermaidRepairConfig(raw: unknown): MermaidRepairConfig {
+  const base = { maxChars: DEFAULT_MERMAID_REPAIR.maxChars, timeoutMs: DEFAULT_MERMAID_REPAIR.timeoutMs };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { enabled: false, ...base };
+  const r = raw as Record<string, unknown>;
+  const maxChars = clampInt(r.maxChars, 1000, 50000, base.maxChars);
+  const timeoutMs = clampInt(r.timeoutMs, 5000, 120000, base.timeoutMs);
+  const model = typeof r.model === "string" && r.model.trim() ? r.model.trim() : undefined;
+  if (r.enabled !== true) return { enabled: false, ...(model ? { model } : {}), maxChars, timeoutMs };
+  if (!model) return { enabled: false, maxChars, timeoutMs, disabledReason: "no_model" };
+  if (model.startsWith("@")) {
+    return { enabled: false, model, maxChars, timeoutMs, disabledReason: "role_refs_unsupported" };
+  }
+  return { enabled: true, model, maxChars, timeoutMs };
+}
+
+/**
+ * Resolve the effective Kroki endpoint URL according to the resolution ladder (design D5):
+ * 1. Live KROKI_URL env override (highest precedence)
+ * 2. Explicitly configured kroki.url
+ * 3. https://kroki.io if allowRemote is true
+ * 4. null (declined)
+ */
+export function resolveKrokiEndpoint(
+  krokiConfig?: KrokiConfig,
+  envOverride: string | undefined = process.env.KROKI_URL,
+): string | null {
+  const sanitize = (url: string | undefined) => {
+    if (!url || typeof url !== "string") return undefined;
+    const trimmed = url.trim();
+    if (!/^https?:\/\//i.test(trimmed)) return undefined;
+    return trimmed.replace(/\/+$/, "");
+  };
+
+  const envUrl = sanitize(envOverride);
+  if (envUrl) return envUrl;
+  const cfgUrl = sanitize(krokiConfig?.url);
+  if (cfgUrl) return cfgUrl;
+  if (krokiConfig?.allowRemote) return "https://kroki.io";
+  return null;
+}
+
+export type PluginsConfig = Record<string, Record<string, unknown>>;
+
+/**
+ * Resource-saturation thresholds consulted by subagent admission. Each metric is
+ * optional and names the domain it measures — mixing the domains up makes a
+ * threshold silently never fire on a machine loaded by *many* sessions whose
+ * parent process reads low.
+ *
+ * See change: bound-subagent-fanout-under-host-pressure (D5).
+ */
+export interface SubagentSaturationThresholds {
+  /** PROCESS domain: event-loop delay max (ms) over the admission window. */
+  eventLoopDelayMs?: number;
+  /** PROCESS domain: this process's CPU share (percent). */
+  cpuPercent?: number;
+  /** MACHINE domain: the system 1-minute load average. */
+  loadAvg1m?: number;
+}
+
+/**
+ * Access-grant prompting. Prompting is opt-in: a fresh install records denials
+ * and raises no dialog until an operator turns it on explicitly.
+ * See change: add-access-grant-dialog.
+ */
+export interface AccessGrantsConfig {
+  /**
+   * Master switch for raising access-grant dialogs. Default **false**. Absent
+   * parses to false, so an un-upgraded config never starts prompting. Not
+   * seeded by `ensureConfig()`: absent and explicit-false mean the same thing
+   * here, and seeding would churn every existing config file.
+   *
+   * Invariant: the Access-page toggle writes `PUT /api/config { accessGrants:
+   * { promptEnabled } }`, which REPLACES the whole group. Adding a second field
+   * here means that toggle must merge first, or it silently drops the field.
+   */
+  promptEnabled: boolean;
+}
+
+/**
+ * Dashboard trust → pi `project_trust` mirror. `enabled` (default true) lets
+ * durably dashboard-trusted folders count as trusted projects for pi sessions on
+ * the same machine; `coverInteractive` (default false) extends that to sessions
+ * not spawned headless by the dashboard; `sources.<id>` enable each durable source
+ * (all on except `accessGrants`). Rollback: `enabled: false` (read live by the
+ * bridge, works with the server down). See change: mirror-dashboard-trust-to-pi.
+ */
+export type PiTrustMirrorSourceId = "worktreeInit" | "workflow" | "pinned" | "folderWorkspaces" | "accessGrants";
+
+export interface PiTrustMirrorConfig {
+  enabled: boolean;
+  coverInteractive: boolean;
+  sources: Record<PiTrustMirrorSourceId, boolean>;
+}
+
+export const PI_TRUST_MIRROR_SOURCE_IDS: readonly PiTrustMirrorSourceId[] = [
+  "worktreeInit",
+  "workflow",
+  "pinned",
+  "folderWorkspaces",
+  "accessGrants",
+];
+
+export const DEFAULT_PI_TRUST_MIRROR: PiTrustMirrorConfig = {
+  enabled: true,
+  coverInteractive: false,
+  sources: { worktreeInit: true, workflow: true, pinned: true, folderWorkspaces: true, accessGrants: false },
+};
+
+export function parsePiTrustMirror(raw: unknown): PiTrustMirrorConfig {
+  const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const src = (r.sources && typeof r.sources === "object" && !Array.isArray(r.sources) ? r.sources : {}) as Record<string, unknown>;
+  const sources = { ...DEFAULT_PI_TRUST_MIRROR.sources };
+  for (const id of PI_TRUST_MIRROR_SOURCE_IDS) {
+    if (typeof src[id] === "boolean") sources[id] = src[id] as boolean;
+  }
+  return {
+    enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_PI_TRUST_MIRROR.enabled,
+    coverInteractive:
+      typeof r.coverInteractive === "boolean" ? r.coverInteractive : DEFAULT_PI_TRUST_MIRROR.coverInteractive,
+    sources,
+  };
+}
+
+/**
+ * Agent path gate: asks the operator before pi's read/write/edit tools touch
+ * paths outside the session's roots. Default on.
+ * `PI_DASHBOARD_AGENT_PATH_GATE=off|on` overrides per process.
+ * See change: ask-agent-file-access-in-chat.
+ */
+export interface AgentPathGateConfig {
+  enabled: boolean;
+  timeoutSeconds: number;
+}
+
+export const DEFAULT_AGENT_PATH_GATE: AgentPathGateConfig = { enabled: true, timeoutSeconds: 120 };
+
+export function parseAgentPathGate(raw: unknown): AgentPathGateConfig {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_AGENT_PATH_GATE.enabled,
+    timeoutSeconds:
+      typeof r.timeoutSeconds === "number" && Number.isFinite(r.timeoutSeconds) && r.timeoutSeconds > 0
+        ? r.timeoutSeconds
+        : DEFAULT_AGENT_PATH_GATE.timeoutSeconds,
+  };
+}
+
+/** Apply the `PI_DASHBOARD_AGENT_PATH_GATE` override (`off`/`on`) to a parsed config. */
+export function resolveAgentPathGate(
+  cfg: AgentPathGateConfig,
+  env: Record<string, string | undefined> = process.env,
+): AgentPathGateConfig {
+  const v = env.PI_DASHBOARD_AGENT_PATH_GATE?.trim().toLowerCase();
+  if (v === "off") return { ...cfg, enabled: false };
+  if (v === "on") return { ...cfg, enabled: true };
+  return cfg;
+}
+
+/**
+ * Per-process bridge activation. `PI_DASHBOARD_BRIDGE` (off/0/false/no |
+ * on/1/true/yes, trimmed, case-insensitive) overrides `bridge.enabled`; any
+ * other value defers to config. Default enabled. The server stamps
+ * `PI_DASHBOARD_BRIDGE=on` on every session spawn, so this only affects
+ * user-launched pi processes. See change: add-bridge-env-opt-out.
+ */
+export interface BridgeActivationConfig {
+  enabled: boolean;
+}
+
+export const DEFAULT_BRIDGE_ACTIVATION: BridgeActivationConfig = { enabled: true };
+
+export function parseBridgeActivation(raw: unknown): BridgeActivationConfig {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return { enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_BRIDGE_ACTIVATION.enabled };
+}
+
+const BRIDGE_ENV_OFF = new Set(["off", "0", "false", "no"]);
+const BRIDGE_ENV_ON = new Set(["on", "1", "true", "yes"]);
+
+/**
+ * Env-only half of the resolution: `false`/`true` when `PI_DASHBOARD_BRIDGE`
+ * holds a recognised value, `undefined` when config must decide.
+ */
+export function bridgeEnvOverride(
+  env: Record<string, string | undefined> = process.env,
+): boolean | undefined {
+  const v = env.PI_DASHBOARD_BRIDGE?.trim().toLowerCase();
+  if (v === undefined) return undefined;
+  if (BRIDGE_ENV_OFF.has(v)) return false;
+  if (BRIDGE_ENV_ON.has(v)) return true;
+  return undefined;
+}
+
+/** Resolve bridge activation: env > config > default (on). */
+export function resolveBridgeEnabled(
+  cfg: BridgeActivationConfig,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return bridgeEnvOverride(env) ?? cfg.enabled;
+}
+
+export interface DashboardConfig {
+  port: number;
+  piPort: number;
+  /**
+   * Host/interface the HTTP server and pi gateway bind to.
+   * Resolution chain (CLI `--host` → `PI_DASHBOARD_HOST` → this field →
+   * default) mirrors `port`. Default `"127.0.0.1"` (loopback only).
+   * The model-proxy second port stays hardcoded loopback regardless.
+   * See change: configurable-bind-host.
+   */
+  bindHost: string;
+  autoStart: boolean;
+  autoShutdown: boolean;
+  shutdownIdleSeconds: number;
+  /**
+   * Cold-start readiness budget (ms) the bridge's auto-spawn allows before
+   * giving up its health poll and reporting "readiness timeout". The spawned
+   * server keeps booting regardless — the timeout only controls how long the
+   * bridge waits before surfacing a warning, so a value below the real cold
+   * start produces a spurious error next to a healthy server. Slow hosts
+   * (large session histories make the startup scan the dominant cost) can
+   * raise this. A positive number is clamped into
+   * [`READINESS_TIMEOUT_MIN_MS`, `READINESS_TIMEOUT_MAX_MS`]; anything else
+   * falls back to the default. The clamp exists because both ends are
+   * failure modes, not preferences: a sub-second value reproduces the
+   * spurious timeout it is meant to cure, and an unbounded one leaves the
+   * bridge's launch spinner running for the session's lifetime.
+   *
+   * The auto-start lock's staleness bound is DERIVED from this value
+   * (`spawnReadinessBudgetMs`), so raising it cannot invert the
+   * budget > poll invariant. See change: add-configurable-readiness-timeout.
+   */
+  readinessTimeoutMs: number;
+  /**
+   * Coalescing window (ms) the bridge applies to subagent `Agent` ticks on the
+   * `tool_execution_update` carrier. `0` disables the throttle entirely and is
+   * the byte-identical rollback path. Only Agent updates carrying a
+   * `details.agentId` are affected; every other tool forwards 1:1.
+   * Non-numeric / negative values fall back to the default.
+   * See change: reduce-bridge-tick-bandwidth (D2/D3/D4).
+   */
+  subagentTickThrottleMs: number;
+  /**
+   * Effective cap on concurrently in-flight `Agent` children in one session.
+   * `0` disables admission entirely and is the exact-no-op rollback path.
+   * Absent resolves to `DEFAULT_MAX_CONCURRENT_SUBAGENTS` (active by default).
+   * A negative / non-integer / non-numeric value is malformed and resolves to
+   * the fail-open (uncapped) path — NOT to the disable path: a malformed gate
+   * must never refuse a call.
+   * See change: bound-subagent-fanout-under-host-pressure (D1/D6).
+   */
+  maxConcurrentSubagents: number;
+  /**
+   * Optional resource-saturation thresholds. Any metric at/above its threshold
+   * narrows the effective cap to 1 (never 0). Absent metric = "no signal".
+   * See change: bound-subagent-fanout-under-host-pressure (D5).
+   */
+  subagentSaturation?: SubagentSaturationThresholds;
+  /**
+   * One-shot marker: the boot migration has already rewritten a materialized
+   * `0` to the current default. Declared here so the settings round-trip
+   * PRESERVES it — a stripped marker re-runs the migration and silently undoes
+   * a deliberate `0`. See change: heal-orphaned-tool-cards-on-session-end (D5).
+   */
+  subagentTickThrottleMigrated?: boolean;
+  /**
+   * Max items per `POST /api/git/worktree/remove-batch` request. Each item is
+   * a synchronous, blocking removal on the event loop (D7), so the item count
+   * is the knob that bounds one HTTP request's worst-case stall.
+   *
+   * A positive integer is clamped into [`REMOVE_BATCH_CAP_MIN`,
+   * `REMOVE_BATCH_CAP_MAX`]; anything else — non-numeric, non-positive,
+   * non-integer — falls back to the default (50, so an unset config is
+   * byte-identical to the previous hard-coded cap). The bounds are failure
+   * modes, not preferences: a cap of 0 would disable the batch endpoint the
+   * manage-worktrees UI depends on, and an unbounded cap turns one request
+   * into an unbounded run of blocking removals.
+   *
+   * See change: apply-checkout-root-to-worktree-ops (D8).
+   */
+  removeBatchCap: number;
+  spawnStrategy: SpawnStrategy;
+  tunnel: {
+    enabled: boolean;
+    /**
+     * Which provider backs the tunnel — now specifically **the PRIMARY**.
+     *
+     * The field keeps its shape and gains a meaning, which is what keeps
+     * concurrency cheap: `getTunnelUrl()` returns the primary's URL, so every
+     * existing OAuth, cookie and redirect scenario stays true verbatim and the
+     * legacy `reservedToken` migration is untouched. Additional providers opt
+     * in via `tunnel.<id>.enabled`.
+     *
+     * Required (non-undefined) once a post-migration config is written; a
+     * legacy config with only `reservedToken` is normalized to
+     * `provider: "zrok"` at read time.
+     */
+    provider?: TunnelProviderId;
+    /**
+     * public reverse-proxy vs private mesh, for the PRIMARY.
+     *
+     * A single shared mode cannot express "zrok primary + zerotier enabled":
+     * `PROVIDER_MODES` makes zerotier private-only and zrok public-only, so one
+     * field would make that combination inexpressible. Non-primary providers
+     * carry their own `tunnel.<id>.mode`. See change:
+     * add-zrok-custom-reserved-name (D3).
+     */
+    mode?: TunnelMode;
+    /**
+     * Legacy top-level zrok reserved token. Preserved on read for downgrade
+     * safety; the normalized shape also carries it under `zrok.reservedToken`.
+     */
+    reservedToken?: string;
+    /**
+     * zrok sub-config. `reservedToken` is the legacy v1 token (preserved for
+     * downgrade, ignored by the v2 provider). `reservedName` is the v2 reserved
+     * name (namespaces+names) yielding a stable `<name>.shares.zrok.io` URL;
+     * `persistent` (default false) opts in to minting/serving a reserved name.
+     * See change: support-zrok-v2.
+     */
+    zrok?: { reservedToken?: string; reservedName?: string; persistent?: boolean; enabled?: boolean; mode?: TunnelMode };
+    ngrok?: { authtoken?: string; domain?: string; enabled?: boolean; mode?: TunnelMode };
+    tailscale?: { authKey?: string; enabled?: boolean; mode?: TunnelMode };
+    zerotier?: { networkId?: string; enabled?: boolean; mode?: TunnelMode };
+    watchdog?: {
+      enabled: boolean;
+      intervalMs: number;
+      failureThreshold: number;
+      probeTimeoutMs: number;
+    };
+  };
+  devBuildOnReload: boolean;
+  auth?: AuthConfig;
+  /**
+   * Multi-user identity plane trust grants + timeouts. Always present (default
+   * inert: empty resolver trust list, no policy plugin). See IdentityConfig.
+   */
+  identity: IdentityConfig;
+  defaultModel: string;
+  /**
+   * Default thinking level applied to brand-new startup sessions alongside
+   * `defaultModel`. Empty string means "do not override" — the bridge leaves
+   * pi's own thinking-level resolution intact (mirrors `defaultModel: ""`).
+   * See change: add-default-thinking-level.
+   */
+  defaultThinkingLevel: string;
+  memoryLimits: MemoryLimitsConfig;
+  /**
+   * V8 heap sizing for SPAWNED PI SESSIONS. Applies to the next spawn (a
+   * reload counts as a spawn); no running process is resized.
+   * See change: bound-session-heap-and-gc-telemetry.
+   */
+  sessionHeap: SessionHeapConfig;
+  /**
+   * V8 heap sizing for the DASHBOARD SERVER process. COLD-START ONLY —
+   * `/api/restart` inherits `env: process.env`, so an in-place restart keeps
+   * the previous ceiling. See change: bound-session-heap-and-gc-telemetry.
+   */
+  serverHeap: ServerHeapConfig;
+  /** OpenSpec background polling behavior (interval, concurrency, change detection, jitter) */
+  openspec: OpenSpecPollConfig;
+  /** Editor pane tuning (rich-viewer large-file gate). See change: gate-changed-on-disk-by-content. */
+  editor: EditorConfig;
+  /** Credential-vault delivery switches. See change: add-credential-vault. */
+  vault: VaultConfig;
+  /** Session behavior — hydration worker offload toggle. */
+  sessions: SessionsConfig;
+  /** Session-list archival policy (age threshold + sweep interval). */
+  sessionList: SessionListConfig;
+  /** Embed/ephemeral session lifecycle controls (reaper, caps, acquire). Off by default. */
+  embedLifecycle: EmbedLifecycleConfig;
+  /** Keeper log behavior — gates capture of pi stdout/stderr into keeper-<id>.log. */
+  keeperLog: KeeperLogConfig;
+  /**
+   * User-configured ACP agents (`[]` → no ACP spawn surface). Env values are
+   * secrets: `config-api` redacts/preserves them. See change: add-acp-session-driver.
+   */
+  acpAgents: AcpAgentConfig[];
+  /** ACP tuning (v2 flag, timeouts, line/log caps) — clamped. */
+  acp: AcpSettings;
+  /** Server push notifications. Absent → disabled. See change: add-server-push-notifications. */
+  push?: PushConfig;
+  /**
+   * Pending-question brief behavior. Defaults are never written by `ensureConfig`;
+   * missing/invalid values resolve to {@link DEFAULT_QUESTIONS}.
+   * See change: add-pending-question-stack (D12).
+   */
+  questions: QuestionsConfig;
+  /**
+   * Timeout for ask_user prompts in seconds.
+   * Default: 300 (5 minutes).
+   * Set to -1 (or any value <= 0) for no timeout (waits indefinitely).
+   * If the key is absent from config.json the default of 300 s applies.
+   */
+  askUserPromptTimeoutSeconds: number;
+  /**
+   * Hostnames the dashboard may answer on that are NOT already implied by
+   * `publicBaseUrls`, `cors.allowedOrigins`, a live tunnel, an IP literal,
+   * loopback, or `.local` — e.g. an internal reverse-proxy name. Bare
+   * hostnames only (no scheme/port); compared case-insensitively. Default `[]`;
+   * never seeded by `ensureConfig()`. Read live through the snapshot.
+   * See change: add-host-allowlist-admission.
+   */
+  allowedHosts: string[];
+  /**
+   * Host-admission rollout mode + the shape Settings ▸ Security writes. Default
+   * `{ mode: "report" }`; env `PI_DASHBOARD_HOST_GATE` overrides it at read
+   * time. Never seeded by `ensureConfig()`.
+   * See change: add-host-allowlist-admission.
+   */
+  hostGate: HostGateConfig;
+  /**
+   * Access-grant prompting settings. Default `{ promptEnabled: false }`.
+   * See change: add-access-grant-dialog.
+   */
+  accessGrants: AccessGrantsConfig;
+  /** Dashboard trust → pi project_trust mirror. See change: mirror-dashboard-trust-to-pi. */
+  piTrustMirror: PiTrustMirrorConfig;
+  agentPathGate: AgentPathGateConfig;
+  /** Per-process bridge activation (see `BridgeActivationConfig`). */
+  bridge: BridgeActivationConfig;
+  /** Networks trusted for full access without authentication (CIDR, wildcard, exact IP) */
+  trustedNetworks: string[];
+  /**
+   * Trust mode block. Absent until the boot decision writes it.
+   * See change: retire-trusted-networks-bypass.
+   */
+  network?: NetworkConfig;
+  /**
+   * Strict local proof. When true, bare loopback admits only `observe`-tier REST
+   * routes; control/operate routes and WebSockets need the local-proof cookie
+   * (`pi-dashboard open` / Electron), the local token, or an authenticated
+   * principal. Default false (unchanged). Only header-injecting tunnels (zrok)
+   * are safe without it; marker-less relays (`ssh -R`, `socat`) are not.
+   * See change: harden-trust-and-credential-boundaries (D2).
+   */
+  requireLocalProof: boolean;
+  /** Merged trustedNetworks + auth.bypassHosts (deduplicated). Computed at load time. */
+  resolvedTrustedNetworks: string[];
+  /** CORS allowed origins for cross-origin client hosting */
+  cors: CorsConfig;
+  /** Device-pairing configuration (server keypair identity + QR pairing). */
+  pairing: PairingConfig;
+  /**
+   * Every public base URL this dashboard answers on (reverse proxy, gateway,
+   * operator-designated host). Top-level promotion of the legacy
+   * `pairing.publicBaseUrls`; read through {@link resolvePublicBaseUrls}, which
+   * falls back to the legacy key when this one is absent.
+   *
+   * Optional on purpose and NOT in `DEFAULTS`: absence is what selects the
+   * legacy fallback, so an empty-array default would silently orphan existing
+   * `pairing.publicBaseUrls` entries.
+   *
+   * Feeds the pairing / endpoint surfaces only — never OAuth redirect
+   * resolution, which needs a scalar the operator states explicitly in
+   * `auth.redirectBaseUrl` (D7).
+   * See change: config-override-oauth-redirect-base.
+   */
+  publicBaseUrls?: string[];
+  /**
+   * Operator-declared gateway URLs plus the provenance of what the "add gateway
+   * URL" action wrote for each, so removal reverses exactly that (D12).
+   * Absent until the action runs once; never defaulted.
+   * See change: config-override-oauth-redirect-base.
+   */
+  gateways?: GatewayRecord[];
+  /** Last-used server address (host:port) for reconnection */
+  lastServer?: string;
+  /**
+   * Display name shown as the PWA app label when installed on a home screen
+   * or app drawer. Used as the `<source>` segment of the dynamic
+   * `/manifest.json` `name` field: `"Pi-Dash · <source>"`. Trimmed; blank /
+   * whitespace-only values are treated as unset and the server falls back to
+   * the request `Host` header (port stripped) → `os.hostname()` → literal
+   * `"Pi-Dash"`. See change: add-dynamic-pwa-manifest-naming.
+   */
+  dashboardName?: string;
+  /** Whether the server was launched by the Electron app */
+  electronMode: boolean;
+  /**
+   * Policy applied when the bridge reattaches after a dashboard restart.
+   * See {@link ReattachPlacement}. Default `"always"`.
+   * See change: reattach-move-to-front.
+   */
+  reattachPlacement: ReattachPlacement;
+  /**
+   * Cold-start recovery behavior for sessions interrupted by an unclean
+   * host shutdown. Gates the final offer step only. Default `"ask"`.
+   * See change: reopen-sessions-after-shutdown.
+   */
+  reopenSessionsAfterShutdown: ReopenSessionsAfterShutdown;
+  /**
+   * When true, a session whose turn completes (`agent_end` while still
+   * alive) or which transitions alive→ended is moved to the front of its
+   * tier (top of active, resp. top of ended). Default `false` (keep slot).
+   * See change: simplify-session-card-ordering.
+   */
+  completedFirst: boolean;
+  /**
+   * When true, an alive session issuing an `ask_user` request is moved to
+   * the front of the active tier. Default `false`.
+   * See change: simplify-session-card-ordering.
+   */
+  questionFirst: boolean;
+  /**
+   * Sidebar folder list behavior. `classic` = today; `accordion` = focused folder
+   * full, others compact. Unknown values fall back to `classic`.
+   * See change: add-focus-mode-and-card-block-toggles.
+   */
+  folderListMode: "classic" | "accordion";
+  /** Accordion: unfocused folders with sessions demanding attention peek open. Default `true`. */
+  folderAttentionPeek: boolean;
+  /** Persisted list of known remote servers */
+  knownServers: KnownServer[];
+  /**
+   * How long (ms) to wait for a spawned pi session to send `session_register`
+   * before emitting a timeout warning. Default 30000 (30s). Clamped [5000, 120000].
+   * See change: spawn-failure-diagnostics.
+   */
+  spawnRegisterTimeoutMs: number;
+  /**
+   * UI preference: show worktree spawn buttons (folder `+Worktree` and the
+   * per-change `⑂+` on OpenSpec rows). Default `true`. Preference-only —
+   * does NOT disable the `/api/git/worktree*` REST endpoints.
+   * See change: openspec-worktree-spawn-button.
+   */
+  gitWorktreeEnabled: boolean;
+  /**
+   * Windows-only: where git + the POSIX shell come from.
+   *   "auto"    — host when git+bash on PATH, else bundled (default).
+   *   "host"    — host tools only (Doctor errors if absent).
+   *   "bundled" — always the bundled dugite-native git/sh.
+   * No-op on macOS/Linux. See change: embed-git-bash-on-windows.
+   */
+  windowsGitSource: WindowsGitSourceSetting;
+  /**
+   * Per-plugin config namespaces. Reserved top-level key.
+   * Each plugin's config lives at plugins.<id>.*
+   * Plugin-shaped legacy top-level keys (e.g. openspec.*) stay at top-level
+   * until each extract-*-as-plugin change migrates them.
+   */
+  plugins: PluginsConfig;
+  /** PTY bounds. See change: harden-server-capability-bounds. */
+  terminals: TerminalsConfig;
+  /** Remote folder-picker confinement. See change: harden-server-capability-bounds. */
+  browse: BrowseConfig;
+  /** Kroki diagram render proxy settings. */
+  kroki: KrokiConfig;
+  /** On-demand AI mermaid repair. See change: add-mermaid-ai-repair. */
+  mermaidRepair: MermaidRepairConfig;
+  /** Model proxy configuration (OpenAI/Anthropic-compatible /v1/* endpoints). */
+  modelProxy: ModelProxyConfig;
+  /** Optional native TLS listener. See change: add-tailscale-cert-tls. */
+  tls: TlsConfig;
+  /**
+   * Operator override for the pi sessions root the dashboard scans. When set
+   * (non-blank), it is the highest-precedence input to
+   * {@link resolvePiSessionsDir} — above `PI_CODING_AGENT_SESSION_DIR` and
+   * pi-core's `getAgentDir()/sessions`. Absent / blank → fall through to those
+   * lower layers. Leading `~/` expands against `$HOME`.
+   * See change: configurable-pi-sessions-dir.
+   */
+  piSessionsDir?: string;
+}
+
+export interface CorsConfig {
+  /** Additional origins allowed for cross-origin requests */
+  allowedOrigins: string[];
+}
+
+/** How a gateway URL is allowed to be reached. At least one is mandatory. */
+export type GatewayAuthMode = "oauth" | "pairing" | "trusted-network";
+
+/**
+ * Exactly what the "add gateway URL" action wrote, so removal reverses that and
+ * nothing else. Removal cannot be DERIVED: three of the four keys look
+ * re-derivable from the URL but deriving would delete an entry the operator
+ * authored before ever running the action, and `trustedNetworks` (a CIDR list)
+ * is not on the URL at all. See design D12.
+ */
+export interface GatewayWroteRecord {
+  publicBaseUrls?: string[];
+  corsAllowedOrigins?: string[];
+  /** Present iff the `oauth` mode was selected. */
+  authRedirectBaseUrl?: string;
+  /** Present iff the `trusted-network` mode was selected. */
+  trustedNetworks?: string[];
+}
+
+/** One operator-declared gateway URL plus the provenance of its config writes. */
+export interface GatewayRecord {
+  url: string;
+  authModes: GatewayAuthMode[];
+  wrote: GatewayWroteRecord;
+}
+
+const GATEWAY_AUTH_MODES: GatewayAuthMode[] = ["oauth", "pairing", "trusted-network"];
+
+function parseGateways(raw: any): GatewayRecord[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const strings = (v: unknown): string[] | undefined =>
+    Array.isArray(v) ? v.filter((e: unknown): e is string => typeof e === "string") : undefined;
+  return raw
+    .filter((e: any) => e && typeof e === "object" && typeof e.url === "string")
+    .map((e: any) => {
+      const wrote: GatewayWroteRecord = {};
+      const pbu = strings(e.wrote?.publicBaseUrls);
+      if (pbu) wrote.publicBaseUrls = pbu;
+      const cors = strings(e.wrote?.corsAllowedOrigins);
+      if (cors) wrote.corsAllowedOrigins = cors;
+      if (typeof e.wrote?.authRedirectBaseUrl === "string") {
+        wrote.authRedirectBaseUrl = e.wrote.authRedirectBaseUrl;
+      }
+      const tn = strings(e.wrote?.trustedNetworks);
+      if (tn) wrote.trustedNetworks = tn;
+      return {
+        url: e.url,
+        authModes: Array.isArray(e.authModes)
+          ? e.authModes.filter((m: unknown): m is GatewayAuthMode =>
+              GATEWAY_AUTH_MODES.includes(m as GatewayAuthMode),
+            )
+          : [],
+        wrote,
+      };
+    });
+}
+
+/**
+ * Public base URLs for the pairing / endpoint surfaces: the top-level
+ * `publicBaseUrls` when present, else the legacy `pairing.publicBaseUrls`.
+ * Deliberately not an OAuth source — see `DashboardConfig.publicBaseUrls`.
+ * See change: config-override-oauth-redirect-base.
+ */
+export function resolvePublicBaseUrls(
+  config: Pick<DashboardConfig, "publicBaseUrls"> & { pairing?: Partial<PairingConfig> },
+): string[] {
+  return config.publicBaseUrls ?? config.pairing?.publicBaseUrls ?? [];
+}
+
+/** Device-pairing configuration (server keypair identity + QR pairing). */
+export interface PairingConfig {
+  /**
+   * Operator-designated, publicly-trusted TLS base URLs (e.g.
+   * `https://pi.example.com`) advertised in the pairing payload's `urls[]`.
+   * D14: only publicly-trusted TLS is reachable from the neutral HTTPS shell;
+   * self-signed LAN addresses MUST NOT be listed here. The active zrok tunnel
+   * (publicly trusted by construction) is added automatically and need not be
+   * configured. Empty by default.
+   */
+  publicBaseUrls: string[];
+  /**
+   * Accept device-initiated pairing requests ("knocks", `POST /api/pair/request`)
+   * from devices on the same local network. Default `false`; non-boolean input
+   * loads as `false`. Read LIVE per request (no restart).
+   * See change: add-lan-knock-pairing.
+   */
+  acceptLanRequests: boolean;
+}
+
+const VALID_SPAWN_STRATEGIES: SpawnStrategy[] = ["tmux", "headless"];
+
+/** Default ask_user prompt timeout: 300 seconds (5 minutes). */
+/** `questions` config block. See change: add-pending-question-stack (D12). */
+export interface QuestionsConfig {
+  /** Generate a `@fast` brief for questions lacking a long-enough context message. */
+  autoBrief: boolean;
+  /** A context message of at least this many chars is used as the brief (0–4000). */
+  minBriefChars: number;
+}
+
+export const QUESTIONS_MIN_BRIEF_CHARS_MAX = 4000;
+export const DEFAULT_QUESTIONS: QuestionsConfig = { autoBrief: true, minBriefChars: 240 };
+
+export const DEFAULT_ASK_USER_PROMPT_TIMEOUT_SECONDS = 300;
+
+/** Default + clamp for spawnRegisterTimeoutMs. See change: spawn-failure-diagnostics. */
+export const DEFAULT_SPAWN_REGISTER_TIMEOUT_MS = 30000;
+export function clampSpawnRegisterTimeoutMs(v: unknown): number {
+  if (typeof v !== "number" || isNaN(v)) return DEFAULT_SPAWN_REGISTER_TIMEOUT_MS;
+  return Math.max(5000, Math.min(120000, v));
+}
+
+/**
+ * Startup timing budgets shared by the bridge auto-start path and the
+ * dashboard server's own bounded startup. Single source of truth so the three
+ * values cannot drift apart.
+ *
+ * `SPAWN_READINESS_BUDGET_MS` (Clarification C1) is deliberately LARGER than
+ * the health poll: a slow cold start (jiti compile + plugin load) can exceed
+ * the health window without being dead. It bounds the auto-start lock's
+ * staleness and the lock loser's wait.
+ *
+ * `SERVER_STARTUP_DEADLINE_MS` (Clarification C4) is derived from the same
+ * constant, so it cannot drift from the budget. It is a MULTIPLE of it,
+ * because the two bound different things: the budget bounds how long a
+ * SPAWNER waits, while the deadline decides when a booting server is declared
+ * hung and killed. A cold start on a loaded CI runner (jiti compile + 12
+ * plugins) legitimately takes far longer than a spawner is willing to wait,
+ * and killing that boot would be a false positive — the failure mode this
+ * value must avoid, since a hang is bounded either way.
+ *
+ * They live in `config.ts` rather than a module of their own because the
+ * server and the extension resolve `@blackbelt-technology/pi-dashboard-shared`
+ * through the workspace link; a brand-new shared file is not resolvable from a
+ * git worktree until the tree is reinstalled, and a boot-time
+ * `Cannot find module` drops the server into recovery mode.
+ * See change: fix-worktree-server-autostart-leak.
+ */
+export const HEALTH_CHECK_TIMEOUT_MS = 10_000;
+export const SPAWN_READINESS_BUDGET_MS = HEALTH_CHECK_TIMEOUT_MS * 3;
+export const SERVER_STARTUP_DEADLINE_MS = SPAWN_READINESS_BUDGET_MS * 4;
+
+/**
+ * Default + clamp bounds for `removeBatchCap`. See change:
+ * apply-checkout-root-to-worktree-ops (D8).
+ */
+export const DEFAULT_REMOVE_BATCH_CAP = 50;
+export const REMOVE_BATCH_CAP_MIN = 1;
+export const REMOVE_BATCH_CAP_MAX = 500;
+export function clampRemoveBatchCap(v: unknown): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) return DEFAULT_REMOVE_BATCH_CAP;
+  return Math.min(REMOVE_BATCH_CAP_MAX, Math.max(REMOVE_BATCH_CAP_MIN, v));
+}
+
+/** Clamp bounds for `readinessTimeoutMs` (see the field's doc comment). */
+export const READINESS_TIMEOUT_MIN_MS = 1_000;
+export const READINESS_TIMEOUT_MAX_MS = 600_000;
+
+/**
+ * The auto-start lock staleness bound (and the lock loser's wait) for a given
+ * configured readiness window.
+ *
+ * `SPAWN_READINESS_BUDGET_MS` is a CONSTANT floor, so a configurable health
+ * poll would otherwise invert the invariant documented above: the lock carries
+ * no `childPid` for the whole readiness window (`server-auto-start.ts` records
+ * it only on readiness success), so `isLockStale` falls through to pure age.
+ * With a 60 s poll and a 30 s bound, a second session breaks the winner's lock
+ * mid-spawn and starts a COMPETING server → `PortConflictError`, on exactly the
+ * slow hosts a raised window targets. Keeping the same ×3 ratio preserves
+ * "budget > poll" for every configured value.
+ * See change: add-configurable-readiness-timeout.
+ */
+export function spawnReadinessBudgetMs(readinessTimeoutMs?: number): number {
+  const poll =
+    typeof readinessTimeoutMs === "number" &&
+    Number.isFinite(readinessTimeoutMs) &&
+    readinessTimeoutMs > 0
+      ? readinessTimeoutMs
+      : HEALTH_CHECK_TIMEOUT_MS;
+  return Math.max(poll * 3, SPAWN_READINESS_BUDGET_MS);
+}
+
+/**
+ * The shared production ports. Exported because the bridge's worktree
+ * auto-start refusal keys on them (`autostart-guard.ts`) and a silent desync
+ * between the two would let a worktree take the host's ports again.
+ * See change: fix-worktree-server-autostart-leak.
+ */
+export const DEFAULT_DASHBOARD_PORT = 8000;
+export const DEFAULT_GATEWAY_PORT = 9999;
+
+/**
+ * Resolve the dashboard HTTP + gateway ports with the shared precedence:
+ * env → parsed config.json → the shared defaults above. HTTP role reads
+ * `PI_DASHBOARD_PORT` then `DASHBOARD_PORT`; gateway role reads
+ * `PI_DASHBOARD_PI_PORT` then `PI_GATEWAY_PORT` (the server CLI's env names,
+ * `cli.ts buildConfig`; `PI_GATEWAY_PORT` is the docker-compose spelling).
+ * A usable value is an integer in 1–65535 (`"8000.5"`, `"0"`, `"-1"` and
+ * `"70000"` are not usable); first var of a role wins; an unusable value is ignored,
+ * never shadows a lower-precedence source.
+ *
+ * `env` and `fileConfig` are ARGUMENTS, not `process.env` reads, so the
+ * resolver stays pure and unit-testable without environment mutation.
+ * Deliberately NOT folded into `loadConfig()`: the server's `buildConfig`
+ * (`packages/server/src/cli.ts`) already applies its own flags > env > file
+ * chain for its bind, and double-applying would change server behaviour.
+ *
+ * The dashboard SERVER injects only `PI_DASHBOARD_URL` /
+ * `PI_DASHBOARD_SOCKET` / `PI_DASHBOARD_SPAWN_TOKEN` into the sessions it
+ * spawns (`spawn-process/process-manager.ts`); these PORT env vars reach
+ * sessions via their runtime environment (e.g. the docker harness compose
+ * env), not via the server.
+ * See change: fix-bridge-autostart-port-resolution (D1).
+ */
+export function resolveDashboardPorts(
+  env: Record<string, string | undefined>,
+  fileConfig?: { port?: number; piPort?: number },
+): { port: number; piPort: number } {
+  const usable = (v: string | undefined): number | null => {
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 && n <= 65535 ? n : null;
+  };
+  const fromConfig = (v: number | undefined): number | null =>
+    typeof v === "number" && Number.isInteger(v) && v > 0 && v <= 65535 ? v : null;
+  const port = usable(env.PI_DASHBOARD_PORT) ?? usable(env.DASHBOARD_PORT)
+    ?? fromConfig(fileConfig?.port) ?? DEFAULT_DASHBOARD_PORT;
+  const piPort = usable(env.PI_DASHBOARD_PI_PORT) ?? usable(env.PI_GATEWAY_PORT)
+    ?? fromConfig(fileConfig?.piPort) ?? DEFAULT_GATEWAY_PORT;
+  return { port, piPort };
+}
+
+/**
+ * Throttle ON by default: the un-throttled Agent tick stream is what starves a
+ * fan-out parent. Existing installs carry a materialized `0` from
+ * `ensureConfig`, rewritten once by the server-boot migration.
+ * See change: reduce-bridge-tick-bandwidth (D4),
+ * heal-orphaned-tool-cards-on-session-end (D5).
+ */
+export const DEFAULT_SUBAGENT_TICK_THROTTLE_MS = 500;
+
+/** Inert default: no trusted resolver plugins beyond the bundled one, no policy. */
+export const DEFAULT_IDENTITY: IdentityConfig = {
+  trustedResolverPlugins: [],
+  resolverTimeoutMs: 2000,
+  policyTimeoutMs: 500,
+};
+
+const IDENTITY_RESOLVER_TIMEOUT_MIN = 100;
+const IDENTITY_RESOLVER_TIMEOUT_MAX = 5000;
+const IDENTITY_POLICY_TIMEOUT_MIN = 50;
+const IDENTITY_POLICY_TIMEOUT_MAX = 2000;
+
+function clampInt(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/**
+ * Parse the `identity` block. Always returns a valid IdentityConfig; a missing
+ * or malformed block yields the inert default (empty trust list, no policy),
+ * so an unconfigured dashboard behaves exactly as before this change.
+ */
+export function parseIdentityConfig(raw: any): IdentityConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_IDENTITY };
+  const trustedResolverPlugins = Array.isArray(raw.trustedResolverPlugins)
+    ? raw.trustedResolverPlugins.filter(
+        (p: unknown): p is string => typeof p === "string" && p.length > 0,
+      )
+    : [];
+  return {
+    trustedResolverPlugins,
+    ...(typeof raw.trustedPolicyPlugin === "string" && raw.trustedPolicyPlugin.length > 0
+      ? { trustedPolicyPlugin: raw.trustedPolicyPlugin }
+      : {}),
+    resolverTimeoutMs: clampInt(
+      raw.resolverTimeoutMs,
+      IDENTITY_RESOLVER_TIMEOUT_MIN,
+      IDENTITY_RESOLVER_TIMEOUT_MAX,
+      DEFAULT_IDENTITY.resolverTimeoutMs,
+    ),
+    policyTimeoutMs: clampInt(
+      raw.policyTimeoutMs,
+      IDENTITY_POLICY_TIMEOUT_MIN,
+      IDENTITY_POLICY_TIMEOUT_MAX,
+      DEFAULT_IDENTITY.policyTimeoutMs,
+    ),
+  };
+}
+
+/**
+ * Default cap on concurrently in-flight `Agent` children per session.
+ *
+ * Fixed by Decision 1's measurement table in the change's `design.md`: it must
+ * sit below every observed fatal fan-out width (3, 4, 7) so the default admits
+ * no census batch unchanged, and the spec asserts the property "defined, at
+ * least 2, below 3" rather than a literal so the constant survives that
+ * measurement. The value is therefore 2.
+ * See change: bound-subagent-fanout-under-host-pressure (D1/D6).
+ */
+export const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 2;
+
+/**
+ * Resolve `maxConcurrentSubagents` from a raw config value.
+ *
+ * Absent → the active default. An explicit non-negative integer (including the
+ * `0` disable value) is honoured. Anything else is MALFORMED and resolves to
+ * the fail-open (uncapped) path — never to the disable path and never to a
+ * refusal, because a broken gate refusing every `Agent` call is strictly worse
+ * than the crash this capability mitigates.
+ * See change: bound-subagent-fanout-under-host-pressure (D6).
+ */
+export function resolveMaxConcurrentSubagents(raw: unknown): number {
+  if (raw === undefined) return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0) return raw;
+  return Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Parse the optional saturation thresholds. A threshold that is not a positive
+ * finite number is dropped (absent = "no signal from that metric", not zero);
+ * an object with no usable threshold at all collapses to `undefined`.
+ * See change: bound-subagent-fanout-under-host-pressure (D5).
+ */
+export function parseSubagentSaturation(raw: any): SubagentSaturationThresholds | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const positive = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
+  const thresholds: SubagentSaturationThresholds = {
+    eventLoopDelayMs: positive(raw.eventLoopDelayMs),
+    cpuPercent: positive(raw.cpuPercent),
+    loadAvg1m: positive(raw.loadAvg1m),
+  };
+  return thresholds.eventLoopDelayMs === undefined &&
+    thresholds.cpuPercent === undefined &&
+    thresholds.loadAvg1m === undefined
+    ? undefined
+    : thresholds;
+}
+
+const DEFAULTS: DashboardConfig = {
+  plugins: {},
+  terminals: { ...DEFAULT_TERMINALS_CONFIG },
+  browse: { ...DEFAULT_BROWSE_CONFIG },
+  kroki: { ...DEFAULT_KROKI_CONFIG },
+  mermaidRepair: { ...DEFAULT_MERMAID_REPAIR },
+  modelProxy: { ...DEFAULT_MODEL_PROXY },
+  tls: { ...DEFAULT_TLS, sources: [] },
+  port: DEFAULT_DASHBOARD_PORT,
+  piPort: DEFAULT_GATEWAY_PORT,
+  bindHost: "127.0.0.1",
+  autoStart: true,
+  autoShutdown: false,
+  shutdownIdleSeconds: 300,
+  // Historical hardcoded value of the bridge cold-start health window — the
+  // shared health-poll constant, referenced rather than respelled so the two
+  // cannot drift. See change: add-configurable-readiness-timeout.
+  readinessTimeoutMs: HEALTH_CHECK_TIMEOUT_MS,
+  subagentTickThrottleMs: DEFAULT_SUBAGENT_TICK_THROTTLE_MS,
+  maxConcurrentSubagents: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+  removeBatchCap: DEFAULT_REMOVE_BATCH_CAP,
+  spawnStrategy: "headless",
+  tunnel: {
+    enabled: true,
+    zrok: { persistent: false },
+    watchdog: {
+      enabled: true,
+      intervalMs: 60000,
+      failureThreshold: 2,
+      probeTimeoutMs: 10000,
+    },
+  },
+  devBuildOnReload: false,
+  accessGrants: { promptEnabled: false },
+  piTrustMirror: { ...DEFAULT_PI_TRUST_MIRROR, sources: { ...DEFAULT_PI_TRUST_MIRROR.sources } },
+  agentPathGate: { ...DEFAULT_AGENT_PATH_GATE },
+  bridge: { ...DEFAULT_BRIDGE_ACTIVATION },
+  defaultModel: "",
+  defaultThinkingLevel: "",
+  memoryLimits: { ...DEFAULT_MEMORY_LIMITS },
+  sessionHeap: { ...DEFAULT_SESSION_HEAP },
+  serverHeap: { ...DEFAULT_SERVER_HEAP },
+  openspec: { ...DEFAULT_OPENSPEC_POLL },
+  editor: { ...DEFAULT_EDITOR_CONFIG },
+  vault: { ...DEFAULT_VAULT_CONFIG },
+  sessions: { ...DEFAULT_SESSIONS },
+  sessionList: { ...DEFAULT_SESSION_LIST },
+  embedLifecycle: { ...DEFAULT_EMBED_LIFECYCLE },
+  keeperLog: { ...DEFAULT_KEEPER_LOG },
+  acpAgents: [],
+  acp: { ...DEFAULT_ACP_SETTINGS },
+  allowedHosts: [],
+  hostGate: { mode: "enforce" },
+  trustedNetworks: [],
+  requireLocalProof: false,
+  resolvedTrustedNetworks: [],
+  cors: { allowedOrigins: [] },
+  pairing: { publicBaseUrls: [], acceptLanRequests: false },
+  electronMode: false,
+  knownServers: [],
+  questions: { ...DEFAULT_QUESTIONS },
+  askUserPromptTimeoutSeconds: DEFAULT_ASK_USER_PROMPT_TIMEOUT_SECONDS,
+  reattachPlacement: DEFAULT_REATTACH_PLACEMENT,
+  reopenSessionsAfterShutdown: DEFAULT_REOPEN_SESSIONS_AFTER_SHUTDOWN,
+  completedFirst: false,
+  questionFirst: false,
+  folderListMode: "classic",
+  folderAttentionPeek: true,
+  spawnRegisterTimeoutMs: 30000,
+  gitWorktreeEnabled: true,
+  windowsGitSource: "auto",
+  identity: { ...DEFAULT_IDENTITY },
+};
+
+/**
+ * Parse and validate the auth config section.
+ *
+ * Returns undefined ONLY when nothing auth-relevant is configured — that is,
+ * when none of `providers`, `bypassHosts`, or `bypassUrls` has any content.
+ *
+ * When providers is empty but bypassHosts or bypassUrls is populated, this
+ * function returns a valid AuthConfig with an empty providers map. The auth
+ * plugin already no-ops in that case (providerRegistry.size === 0 → skip
+ * OAuth route + cookie plugin registration), so no OAuth flow activates
+ * accidentally. But returning an object here lets the caller populate
+ * resolvedTrustedNetworks from auth.bypassHosts — which is the entire
+ * point of allowing this shape. Before this change, parseAuthConfig
+ * returned undefined on empty-providers, which nuked auth.bypassHosts
+ * before the resolvedTrustedNetworks merge could read it, and users
+ * without OAuth lost remote network access after the UI started writing
+ * to auth.bypassHosts. See openspec/changes/fix-trusted-networks-no-oauth.
+ */
+/** Keep only `group → valid tier` entries; none left ⇒ undefined (unconfigured). */
+function parseGroupTiers(raw: unknown): Record<string, Tier> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, Tier> = {};
+  for (const [group, tier] of Object.entries(raw as Record<string, unknown>)) {
+    if (group && isTier(tier)) out[group] = tier;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseAuthConfig(raw: any): AuthConfig | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const providers = raw.providers;
+  const hasProviders =
+    providers && typeof providers === "object" && Object.keys(providers).length > 0;
+  const hasHosts = Array.isArray(raw.bypassHosts) && raw.bypassHosts.length > 0;
+  const hasUrls = Array.isArray(raw.bypassUrls) && raw.bypassUrls.length > 0;
+  const hasPasskeys = raw.passkeys?.enabled === true;
+  const hasCapabilityPlugins = Array.isArray(raw.capabilityRoutePlugins) && raw.capabilityRoutePlugins.length > 0;
+  if (!hasProviders && !hasHosts && !hasUrls && !hasPasskeys && !hasCapabilityPlugins) return undefined;
+
+  // Validate each provider has at least clientId and clientSecret.
+  // validProviders may end up empty when providers is {} or all entries
+  // are malformed — that's fine, the caller tolerates it as long as
+  // bypassHosts or bypassUrls carries the auth-relevant content.
+  const validProviders: Record<string, AuthProviderConfig> = {};
+  if (hasProviders) {
+    for (const [key, value] of Object.entries(providers as Record<string, unknown>)) {
+      const p = value as any;
+      if (p && typeof p === "object" && p.clientId && p.clientSecret) {
+        validProviders[key] = {
+          clientId: p.clientId,
+          clientSecret: p.clientSecret,
+          ...(p.issuerUrl ? { issuerUrl: p.issuerUrl } : {}),
+          ...(p.name ? { name: p.name } : {}),
+        };
+      }
+    }
+  }
+
+  // If providers was declared but all entries are malformed AND there is no
+  // bypass content, fall back to undefined — same "nothing auth-relevant"
+  // rule as the top-level gate.
+  if (Object.keys(validProviders).length === 0 && !hasHosts && !hasUrls && !hasPasskeys && !hasCapabilityPlugins) {
+    return undefined;
+  }
+
+  const groupTiers = parseGroupTiers(raw.groupTiers);
+
+  return {
+    secret: raw.secret ?? "",
+    providers: validProviders,
+    ...(Array.isArray(raw.allowedUsers) ? { allowedUsers: raw.allowedUsers } : Array.isArray(raw.allowedEmails) ? { allowedUsers: raw.allowedEmails } : {}),
+    bypassUrls: Array.isArray(raw.bypassUrls) ? raw.bypassUrls.filter((u: unknown) => typeof u === "string") : [],
+    bypassHosts: Array.isArray(raw.bypassHosts) ? raw.bypassHosts.filter((u: unknown) => typeof u === "string") : [],
+    capabilityRoutePlugins: Array.isArray(raw.capabilityRoutePlugins)
+      ? raw.capabilityRoutePlugins.filter((u: unknown) => typeof u === "string")
+      : [],
+    ...(typeof raw.redirectBaseUrl === "string" && raw.redirectBaseUrl.trim()
+      ? { redirectBaseUrl: raw.redirectBaseUrl.trim() }
+      : {}),
+    ...(typeof raw.admin === "string" && raw.admin ? { admin: raw.admin } : {}),
+    ...(groupTiers ? { groupTiers } : {}),
+    ...(hasPasskeys ? { passkeys: { enabled: true } } : {}),
+  };
+}
+
+function clampNumber(raw: any, fallback: number, min: number, max: number): number {
+  const n = typeof raw === "number" && Number.isFinite(raw) ? raw : fallback;
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
+}
+
+export function parseVaultConfig(raw: any): VaultConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_VAULT_CONFIG };
+  return {
+    deliveryEnabled: typeof raw.deliveryEnabled === "boolean" ? raw.deliveryEnabled : DEFAULT_VAULT_CONFIG.deliveryEnabled,
+    offlineGraceHours: clampVaultGraceHours(raw.offlineGraceHours),
+  };
+}
+
+export function parseEmbedLifecycleConfig(raw: any): EmbedLifecycleConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_EMBED_LIFECYCLE };
+  const d = DEFAULT_EMBED_LIFECYCLE;
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : d.enabled,
+    idleTimeoutSeconds: clampNumber(raw.idleTimeoutSeconds, d.idleTimeoutSeconds, 1, 86_400),
+    hardCeilingSeconds: clampNumber(raw.hardCeilingSeconds, d.hardCeilingSeconds, 1, 604_800),
+    graceWindowSeconds: clampNumber(raw.graceWindowSeconds, d.graceWindowSeconds, 0, 3_600),
+    sweepIntervalSeconds: clampNumber(raw.sweepIntervalSeconds, d.sweepIntervalSeconds, 1, 3_600),
+    registerTimeoutSeconds: clampNumber(raw.registerTimeoutSeconds, d.registerTimeoutSeconds, 1, 600),
+    maxActiveEmbedSessionsPerVisitor: clampNumber(
+      raw.maxActiveEmbedSessionsPerVisitor,
+      d.maxActiveEmbedSessionsPerVisitor,
+      1,
+      10_000,
+    ),
+    maxActiveEmbedSessionsGlobal: clampNumber(
+      raw.maxActiveEmbedSessionsGlobal,
+      d.maxActiveEmbedSessionsGlobal,
+      1,
+      100_000,
+    ),
+  };
+}
+
+function parseSessionsConfig(raw: any): SessionsConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_SESSIONS };
+  return {
+    useLoadWorker:
+      typeof raw.useLoadWorker === "boolean" ? raw.useLoadWorker : DEFAULT_SESSIONS.useLoadWorker,
+  };
+}
+
+/**
+ * Effective session-list archival policy. Out-of-range / non-integer values
+ * fall back to the default (never clamp a negative into a valid `0`, which
+ * would silently turn an invalid setting into "disabled"). Never throws —
+ * `loadConfig` must survive a hand-edited config.
+ * See change: archive-sessions-lazy-load.
+ */
+export function parseSessionListConfig(raw: any): SessionListConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_SESSION_LIST };
+  const days = raw.archiveAfterDays;
+  const interval = raw.archiveSweepIntervalMinutes;
+  return {
+    archiveAfterDays:
+      Number.isInteger(days) && days >= SESSION_LIST_LIMITS.archiveAfterDays.min && days <= SESSION_LIST_LIMITS.archiveAfterDays.max
+        ? days
+        : DEFAULT_SESSION_LIST.archiveAfterDays,
+    archiveSweepIntervalMinutes:
+      Number.isInteger(interval) &&
+      interval >= SESSION_LIST_LIMITS.archiveSweepIntervalMinutes.min &&
+      interval <= SESSION_LIST_LIMITS.archiveSweepIntervalMinutes.max
+        ? interval
+        : DEFAULT_SESSION_LIST.archiveSweepIntervalMinutes,
+    archiveServiceSessionsOnEnd:
+      typeof raw.archiveServiceSessionsOnEnd === "boolean"
+        ? raw.archiveServiceSessionsOnEnd
+        : DEFAULT_SESSION_LIST.archiveServiceSessionsOnEnd,
+  };
+}
+
+/**
+ * Validate a raw `sessionList` patch for the config write path. An absent
+ * section is valid (defaults apply). Returns human-readable errors so the
+ * write endpoint can answer 400 without persisting an out-of-range value.
+ * See change: archive-sessions-lazy-load.
+ */
+export function validateSessionListConfig(raw: unknown): { ok: boolean; errors: string[] } {
+  if (raw === undefined || raw === null) return { ok: true, errors: [] };
+  if (typeof raw !== "object") return { ok: false, errors: ["sessionList must be an object"] };
+  const errors: string[] = [];
+  const { archiveAfterDays, archiveSweepIntervalMinutes, archiveServiceSessionsOnEnd } = raw as Record<string, unknown>;
+  if (archiveAfterDays !== undefined) {
+    const { min, max } = SESSION_LIST_LIMITS.archiveAfterDays;
+    if (!Number.isInteger(archiveAfterDays) || (archiveAfterDays as number) < min || (archiveAfterDays as number) > max) {
+      errors.push(`sessionList.archiveAfterDays must be an integer between ${min} and ${max}`);
+    }
+  }
+  if (archiveSweepIntervalMinutes !== undefined) {
+    const { min, max } = SESSION_LIST_LIMITS.archiveSweepIntervalMinutes;
+    if (
+      !Number.isInteger(archiveSweepIntervalMinutes) ||
+      (archiveSweepIntervalMinutes as number) < min ||
+      (archiveSweepIntervalMinutes as number) > max
+    ) {
+      errors.push(`sessionList.archiveSweepIntervalMinutes must be an integer between ${min} and ${max}`);
+    }
+  }
+  if (archiveServiceSessionsOnEnd !== undefined && typeof archiveServiceSessionsOnEnd !== "boolean") {
+    errors.push("sessionList.archiveServiceSessionsOnEnd must be a boolean");
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Parse the `questions` block. Total: invalid types → defaults; `minBriefChars`
+ * is truncated to an integer and clamped to 0–4000 (non-numbers → 240).
+ * See change: add-pending-question-stack (test-plan #E3, #E4).
+ */
+export function parseQuestionsConfig(raw: unknown): QuestionsConfig {
+  const block = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const min = typeof block.minBriefChars === "number" && Number.isFinite(block.minBriefChars)
+    ? Math.trunc(block.minBriefChars)
+    : DEFAULT_QUESTIONS.minBriefChars;
+  return {
+    autoBrief: typeof block.autoBrief === "boolean" ? block.autoBrief : DEFAULT_QUESTIONS.autoBrief,
+    minBriefChars: Math.min(QUESTIONS_MIN_BRIEF_CHARS_MAX, Math.max(0, min)),
+  };
+}
+
+/**
+ * Parse the `push` block. Anything but a strict `enabled: true` is disabled;
+ * `coalesceWindowMs` is clamped to 5 000–300 000 (non-numbers → 30 000).
+ * See change: add-server-push-notifications (Decision 6).
+ */
+export function parsePushConfig(raw: any): PushConfig {
+  const block = raw && typeof raw === "object" ? raw : {};
+  const out: PushConfig = {
+    enabled: block.enabled === true,
+    coalesceWindowMs: clampNumber(block.coalesceWindowMs, DEFAULT_PUSH_COALESCE_WINDOW_MS, 5_000, 300_000),
+  };
+  if (block.fcm && typeof block.fcm === "object" && typeof block.fcm.serviceAccountPath === "string") {
+    out.fcm = { serviceAccountPath: block.fcm.serviceAccountPath };
+  }
+  if (block.webPush && typeof block.webPush === "object" && typeof block.webPush.contactEmail === "string") {
+    out.webPush = { contactEmail: block.webPush.contactEmail };
+  }
+  return out;
+}
+
+function parseOpenSpecPollConfig(raw: any): OpenSpecPollConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_OPENSPEC_POLL };
+  const changeDetection =
+    raw.changeDetection === "always" || raw.changeDetection === "mtime"
+      ? raw.changeDetection
+      : DEFAULT_OPENSPEC_POLL.changeDetection;
+  // Opt-out entries normalize through the same `pathKey` pinned directories
+  // use, so `/a/b/` and `/a/b` (and case-differing spellings on
+  // case-insensitive platforms) collapse to one entry. Non-string entries are
+  // dropped. See change: add-openspec-init-affordances.
+  const optOutRaw: unknown[] = Array.isArray(raw.optOutDirectories) ? raw.optOutDirectories : [];
+  const optOutStrings = optOutRaw.filter(
+    (p: unknown): p is string => typeof p === "string" && p.length > 0,
+  );
+  const optOutPlatform = inferPlatform(optOutStrings);
+  const optOutDirectories = [
+    ...new Set(optOutStrings.map((p: string) => pathKey(p, optOutPlatform))),
+  ];
+  return {
+    enabled:
+      typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_OPENSPEC_POLL.enabled,
+    pollIntervalSeconds: clampNumber(raw.pollIntervalSeconds, DEFAULT_OPENSPEC_POLL.pollIntervalSeconds, 5, 3600),
+    maxConcurrentSpawns: clampNumber(raw.maxConcurrentSpawns, DEFAULT_OPENSPEC_POLL.maxConcurrentSpawns, 1, 16),
+    changeDetection,
+    jitterSeconds: clampNumber(raw.jitterSeconds, DEFAULT_OPENSPEC_POLL.jitterSeconds, 0, 60),
+    useWorker:
+      typeof raw.useWorker === "boolean" ? raw.useWorker : DEFAULT_OPENSPEC_POLL.useWorker,
+    optOutDirectories,
+    offerInitialization:
+      typeof raw.offerInitialization === "boolean"
+        ? raw.offerInitialization
+        : DEFAULT_OPENSPEC_POLL.offerInitialization,
+    workflowSchema: {
+      defaultForNewProjects:
+        typeof raw.workflowSchema?.defaultForNewProjects === "boolean"
+          ? raw.workflowSchema.defaultForNewProjects
+          : DEFAULT_OPENSPEC_POLL.workflowSchema.defaultForNewProjects,
+    },
+  };
+}
+
+/**
+ * Absent / non-numeric / non-finite / non-integer / <= 0 → the DEFAULT. Unlike
+ * `parseMaxReplayEvents`, an explicit `0` is NOT preserved: a zero-byte
+ * rotation cap would truncate the keeper log on every check (and a zero check
+ * interval would spin), so both coerce to the default rather than disabling
+ * the bound. The cap is a safety bound, not a tuning knob — silently keeping
+ * the bound is the safe direction.
+ * See change: fix-runaway-keeper-log-growth (D7).
+ */
+function parseKeeperLogPositiveInt(raw: unknown, fallback: number): number {
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0) {
+    return fallback;
+  }
+  return raw;
+}
+
+function parseKeeperLogConfig(raw: any): KeeperLogConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_KEEPER_LOG };
+  return {
+    capturePiOutput:
+      typeof raw.capturePiOutput === "boolean"
+        ? raw.capturePiOutput
+        : DEFAULT_KEEPER_LOG.capturePiOutput,
+    maxBytes: parseKeeperLogPositiveInt(raw.maxBytes, DEFAULT_KEEPER_LOG.maxBytes),
+    checkIntervalMs: parseKeeperLogPositiveInt(
+      raw.checkIntervalMs,
+      DEFAULT_KEEPER_LOG.checkIntervalMs,
+    ),
+  };
+}
+
+/**
+ * Absent / negative / non-numeric → the DEFAULT; explicit `0` → `0`.
+ *
+ * Presence detection is load-bearing once the default is non-zero: the previous
+ * shape collapsed absent, negative, non-numeric and explicit `0` into `0`, so a
+ * non-zero default would have been unreachable from a config file that simply
+ * omits the field. The `MIN_REPLAY_WINDOW` clamp is unchanged.
+ * See change: fix-lazy-history-backfill-ux (D7).
+ */
+function parseMaxReplayEvents(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+    return DEFAULT_MEMORY_LIMITS.maxReplayEvents;
+  }
+  if (raw === 0) return 0;
+  return Math.max(MIN_REPLAY_WINDOW, Math.floor(raw));
+}
+
+/**
+ * An unknown value COERCES to the default rather than throwing, matching the
+ * fallback convention every sibling in `parseMemoryLimits` already follows.
+ * See change: add-tail-only-replay-window (D1).
+ */
+function parseReplayWindowMode(raw: unknown): ReplayWindowMode {
+  return raw === "tail-only" || raw === "head-tail" ? raw : DEFAULT_MEMORY_LIMITS.replayWindowMode;
+}
+
+/**
+ * A byte budget with an "unlimited" sentinel: absent / negative / non-numeric →
+ * the DEFAULT; explicit `0` preserved; any other number loaded AS-IS.
+ *
+ * The loader does type/negative validation ONLY. The floor clamp lives in the
+ * store, which alone can see `maxEventDataSize` (a top-level `DashboardConfig`
+ * field, invisible to this browser-safe module).
+ * See change: bound-event-store-by-bytes (D5/D6, E11/E12).
+ */
+function parseByteBudget(raw: unknown, fallback: number): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return fallback;
+  if (raw === 0) return 0;
+  return Math.floor(raw);
+}
+
+/**
+ * A plain positive COUNT with no unlimited sentinel: a finite positive number
+ * is floored, and EVERYTHING else (absent / `0` / negative / non-numeric)
+ * resolves to the default.
+ * See change: bound-event-store-by-bytes (D8, E13).
+ */
+function parsePositiveCount(raw: unknown, fallback: number): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return fallback;
+  const floored = Math.floor(raw);
+  // A positive fraction that floors to 0 (e.g. `0.5`) is NOT a valid count:
+  // `0` means "evict every session", the opposite of the documented fallback.
+  return floored >= 1 ? floored : fallback;
+}
+
+function parseMemoryLimits(raw: any): MemoryLimitsConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_MEMORY_LIMITS };
+  return {
+    maxEventsPerSession: typeof raw.maxEventsPerSession === "number" ? raw.maxEventsPerSession : DEFAULT_MEMORY_LIMITS.maxEventsPerSession,
+    maxStringFieldSize: typeof raw.maxStringFieldSize === "number" ? raw.maxStringFieldSize : DEFAULT_MEMORY_LIMITS.maxStringFieldSize,
+    maxWsBufferBytes: typeof raw.maxWsBufferBytes === "number" ? raw.maxWsBufferBytes : DEFAULT_MEMORY_LIMITS.maxWsBufferBytes,
+    // Absent / non-numeric / negative → the default. A positive value below
+    // MIN_REPLAY_WINDOW clamps up; an explicit 0 is preserved, never clamped.
+    // See change: lazy-load-session-history (D3), fix-lazy-history-backfill-ux (D7).
+    maxReplayEvents: parseMaxReplayEvents(raw.maxReplayEvents),
+    replayWindowMode: parseReplayWindowMode(raw.replayWindowMode),
+    // Byte budgets: explicit 0 = unlimited (rollback lever); a positive value
+    // is loaded as-is so the STORE applies the floor clamp.
+    // See change: bound-event-store-by-bytes (D5/D6/D7/D8).
+    maxBytesPerSession: parseByteBudget(
+      raw.maxBytesPerSession,
+      DEFAULT_MEMORY_LIMITS.maxBytesPerSession,
+    ),
+    maxTotalEventBytes: parseByteBudget(
+      raw.maxTotalEventBytes,
+      DEFAULT_MEMORY_LIMITS.maxTotalEventBytes,
+    ),
+    maxCachedSessions: parsePositiveCount(
+      raw.maxCachedSessions,
+      DEFAULT_MEMORY_LIMITS.maxCachedSessions,
+    ),
+  };
+}
+
+/**
+ * A V8 heap size in MB: a finite integer at or above `MIN_HEAP_MB`, else the
+ * fallback. There is NO "unlimited" sentinel here — unlike the event-store byte
+ * budgets, an explicit `0` is not a rollback lever, it is a request V8 would
+ * reject, so it falls back like any other invalid value.
+ *
+ * Load-time fallback (not merely UI rejection) is the established convention
+ * (`spawnStrategy`, `reattachPlacement`) and is what keeps an invalid value
+ * from ever reaching a spawned process's argv.
+ * See change: bound-session-heap-and-gc-telemetry (D7).
+ */
+function parseHeapMb(raw: unknown, fallback: number): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw)) return fallback;
+  if (raw < MIN_HEAP_MB) return fallback;
+  return raw;
+}
+
+/** Optional heap field: absent stays absent; present-but-invalid drops out. */
+function parseOptionalHeapMb(raw: unknown): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw)) return undefined;
+  if (raw < MIN_HEAP_MB) return undefined;
+  return raw;
+}
+
+function parseSessionHeap(raw: any): SessionHeapConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_SESSION_HEAP };
+  const initialOldSpaceMb = parseOptionalHeapMb(raw.initialOldSpaceMb);
+  // The young generation is sized in single-digit MB; `MIN_HEAP_MB` is an
+  // old-space floor and must not be applied to it.
+  const maxSemiSpaceMb =
+    typeof raw.maxSemiSpaceMb === "number" &&
+    Number.isInteger(raw.maxSemiSpaceMb) &&
+    raw.maxSemiSpaceMb > 0
+      ? raw.maxSemiSpaceMb
+      : undefined;
+  return {
+    maxOldSpaceMb: parseHeapMb(raw.maxOldSpaceMb, DEFAULT_SESSION_HEAP.maxOldSpaceMb),
+    ...(initialOldSpaceMb !== undefined ? { initialOldSpaceMb } : {}),
+    ...(maxSemiSpaceMb !== undefined ? { maxSemiSpaceMb } : {}),
+  };
+}
+
+function parseServerHeap(raw: any): ServerHeapConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_SERVER_HEAP };
+  return {
+    maxOldSpaceMb: parseHeapMb(raw.maxOldSpaceMb, DEFAULT_SERVER_HEAP.maxOldSpaceMb),
+  };
+}
+
+function parsePluginsConfig(raw: unknown): PluginsConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const result: PluginsConfig = {};
+  for (const [id, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      result[id] = val as Record<string, unknown>;
+    }
+  }
+  return result;
+}
+
+/**
+ * Get the plugins config block from a loaded DashboardConfig.
+ * Provides typed access to plugins.<id>.* namespaces.
+ */
+export function getPluginsConfig(config: DashboardConfig): PluginsConfig {
+  return config.plugins ?? {};
+}
+
+/**
+ * Get a single plugin's config from a loaded DashboardConfig.
+ * Returns {} if the plugin has no stored config.
+ */
+export function getPluginConfig(
+  config: DashboardConfig,
+  pluginId: string,
+): Record<string, unknown> {
+  return config.plugins?.[pluginId] ?? {};
+}
+
+export function parseModelProxyConfig(raw: any): ModelProxyConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_MODEL_PROXY };
+
+  const apiKeys: ProxyApiKey[] = [];
+  if (Array.isArray(raw.apiKeys)) {
+    for (const entry of raw.apiKeys) {
+      if (
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        typeof entry.label === "string" &&
+        typeof entry.hash === "string" &&
+        typeof entry.createdAt === "number"
+      ) {
+        apiKeys.push({
+          id: entry.id,
+          label: entry.label,
+          hash: entry.hash,
+          createdAt: entry.createdAt,
+          ...(typeof entry.createdBy === "string" ? { createdBy: entry.createdBy } : {}),
+          ...(Array.isArray(entry.scopes) ? { scopes: entry.scopes.filter((s: unknown) => typeof s === "string") } : {}),
+          ...(typeof entry.lastUsedAt === "number" ? { lastUsedAt: entry.lastUsedAt } : {}),
+          ...(typeof entry.expiresAt === "number" ? { expiresAt: entry.expiresAt } : {}),
+          ...(typeof entry.revokedAt === "number" ? { revokedAt: entry.revokedAt } : {}),
+        });
+      }
+    }
+  }
+
+  const preferredModels: string[] = Array.isArray(raw.preferredModels)
+    ? raw.preferredModels.filter((s: unknown) => typeof s === "string" && s.length > 0)
+    : [];
+
+  let modelAliases: Record<string, string> | undefined;
+  if (raw.modelAliases && typeof raw.modelAliases === "object" && !Array.isArray(raw.modelAliases)) {
+    modelAliases = {};
+    for (const [key, val] of Object.entries(raw.modelAliases)) {
+      if (typeof key === "string" && key.length > 0 && typeof val === "string" && val.length > 0) {
+        modelAliases[key] = val;
+      }
+    }
+  }
+
+  let perProviderCaps: Record<string, number> | undefined;
+  if (raw.perProviderCaps && typeof raw.perProviderCaps === "object" && !Array.isArray(raw.perProviderCaps)) {
+    perProviderCaps = {};
+    for (const [key, val] of Object.entries(raw.perProviderCaps)) {
+      if (typeof val === "number" && Number.isFinite(val) && val >= 1) {
+        perProviderCaps[key] = Math.min(val, 256);
+      }
+    }
+  }
+
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_MODEL_PROXY.enabled,
+    ...(typeof raw.defaultModel === "string" ? { defaultModel: raw.defaultModel } : {}),
+    ...(typeof raw.secondPort === "number" && raw.secondPort >= 1024 && raw.secondPort <= 65535
+      ? { secondPort: raw.secondPort }
+      : {}),
+    maxConcurrentStreams: clampNumber(
+      raw.maxConcurrentStreams,
+      DEFAULT_MODEL_PROXY.maxConcurrentStreams,
+      1,
+      256,
+    ),
+    perKeyConcurrentStreams: clampNumber(
+      raw.perKeyConcurrentStreams,
+      DEFAULT_MODEL_PROXY.perKeyConcurrentStreams,
+      1,
+      64,
+    ),
+    ...(perProviderCaps ? { perProviderCaps } : {}),
+    ...(preferredModels.length > 0 ? { preferredModels } : {}),
+    ...(modelAliases && Object.keys(modelAliases).length > 0 ? { modelAliases } : {}),
+    logRequests:
+      typeof raw.logRequests === "boolean" ? raw.logRequests : DEFAULT_MODEL_PROXY.logRequests,
+    apiKeys,
+  };
+}
+
+function parseKnownServers(raw: any): KnownServer[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: KnownServer[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || typeof entry.host !== "string" || typeof entry.port !== "number") continue;
+    const fingerprint =
+      typeof entry.fingerprint === "string" && /^sha256:.+/.test(entry.fingerprint) ? entry.fingerprint : undefined;
+    if (fingerprint) {
+      // Duplicate (fingerprint, port): first entry wins (stabilize-mdns-server-identity D6).
+      const key = `${fingerprint}|${entry.port}`;
+      if (seen.has(key)) {
+        console.warn(`[known-servers] dropped duplicate identity entry ${entry.host}:${entry.port} (fingerprint already held)`);
+        continue;
+      }
+      seen.add(key);
+    }
+    out.push({
+      host: entry.host,
+      port: entry.port,
+      ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+      addedAt: typeof entry.addedAt === "string" ? entry.addedAt : new Date().toISOString(),
+      ...(fingerprint ? { fingerprint } : {}),
+    });
+  }
+  return out;
+}
+
+function parseTrustedNetworks(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((entry: unknown) => typeof entry === "string" && entry.length > 0);
+}
+
+const KNOWN_TUNNEL_PROVIDERS: TunnelProviderId[] = ["zrok", "ngrok", "tailscale", "zerotier"];
+const KNOWN_TUNNEL_MODES: TunnelMode[] = ["public", "private"];
+
+/**
+ * Read-time back-compat shim (idempotent, pure). Normalizes a raw persisted
+ * `tunnel` block into the provider+mode shape without rewriting disk:
+ *  - a legacy bare `reservedToken` + no `provider` resolves to
+ *    `{ provider: "zrok", mode: "public", zrok: { reservedToken } }`;
+ *  - the legacy top-level `reservedToken` is preserved for downgrade safety;
+ *  - an explicit `provider` wins over a stray legacy `reservedToken`.
+ * See change: add-tunnel-providers.
+ */
+/**
+ * The per-provider concurrency flags (D3), validated.
+ *
+ * `zrok` is RECONSTRUCTED rather than spread (it carries the legacy token
+ * migration), so without this helper its `enabled`/`mode` were silently dropped
+ * on every load: the operator's second tunnel never connected and the config
+ * showed nothing to explain it. An invalid value is DROPPED rather than
+ * preserved — `resolveTunnelPlan` treats absent `enabled` as false, which is
+ * the safe reading; a bogus `mode` string would instead surface later as an
+ * unsupported-mode connect failure far from its cause.
+ */
+function perProviderFlags(raw: any): { enabled?: boolean; mode?: TunnelMode } {
+  return {
+    ...(typeof raw?.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+    ...(typeof raw?.mode === "string" && (KNOWN_TUNNEL_MODES as string[]).includes(raw.mode)
+      ? { mode: raw.mode as TunnelMode }
+      : {}),
+  };
+}
+
+/** A provider sub-config with its flags re-derived from the validated pair. */
+function withProviderFlags(raw: any): Record<string, unknown> {
+  const { enabled: _e, mode: _m, ...rest } = raw as Record<string, unknown>;
+  return { ...rest, ...perProviderFlags(raw) };
+}
+
+export function normalizeTunnelConfig(
+  raw: any,
+  defaults: DashboardConfig["tunnel"],
+): DashboardConfig["tunnel"] {
+  const rawProvider =
+    typeof raw?.provider === "string" && (KNOWN_TUNNEL_PROVIDERS as string[]).includes(raw.provider)
+      ? (raw.provider as TunnelProviderId)
+      : undefined;
+  const legacyToken = typeof raw?.reservedToken === "string" ? raw.reservedToken : undefined;
+  // Legacy bare token + no explicit provider → zrok/public.
+  const provider = rawProvider ?? (legacyToken ? ("zrok" as TunnelProviderId) : undefined);
+  const rawMode =
+    typeof raw?.mode === "string" && (KNOWN_TUNNEL_MODES as string[]).includes(raw.mode)
+      ? (raw.mode as TunnelMode)
+      : undefined;
+  const mode = rawMode ?? (provider === "zrok" && !rawProvider ? ("public" as TunnelMode) : undefined);
+
+  // v2 (support-zrok-v2): preserve the legacy reservedToken for downgrade but
+  // NEVER promote it to reservedName (a name is not a token). Surface the v2
+  // reservedName + persistent when present; persistent defaults to false.
+  const rawZrok = raw?.zrok;
+  const zrokToken =
+    typeof rawZrok?.reservedToken === "string" ? rawZrok.reservedToken : legacyToken;
+  const zrokReservedName = typeof rawZrok?.reservedName === "string" ? rawZrok.reservedName : undefined;
+  const zrokPersistent = typeof rawZrok?.persistent === "boolean" ? rawZrok.persistent : false;
+  const zrok = {
+    ...(zrokToken ? { reservedToken: zrokToken } : {}),
+    ...(zrokReservedName ? { reservedName: zrokReservedName } : {}),
+    ...perProviderFlags(rawZrok),
+    persistent: zrokPersistent,
+  };
+
+  const out: DashboardConfig["tunnel"] = {
+    enabled: raw?.enabled ?? defaults.enabled,
+    ...(provider ? { provider } : {}),
+    ...(mode ? { mode } : {}),
+    ...(legacyToken ? { reservedToken: legacyToken } : {}),
+    zrok,
+    // The raw `enabled`/`mode` are STRIPPED before the spread and re-added from
+    // the validated pair, so a junk value cannot ride the spread into the
+    // concurrency resolver.
+    ...(raw?.ngrok && typeof raw.ngrok === "object" ? { ngrok: withProviderFlags(raw.ngrok) } : {}),
+    ...(raw?.tailscale && typeof raw.tailscale === "object"
+      ? { tailscale: withProviderFlags(raw.tailscale) }
+      : {}),
+    ...(raw?.zerotier && typeof raw.zerotier === "object"
+      ? { zerotier: withProviderFlags(raw.zerotier) }
+      : {}),
+    watchdog: {
+      enabled: raw?.watchdog?.enabled ?? defaults.watchdog!.enabled,
+      intervalMs:
+        typeof raw?.watchdog?.intervalMs === "number" && raw.watchdog.intervalMs > 0
+          ? raw.watchdog.intervalMs
+          : defaults.watchdog!.intervalMs,
+      failureThreshold:
+        typeof raw?.watchdog?.failureThreshold === "number" && raw.watchdog.failureThreshold > 0
+          ? Math.floor(raw.watchdog.failureThreshold)
+          : defaults.watchdog!.failureThreshold,
+      probeTimeoutMs:
+        typeof raw?.watchdog?.probeTimeoutMs === "number" && raw.watchdog.probeTimeoutMs > 0
+          ? raw.watchdog.probeTimeoutMs
+          : defaults.watchdog!.probeTimeoutMs,
+    },
+  };
+  return out;
+}
+
+/** A tunnel config error surfaced instead of silently starting a tunnel. */
+export type TunnelConfigError =
+  | { ok: true }
+  | { ok: false; reason: "mode-unset" | "unsupported-mode" | "provider-unset"; message: string };
+
+/**
+ * Validate a normalized tunnel block before connect. The server MUST refuse
+ * to start a tunnel when `mode` is unset or the provider does not support the
+ * selected mode. See change: add-tunnel-providers.
+ */
+export function validateTunnelForConnect(tunnel: DashboardConfig["tunnel"]): TunnelConfigError {
+  if (!tunnel.provider) {
+    return { ok: false, reason: "provider-unset", message: "tunnel.provider is required when enabled" };
+  }
+  if (!tunnel.mode) {
+    return { ok: false, reason: "mode-unset", message: "tunnel.mode is required when enabled" };
+  }
+  if (!providerSupportsMode(tunnel.provider, tunnel.mode)) {
+    return {
+      ok: false,
+      reason: "unsupported-mode",
+      message: `provider ${tunnel.provider} does not support mode ${tunnel.mode}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Write a config file atomically with mode 0600 (it holds the auth HMAC secret).
+ * Unique tmp name so concurrent writers never clobber each other; chmod is
+ * best-effort (umask-proof on POSIX, ignored where unsupported, e.g. win32).
+ * See change: harden-trust-and-credential-boundaries (D4).
+ */
+export function writeConfigFileSecure(file: string, text: string): void {
+  const tmp = `${file}.tmp.${process.pid}.${randomUUID()}`;
+  try {
+    fs.writeFileSync(tmp, text, { mode: 0o600 });
+    try { fs.chmodSync(tmp, 0o600); } catch { /* best-effort */ }
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+    throw err;
+  }
+}
+
+/** Best-effort: tighten a group/world-readable config file to 0600. Never throws. */
+function tightenConfigMode(file: string): void {
+  if (process.platform === "win32") return; // platform-branch-ok: POSIX mode bits are meaningless on win32
+  try {
+    const st = fs.statSync(file);
+    if (st.mode & 0o077) fs.chmodSync(file, 0o600);
+  } catch (err) {
+    console.warn(`[config] could not tighten ${file} to 0600: ${(err as Error).message}`);
+  }
+}
+
+/**
+ * Load configuration from ~/.pi/dashboard/config.json.
+ * Returns defaults for missing fields, malformed JSON, or missing file.
+ */
+export function loadConfig(): DashboardConfig {
+  const configDir = path.join(os.homedir(), ".pi", "dashboard");
+  const configFile = path.join(configDir, "config.json");
+  const defaults: DashboardConfig = { ...DEFAULTS };
+
+  if (fs.existsSync(configFile)) tightenConfigMode(configFile);
+
+  try {
+    if (!fs.existsSync(configFile)) return defaults;
+    const raw = fs.readFileSync(configFile, "utf-8");
+    if (!raw.trim()) return defaults;
+    const parsed = JSON.parse(raw);
+    const rawStrategy = parsed.spawnStrategy;
+    const spawnStrategy: SpawnStrategy =
+      VALID_SPAWN_STRATEGIES.includes(rawStrategy) ? rawStrategy : defaults.spawnStrategy;
+    const subagentSaturation = parseSubagentSaturation(parsed.subagentSaturation);
+
+    const result: DashboardConfig = {
+      port: parsed.port ?? defaults.port,
+      piPort: parsed.piPort ?? defaults.piPort,
+      bindHost: typeof parsed.bindHost === "string" && parsed.bindHost ? parsed.bindHost : defaults.bindHost,
+      autoStart: parsed.autoStart ?? defaults.autoStart,
+      autoShutdown: parsed.autoShutdown ?? defaults.autoShutdown,
+      shutdownIdleSeconds: parsed.shutdownIdleSeconds ?? defaults.shutdownIdleSeconds,
+      readinessTimeoutMs:
+        typeof parsed.readinessTimeoutMs === "number" &&
+        Number.isFinite(parsed.readinessTimeoutMs) &&
+        parsed.readinessTimeoutMs > 0
+          ? Math.min(
+              READINESS_TIMEOUT_MAX_MS,
+              Math.max(READINESS_TIMEOUT_MIN_MS, parsed.readinessTimeoutMs),
+            )
+          : defaults.readinessTimeoutMs,
+      subagentTickThrottleMs:
+        typeof parsed.subagentTickThrottleMs === "number" &&
+        Number.isFinite(parsed.subagentTickThrottleMs) &&
+        parsed.subagentTickThrottleMs >= 0
+          ? parsed.subagentTickThrottleMs
+          : defaults.subagentTickThrottleMs,
+      maxConcurrentSubagents: resolveMaxConcurrentSubagents(parsed.maxConcurrentSubagents),
+      ...(subagentSaturation ? { subagentSaturation } : {}),
+      ...(parsed.subagentTickThrottleMigrated === true ? { subagentTickThrottleMigrated: true } : {}),
+      removeBatchCap: clampRemoveBatchCap(parsed.removeBatchCap),
+      spawnStrategy,
+      tunnel: normalizeTunnelConfig(parsed.tunnel, defaults.tunnel),
+      devBuildOnReload: parsed.devBuildOnReload ?? defaults.devBuildOnReload,
+      defaultModel: typeof parsed.defaultModel === "string" ? parsed.defaultModel : defaults.defaultModel,
+      defaultThinkingLevel:
+        typeof parsed.defaultThinkingLevel === "string" ? parsed.defaultThinkingLevel : defaults.defaultThinkingLevel,
+      auth: parseAuthConfig(parsed.auth),
+      identity: parseIdentityConfig(parsed.identity),
+      memoryLimits: parseMemoryLimits(parsed.memoryLimits),
+      sessionHeap: parseSessionHeap(parsed.sessionHeap),
+      serverHeap: parseServerHeap(parsed.serverHeap),
+      openspec: parseOpenSpecPollConfig(parsed.openspec),
+      editor: parseEditorConfig(parsed.editor),
+      vault: parseVaultConfig(parsed.vault),
+      sessions: parseSessionsConfig(parsed.sessions),
+      sessionList: parseSessionListConfig(parsed.sessionList),
+      embedLifecycle: parseEmbedLifecycleConfig(parsed.embedLifecycle),
+      keeperLog: parseKeeperLogConfig(parsed.keeperLog),
+      acpAgents: parseAcpAgents(parsed.acpAgents),
+      acp: parseAcpSettings(parsed.acp),
+      push: parsePushConfig(parsed.push),
+      questions: parseQuestionsConfig(parsed.questions),
+      allowedHosts: Array.isArray(parsed.allowedHosts)
+        ? parsed.allowedHosts.filter((h: unknown): h is string => typeof h === "string")
+        : defaults.allowedHosts,
+      hostGate: { mode: parseHostGateMode(parsed.hostGate?.mode) },
+      trustedNetworks: parseTrustedNetworks(parsed.trustedNetworks),
+      ...(parseNetworkConfig(parsed.network) ? { network: parseNetworkConfig(parsed.network) } : {}),
+      requireLocalProof: parsed.requireLocalProof === true,
+      resolvedTrustedNetworks: [],
+      cors: {
+        allowedOrigins: Array.isArray(parsed.cors?.allowedOrigins)
+          ? parsed.cors.allowedOrigins.filter((o: unknown) => typeof o === "string")
+          : defaults.cors.allowedOrigins,
+      },
+      pairing: {
+        publicBaseUrls: Array.isArray(parsed.pairing?.publicBaseUrls)
+          ? parsed.pairing.publicBaseUrls.filter((o: unknown) => typeof o === "string")
+          : defaults.pairing.publicBaseUrls,
+        acceptLanRequests: parsed.pairing?.acceptLanRequests === true,
+      },
+      // Top-level promotion of `pairing.publicBaseUrls` (D7). Absent stays
+      // absent — a `[]` default would make "unset" and "set but empty"
+      // indistinguishable and kill the legacy fallback.
+      ...(Array.isArray(parsed.publicBaseUrls)
+        ? { publicBaseUrls: parsed.publicBaseUrls.filter((o: unknown) => typeof o === "string") }
+        : {}),
+      ...(parseGateways(parsed.gateways) ? { gateways: parseGateways(parsed.gateways) } : {}),
+      ...(typeof parsed.lastServer === "string" ? { lastServer: parsed.lastServer } : {}),
+      ...(typeof parsed.dashboardName === "string" && parsed.dashboardName.trim()
+        ? { dashboardName: parsed.dashboardName }
+        : {}),
+      electronMode: parsed.electronMode === true,
+      accessGrants: {
+        promptEnabled:
+          typeof parsed.accessGrants?.promptEnabled === "boolean"
+            ? parsed.accessGrants.promptEnabled
+            : defaults.accessGrants.promptEnabled,
+      },
+      piTrustMirror: parsePiTrustMirror(parsed.piTrustMirror),
+      agentPathGate: parseAgentPathGate(parsed.agentPathGate),
+      bridge: parseBridgeActivation(parsed.bridge),
+      knownServers: parseKnownServers(parsed.knownServers),
+      reattachPlacement: parseReattachPlacement(parsed.reattachPlacement),
+      reopenSessionsAfterShutdown: parseReopenSessionsAfterShutdown(parsed.reopenSessionsAfterShutdown),
+      completedFirst: typeof parsed.completedFirst === "boolean" ? parsed.completedFirst : defaults.completedFirst,
+      questionFirst: typeof parsed.questionFirst === "boolean" ? parsed.questionFirst : defaults.questionFirst,
+      folderListMode: parsed.folderListMode === "accordion" ? "accordion" : "classic",
+      folderAttentionPeek: typeof parsed.folderAttentionPeek === "boolean" ? parsed.folderAttentionPeek : defaults.folderAttentionPeek,
+      plugins: parsePluginsConfig(parsed.plugins),
+      askUserPromptTimeoutSeconds: typeof parsed.askUserPromptTimeoutSeconds === "number"
+        ? parsed.askUserPromptTimeoutSeconds
+        : defaults.askUserPromptTimeoutSeconds,
+      spawnRegisterTimeoutMs: clampSpawnRegisterTimeoutMs(parsed.spawnRegisterTimeoutMs),
+      gitWorktreeEnabled:
+        typeof parsed.gitWorktreeEnabled === "boolean"
+          ? parsed.gitWorktreeEnabled
+          : defaults.gitWorktreeEnabled,
+      windowsGitSource:
+        parsed.windowsGitSource === "host" ||
+        parsed.windowsGitSource === "bundled" ||
+        parsed.windowsGitSource === "auto"
+          ? parsed.windowsGitSource
+          : defaults.windowsGitSource,
+      modelProxy: parseModelProxyConfig(parsed.modelProxy),
+      tls: parseTlsConfig(parsed.tls),
+      terminals: parseTerminalsConfig(parsed.terminals),
+      browse: parseBrowseConfig(parsed.browse),
+      kroki: parseKrokiConfig(parsed.kroki),
+      mermaidRepair: parseMermaidRepairConfig(parsed.mermaidRepair),
+      ...(typeof parsed.piSessionsDir === "string" && parsed.piSessionsDir.trim()
+        ? { piSessionsDir: parsed.piSessionsDir }
+        : {}),
+    };
+
+    // Compute resolvedTrustedNetworks: merge trustedNetworks + auth.bypassHosts
+    const merged = new Set(result.trustedNetworks);
+    if (result.auth?.bypassHosts) {
+      for (const h of result.auth.bypassHosts) merged.add(h);
+    }
+    result.resolvedTrustedNetworks = Array.from(merged);
+    return result;
+  } catch {
+    return defaults;
+  }
+}
+
+/**
+ * Create ~/.pi/dashboard/config.json with defaults if it doesn't exist.
+ * Creates the directory recursively if needed.
+ */
+export function ensureConfig(): void {
+  const configDir = path.join(os.homedir(), ".pi", "dashboard");
+  const configFile = path.join(configDir, "config.json");
+
+  if (fs.existsSync(configFile)) return;
+
+  fs.mkdirSync(configDir, { recursive: true });
+
+  const defaults = {
+    port: DEFAULTS.port,
+    piPort: DEFAULTS.piPort,
+    autoStart: DEFAULTS.autoStart,
+    autoShutdown: DEFAULTS.autoShutdown,
+    shutdownIdleSeconds: DEFAULTS.shutdownIdleSeconds,
+    readinessTimeoutMs: DEFAULTS.readinessTimeoutMs,
+    subagentTickThrottleMs: DEFAULTS.subagentTickThrottleMs,
+    // Seeded unconditionally: a fresh install is already AT the new default, so
+    // a later deliberate `0` must not be re-migrated on the next boot.
+    // See change: heal-orphaned-tool-cards-on-session-end (D5).
+    subagentTickThrottleMigrated: true,
+    removeBatchCap: DEFAULTS.removeBatchCap,
+    spawnStrategy: DEFAULTS.spawnStrategy,
+    tunnel: DEFAULTS.tunnel,
+    devBuildOnReload: DEFAULTS.devBuildOnReload,
+  };
+
+  writeConfigFileSecure(configFile, JSON.stringify(defaults, null, 2) + "\n");
+}

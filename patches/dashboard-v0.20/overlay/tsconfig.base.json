@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "erasableSyntaxOnly": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "sourceMap": true,
+    "lib": ["ES2023"],
+    "paths": {
+      "@blackbelt-technology/pi-dashboard-speed-plugin": [
+        "./extras/speed-plugin/src/index.tsx"
+      ],
+      "@earendil-works/pi-coding-agent": [
+        "./node_modules/@earendil-works/pi-coding-agent"
+      ],
+      "@earendil-works/pi-ai": [
+        "./node_modules/@earendil-works/pi-ai"
+      ],
+      "@earendil-works/pi-tui": [
+        "./node_modules/@earendil-works/pi-tui"
+      ]
+    }
+  }
+}

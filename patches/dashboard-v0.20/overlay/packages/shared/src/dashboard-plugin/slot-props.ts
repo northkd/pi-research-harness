@@ -1,0 +1,332 @@
+/**
+ * Typed prop contracts for each slot id.
+ *
+ * Every slot consumer passes exactly the props defined here to each contribution
+ * component. Plugins receive only the props for the slot they claim.
+ *
+ * NOTE: PluginContext is imported as a type-only forward reference so this
+ * shared package doesn't depend on the runtime package. The runtime package
+ * will re-export this map with the concrete PluginContext type filled in.
+ */
+import type { DashboardSession } from "../types.js";
+import type { SlotId } from "./slot-types.js";
+
+/**
+ * Opaque marker type for PluginContext.
+ * The concrete type is defined in @blackbelt-technology/dashboard-plugin-runtime/context.
+ * Using `unknown` here keeps this shared types-only package free of runtime deps.
+ */
+export type AnyPluginContext = unknown;
+
+/** Folder descriptor passed to sidebar-folder-section slot. */
+export interface FolderDescriptor {
+  cwd: string;
+  label?: string;
+}
+
+/**
+ * Where a folder section is being rendered. `sidebar` (default) = the sidebar
+ * folder card (raised pill); `card` = inside a session card (flat pill matching
+ * the SessionSubcard panels). See change: align-session-card-kb-slot-surface.
+ */
+export type SlotPlacement = "sidebar" | "card";
+
+/**
+ * Image payload forwarded to `tool-renderer` plugins. Structural mirror of the
+ * client's `ChatImage` (kept inline so this types-only package stays free of a
+ * client dependency). See change: wire-tool-renderer-slot.
+ */
+export interface ToolRendererImage {
+  data: string;
+  mimeType: string;
+}
+
+/**
+ * Tool execution context forwarded to `tool-renderer` plugins. Structural
+ * mirror of the client's `ToolContext`. `editors` / `session` are intentionally
+ * loose (`unknown[]` / `unknown`) so the shared package avoids importing client
+ * types. See change: wire-tool-renderer-slot.
+ */
+export interface ToolRendererContext {
+  cwd?: string;
+  editors?: unknown[];
+  sessionId?: string;
+  session?: unknown;
+}
+
+/**
+ * Props passed to a `custom-entry-renderer` contribution.
+ *
+ * The render container (`CustomEntryRow` in the client) owns the claim lookup,
+ * the group-visibility gate, the expand state, and the on-demand payload
+ * fetch; the contribution owns only presentation. This keeps the collapsed
+ * line derivable from the row alone (no fetch until `expanded`) and gives
+ * every absorption site (top level, burst, inner ×N group) the same content.
+ *
+ * See change: add-custom-entry-renderer-slot.
+ */
+export interface CustomEntryRendererProps {
+  /** Extension-authored label — rendered verbatim, never interpreted. */
+  customType: string;
+  /** Row display body, already extracted + truncated at row creation. */
+  body: string;
+  timestamp: number;
+  /** Absent on rows from the `message_end` path → collapsed-only, no affordance. */
+  entryId?: string;
+  sessionId?: string;
+  /** Expand state, owned by the container so every site behaves identically. */
+  expanded: boolean;
+  /** Toggle expansion. The container issues the payload fetch on first expand. */
+  onToggle: () => void;
+  /** Fetched payload; `undefined` while collapsed, loading, or unavailable. */
+  payload?: unknown;
+  /** Human-readable payload failure reason; `undefined` when none/not attempted. */
+  payloadError?: string;
+  payloadLoading: boolean;
+}
+
+/**
+ * Props passed to an `editor-pane-tab` body component. `path` is the full
+ * virtual tab path (`<pathPrefix>:<rest>`). See change: add-browser-editor-pane-tab.
+ */
+export interface EditorPaneTabProps {
+  path: string;
+  session: DashboardSession;
+  /** True while this tab is the pane's active tab (the body mounts only then). */
+  isActive: boolean;
+  /** Close this tab. */
+  onClose: () => void;
+  pluginContext: AnyPluginContext;
+}
+
+/**
+ * Props passed to an `editor-pane-tab` claim's `labelComponent`. Mounted for
+ * every open tab of that prefix, active or not.
+ */
+export interface EditorPaneTabLabelProps {
+  path: string;
+  session: DashboardSession;
+  pluginContext: AnyPluginContext;
+}
+
+/**
+ * Why a handler `save()` did not write. `busy` is retryable (validator pool
+ * overflow / save in flight). See change: add-editor-pane-file-handlers (D3).
+ */
+export type FileHandlerSaveFailureReason = "cancelled" | "conflict-unresolved" | "rejected" | "too-large" | "busy";
+
+/** Result of `FileHandlerProps.save()`. */
+export type FileHandlerSaveResult =
+  | { ok: true; path: string; mtime: number; sha1: string }
+  | { ok: false; reason: FileHandlerSaveFailureReason; message: string };
+
+/** Consistent bytes + content token returned by `FileHandlerProps.snapshot()`. */
+export interface FileHandlerSnapshot {
+  bytes: ArrayBuffer;
+  size: number;
+  mtime: number;
+  /** Content token: lower-case hex SHA-1 of `bytes`; the overwrite conflict reference. */
+  sha1: string;
+}
+
+/**
+ * Props passed to an `editor-pane-file-handler` body component (versioned with
+ * the slot; new fields are optional-additive).
+ *
+ * Contract notes:
+ * - Call `setDirty(...)` as soon as the document is loaded. Until the first
+ *   call the state is `"unknown"`, which core treats as dirty for every guard
+ *   (an `"unknown"` instance is never evicted).
+ * - Core trusts `setDirty(false)`: a handler that reports clean while holding
+ *   edits may lose them when its instance is evicted to free resources.
+ * - `save()` runs core policy (first-overwrite notice, conflict dialog,
+ *   `POST /api/file/write-binary`); the handler only sees the outcome.
+ *
+ * See change: add-editor-pane-file-handlers (D3).
+ */
+export interface FileHandlerProps {
+  /** Session working directory the file lives under. */
+  cwd: string;
+  /** File path as opened in the tab (cwd-relative or absolute, as the tab holds it). */
+  path: string;
+  session: DashboardSession | null;
+  /** True while this instance's tab is the pane's active tab. */
+  isActive: boolean;
+  /** Consistent digest-bracketed read; rejects with `too-large` above the claim's `maxBytes`. */
+  snapshot(): Promise<FileHandlerSnapshot>;
+  /**
+   * `sibling` (claims with `siblingExtensions`): create a NEW `<stem><ext>` next to the tab's file — never an
+   * overwrite, so no first-overwrite notice; 409 (every name taken) → `conflict-unresolved`.
+   * See change: extend-craft-web-to-all-apps (D6).
+   */
+  save(bytes: ArrayBuffer, opts: { target: "overwrite" | "copy" } | { target: "sibling"; ext: string }): Promise<FileHandlerSaveResult>;
+  setDirty(state: boolean | "unknown"): void;
+  /**
+   * Open a workspace file (cwd-relative, as a save result returns it) in a new tab; `claimId` selects one of
+   * this plugin's file-handler modes on it. Optional: absent on an older runtime.
+   * See change: extend-craft-web-to-all-apps (D6 "Create and open").
+   */
+  openFile?(path: string, claimId?: string): void;
+  context: AnyPluginContext;
+}
+
+/** Resource page types a `resource-page-section` claim can target. */
+export type ResourcePageType = "skill" | "agent" | "extension" | "prompt" | "theme";
+
+/**
+ * Props passed to a `resource-page-section` component. `scope` names the
+ * SURFACE (folder settings vs global settings), independent of any scope filter
+ * on that page; `cwd` is present exactly when `scope === "folder"`.
+ * See change: add-skill-atlas-screen.
+ */
+export interface ResourcePageSectionProps {
+  resourceType: ResourcePageType;
+  scope: "folder" | "global";
+  cwd?: string;
+  pluginContext: AnyPluginContext;
+}
+
+/** Map of slot id → props type for that slot's contributions. */
+export interface SlotPropsMap {
+  "sidebar-folder-section": {
+    folder: FolderDescriptor;
+    placement?: SlotPlacement;
+    pluginContext: AnyPluginContext;
+  };
+  "worktree-card-section": {
+    folder: FolderDescriptor;
+    placement?: SlotPlacement;
+    pluginContext: AnyPluginContext;
+  };
+  "session-card-badge": {
+    session: DashboardSession;
+    pluginContext: AnyPluginContext;
+  };
+  "session-card-action-bar": {
+    session: DashboardSession;
+    pluginContext: AnyPluginContext;
+  };
+  "session-card-memory": {
+    session: DashboardSession;
+    pluginContext: AnyPluginContext;
+  };
+  "session-card-flows": {
+    session: DashboardSession;
+    pluginContext: AnyPluginContext;
+  };
+  "workspace-action-bar": {
+    session: DashboardSession;
+    pluginContext: AnyPluginContext;
+  };
+  "composer-panel": {
+    /** The current chat composer input value (read-only). */
+    draft: string;
+    /** Optional language hint for the draft (e.g. "en"); undefined = auto. */
+    language?: string;
+    /** Current session id (for reset-on-switch); undefined when none selected. */
+    sessionId?: string;
+    /** Current session status (e.g. gate work while "streaming"). */
+    sessionStatus?: string;
+    /**
+     * Bounded draft-write: replace the composer input with `text`. The only
+     * mutation a composer-panel plugin may perform (e.g. apply a correction);
+     * NOT a general setter. See change: make-grammar-fully-plugin-contained.
+     */
+    onApplyText: (text: string) => void;
+    pluginContext: AnyPluginContext;
+  };
+  "content-view": {
+    session: DashboardSession;
+    routeParams: Record<string, string>;
+    onClose: () => void;
+    pluginContext: AnyPluginContext;
+  };
+  "content-header-sticky": {
+    session: DashboardSession;
+    pluginContext: AnyPluginContext;
+  };
+  "content-inline-footer": {
+    session: DashboardSession;
+    pluginContext: AnyPluginContext;
+  };
+  "composer-context-group": {
+    session: DashboardSession;
+    pluginContext: AnyPluginContext;
+  };
+  "anchored-popover": {
+    anchorEl: HTMLElement;
+    onDismiss: () => void;
+    pluginContext: AnyPluginContext;
+  };
+  "command-route": {
+    session: DashboardSession;
+    routeParams: Record<string, string>;
+    onClose: () => void;
+    pluginContext: AnyPluginContext;
+  };
+  "shell-overlay-route": {
+    params: Record<string, string>;
+    /** DashboardSession metadata resolved from the URL’s session param (`config.sessionParam`, default `"sid"`). Undefined when the URL has no session id or no matching session. */
+    session?: DashboardSession;
+    onBack: () => void;
+    pluginContext: AnyPluginContext;
+  };
+  "login-provider": {
+    /** Which half of the OIDC flow core is asking the component to run (D16). */
+    phase: "start" | "callback" | "logout";
+    /** Same-origin relative path to return to after login (already validated by core). */
+    returnTo: string;
+    /** Callback-phase only: the component calls this after it writes the token,
+     * handing core the recovered return-to; core owns the navigation. */
+    onComplete: (returnTo: string) => void;
+  };
+  "settings-section": {
+    pluginContext: AnyPluginContext;
+  };
+  "tool-renderer": {
+    toolName: string;
+    toolInput: Record<string, unknown>;
+    sessionId: string;
+    pluginContext: AnyPluginContext;
+    // ─── newly optional (mirror built-in ToolRendererProps) ───
+    // See change: wire-tool-renderer-slot.
+    // `elided` = result not loadable. See change: fix-lazy-history-backfill-ux (D5).
+    status?: "running" | "complete" | "error" | "elided";
+    result?: string;
+    toolDetails?: Record<string, unknown>;
+    images?: ToolRendererImage[];
+    context?: ToolRendererContext;
+  };
+  "custom-entry-renderer": CustomEntryRendererProps;
+  "automation-action-editor": {
+    /** Current automation action payload; the editor mutates and returns it. */
+    payload: Record<string, unknown>;
+    /** Persist an updated payload. */
+    onChange: (payload: Record<string, unknown>) => void;
+    /** Run cwd, for scoping any read-only discovery (e.g. flow inputs). */
+    cwd?: string;
+    pluginContext: AnyPluginContext;
+  };
+  "editor-pane-tab": EditorPaneTabProps;
+  "editor-pane-file-handler": FileHandlerProps;
+  "resource-page-section": ResourcePageSectionProps;
+  /** Headless claims take no props. See change: fix-empty-status-subcard. */
+  "shell-headless": Record<string, never>;
+  // Descriptor-only slots don't have React props (consumed by extension-ui-system)
+  "management-modal": Record<string, unknown>;
+  "footer-segment": Record<string, unknown>;
+  "agent-metric": Record<string, unknown>;
+  "breadcrumb": Record<string, unknown>;
+  "gate": Record<string, unknown>;
+  "toast": Record<string, unknown>;
+  "rjsf-form": Record<string, unknown>;
+}
+
+/** Get the props type for a specific slot id. */
+export type SlotProps<S extends SlotId> = SlotPropsMap[S];
+
+// Type-level test: assert SlotPropsMap covers every SlotId.
+// This will produce a TS error if any SlotId is not in SlotPropsMap.
+type _AssertAllSlotsCovered = {
+  [K in SlotId]: SlotPropsMap[K];
+};
