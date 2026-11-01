@@ -999,6 +999,10 @@
       "sha256": "f824da4d07c3d1fb31303d06ab490abc99d6d50912e8386c5ca768e8652efd2a",
       "baseBlob": null
     },
+    "packages/client/src/lib/i18n-en-source.json": {
+      "sha256": "c74087e792871ecdf8aad41db414653b6383ed71aff2515cf39d79a90cb0c2c5",
+      "baseBlob": "c2005d1e1a826b606b5dc4bb51e639b7e6501c82"
+    },
     "packages/client/src/lib/i18n/i18n-hu.ts": {
       "sha256": "3f4d9da616f82aa2bac2393be699479740db5ac06eae8993c23493b8d714b277",
       "baseBlob": "0b6cbb795a1478c69e09746fec5d5811e5f4818e"
@@ -1010,10 +1014,6 @@
     "packages/client/src/lib/i18n/i18n.tsx": {
       "sha256": "44357819e6691249f7691404564fc19422bff094539831ebe791282a657b965d",
       "baseBlob": "592be073a0d61cb272572d862527b2597b8ed999"
-    },
-    "packages/client/src/lib/i18n-en-source.json": {
-      "sha256": "c74087e792871ecdf8aad41db414653b6383ed71aff2515cf39d79a90cb0c2c5",
-      "baseBlob": "c2005d1e1a826b606b5dc4bb51e639b7e6501c82"
     },
     "packages/client/src/lib/layout/editor-pane-state.ts": {
       "sha256": "bf7bab1be4e1326cacfc9a9c0546690bc4cd022b805747987eb77599638b12cd",

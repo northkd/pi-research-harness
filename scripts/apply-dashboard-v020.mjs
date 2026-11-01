@@ -27,13 +27,16 @@ function entries(root, prefix = '') {
     return [rel];
   });
 }
+export function isSafeOverlayPath(rel) {
+  return typeof rel === 'string' && (['tsconfig.json','tsconfig.base.json'].includes(rel) || rel.startsWith('packages/') || rel.startsWith('claude-science/host/') || rel.startsWith('claude-science/worker/') || rel.startsWith('extras/speed-plugin/')) && !rel.split('/').some(p=>!p || p==='.' || p==='..') && !rel.includes('\\');
+}
 export function applyDashboardOverlay(source, destination, manifest, {verifyOnly = false} = {}) {
   const src=fs.realpathSync(source),dst=fs.realpathSync(destination);
   if (!manifest || !manifest.files || typeof manifest.files !== 'object') throw Error('overlay manifest required');
   const expected=Object.keys(manifest.files).sort();
   if (!expected.length) throw Error('empty overlay manifest');
   for (const rel of expected) {
-    if (!(['tsconfig.json','tsconfig.base.json'].includes(rel) || rel.startsWith('packages/') || rel.startsWith('claude-science/host/') || rel.startsWith('claude-science/worker/') || rel.startsWith('extras/speed-plugin/')) || rel.split('/').some(p=>!p || p==='.' || p==='..') || rel.includes('\\')) throw Error('invalid overlay path');
+    if (!isSafeOverlayPath(rel)) throw Error('invalid overlay path');
   }
   const actual=entries(src).sort();
   if (JSON.stringify(expected)!==JSON.stringify(actual)) throw Error('overlay manifest file inventory mismatch');

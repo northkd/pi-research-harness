@@ -54,6 +54,20 @@ node scripts/create-demo-project.mjs /absolute/path/to/new-demo-project
 
 脚本会输出本地模拟入口。打开后可查看 4 个虚构 Multi-Agent 和 8 个虚构 Subagent，并播放或单步；演示标签页拦截实际模型请求和写入。退出演示后回到正常 Dashboard，按钮仍是实际操作。手动重新执行前端构建后，需运行 `node scripts/install-demo-entry.mjs "$PI_RESEARCH_DASHBOARD_SOURCE/packages/client/dist"` 恢复演示入口。
 
+## 本机开发更新覆盖层
+
+需要改 Dashboard 定制时，编辑 `patches/dashboard-v0.20/overlay/` 中相应文件，再用已准备的上游检出重新生成校验清单：
+
+```bash
+node scripts/update-dashboard-manifest.mjs "$PWD/.runtime/dashboard-source"
+export PI_RESEARCH_DASHBOARD_SOURCE="$PWD/.runtime/dashboard-next"
+bash scripts/prepare-dashboard.sh
+bash scripts/test-dashboard-v020.sh
+npm test
+```
+
+新构建目录必须不存在；校验器会拒绝覆盖已有修改。新增的源码文件也会纳入清单，若它们在上游已存在则记录上游原始 blob。验证后提交本机代码并推送到 GitHub，再按服务器维护流程更新。
+
 ## 服务器更新
 
 服务器上现有运行目录与 Git 检出是两套文件，**仅执行 `git pull` 不会更新正在运行的 Dashboard**。先确认服务器检出没有未保存更改，再拉取 `main`。构建时可使用新的目录并行准备，旧目录不会被覆盖：
