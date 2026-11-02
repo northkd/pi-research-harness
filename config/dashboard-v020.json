@@ -448,7 +448,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/chat/ChatView.tsx": {
-      "sha256": "f64f9685e05bb3b4eca5ea3a89afc818f2920254eca31d778c68ddf70f47df6e",
+      "sha256": "569dcd06f5f965535631d433c9f4547ee29b000ca21e3b186dfeed6c0007da46",
       "baseBlob": "80238c70b9c665e4a5b0a9cd0594a683b0300d64"
     },
     "packages/client/src/components/chat/ChatViewMenu.tsx": {
@@ -596,11 +596,11 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchAgentCanvas.tsx": {
-      "sha256": "c75d77c64058ce784fed1aa6b06db01a1564cbe34135a54335c833a594a2ad5d",
+      "sha256": "f0ff17ad4e350f195103a8f17ca259bca99f80666becc47563d4559228362462",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchAgentDetail.tsx": {
-      "sha256": "e2b9a863137bf8ba3d9f9c59dfddacc1c9af1987aaa834cdbaef776a81e5a9b2",
+      "sha256": "6cff6fcca40f00dbf8bbde20bf3a226546280686552baae25d6429d4bec81a21",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchBudgetControls.tsx": {
@@ -612,7 +612,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchExecutionPanels.tsx": {
-      "sha256": "5e8b5fe6aef68ea934d1fedaa406b7f14e0d75c84223759f837e2fab087837d4",
+      "sha256": "02a3ad39c1f5dd97f3f98cc36440c78bf6c078f151a26f876a6dd7638f6c3803",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchOverviewAndBudget.tsx": {
@@ -724,7 +724,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/agent-teams-artwork.ts": {
-      "sha256": "6e98aa1daf5fe26e33d3e5f5fd112c916d0a19d8660c024be0949415881479e5",
+      "sha256": "d37b972d33bb4c801a34a1456419f8e12909bdde62139be42e105edb54829ada",
       "baseBlob": null
     },
     "packages/client/src/components/research/research-agent-canvas-layout.ts": {
@@ -924,7 +924,7 @@
       "baseBlob": "b27628d68aad7c20180d0e466a94aedb738d9c35"
     },
     "packages/client/src/index.css": {
-      "sha256": "b049dc5aba4de98ae0c787e37e7746b483acaceead288671f0197374c25b6bda",
+      "sha256": "bf890ebb8021b5cdf3183e7750949de85b1fe60118999e99419661e2704d7081",
       "baseBlob": "366c21b49fbc85a15ee9c5f9055c7991251c29b9"
     },
     "packages/client/src/lib/__tests__/back-target.test.ts": {

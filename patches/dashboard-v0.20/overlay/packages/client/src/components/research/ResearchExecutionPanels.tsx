@@ -14,6 +14,8 @@ import {
   mdiViewGridOutline,
   mdiSourceBranch,
   mdiLayersOutline,
+  mdiChevronDown,
+  mdiChevronUp,
 } from "@mdi/js";
 import { Icon } from "@mdi/react";
 import { useApiBase } from "../../lib/api/api-context.js";
@@ -136,6 +138,20 @@ const live = (row: ResearchExecution) =>
   !["completed", "failed", "blocked", "stopped", "cancelled", "paused"].includes(row.workflowStatus ?? "") &&
   ["streaming", "started", "running", "queued", "pending", "stopping"].includes(row.status);
 
+export function formatTime(iso?: string | null): string {
+  if (!iso) return "未记录";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return String(iso);
+  return new Date(ms).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
 const PROOF_SOURCES: Record<string, string> = {
   "tool-call": "工具调用记录",
   "native-event": "原生事件",
@@ -230,6 +246,20 @@ export function ResearchExecutionPanels({
   const [fusionFilter, setFusionFilter] = useState<"all" | "with-subs" | "standalone">("all");
   const [fusionLayout, setFusionLayout] = useState<"canvas" | "list">("canvas");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  // Agent 协作网络折叠/展开覆盖状态：记录用户手动切换（完成/关闭默认收起，激活默认展开）
+  const [collapsedOverrides, setCollapsedOverrides] = useState<Record<string, boolean>>({});
+
+  // 检查会话/智能体卡片是否应当展开
+  const isClusterExpanded = (cluster: { sessionExec: ResearchExecution }) => {
+    const isLive = live(cluster.sessionExec);
+    if (collapsedOverrides[cluster.sessionExec.id] !== undefined) {
+      // 若处于活跃执行中，无论之前是否手动收起，均响应“如果被激活了再自动展开”
+      return isLive || collapsedOverrides[cluster.sessionExec.id];
+    }
+    // 默认行为：活跃的自动展开，完成或关闭的自动收起
+    return isLive;
+  };
 
   // Only recorded steps are shown; missing dependencies are not inferred.
   const agentTeamsTasks = useMemo(
@@ -327,16 +357,24 @@ export function ResearchExecutionPanels({
     sessionsWithSubsCount,
     sessionsWithoutSubsCount,
   } = useMemo(() => {
+    const execTime = (ex: ResearchExecution) =>
+      ex.startedAt ?? ex.lastActivityAt ?? ex.observedAt ?? "";
+
     const pSessions = executions
       .filter((ex) => ex.kind === "pi-session")
       .sort((a, b) => {
+        // 排列按照创建时间由晚到早由前到后的排列（降序：晚创建在前）
+        const timeDiff = execTime(b).localeCompare(execTime(a));
+        if (timeDiff !== 0) return timeDiff;
         if (captainExecution?.id === a.id) return -1;
         if (captainExecution?.id === b.id) return 1;
-        return (b.startedAt ?? b.lastActivityAt ?? "").localeCompare(a.startedAt ?? a.lastActivityAt ?? "");
+        return b.id.localeCompare(a.id);
       });
 
     const pById = new Map<string, ResearchExecution>(pSessions.map((p) => [p.id, p]));
-    const subs = executions.filter((ex) => ex.kind !== "pi-session");
+    const subs = executions
+      .filter((ex) => ex.kind !== "pi-session")
+      .sort((a, b) => execTime(b).localeCompare(execTime(a)));
     const subsByParent = new Map<string, ResearchExecution[]>();
 
     for (const sub of subs) {
@@ -348,7 +386,8 @@ export function ResearchExecutionPanels({
 
     const clusters = pSessions.map((sessionExec) => {
       const isCaptain = captainExecution?.id === sessionExec.id;
-      const childSubs = subsByParent.get(sessionExec.id) ?? [];
+      const childSubs = (subsByParent.get(sessionExec.id) ?? [])
+        .sort((a, b) => execTime(b).localeCompare(execTime(a)));
       const byRole = new Map<string, ResearchExecution[]>();
       for (const s of childSubs) {
         const rName = executionRoleName(s);
@@ -357,14 +396,15 @@ export function ResearchExecutionPanels({
         byRole.set(rName, arr);
       }
       const childRoleGroups = [...byRole.entries()].map(([rName, groupExecs]) => {
-        const latest = latestObservedExecution(groupExecs) ?? groupExecs[0];
+        groupExecs.sort((a, b) => execTime(b).localeCompare(execTime(a)));
+        const latest = groupExecs[0] ?? latestObservedExecution(groupExecs);
         return {
           roleName: rName,
           roleObj: roles.get(rName) ?? { name: rName, skills: [] },
           executions: groupExecs,
           latest,
         };
-      });
+      }).sort((a, b) => execTime(b.latest).localeCompare(execTime(a.latest)));
 
       return {
         sessionExec,
@@ -977,11 +1017,39 @@ export function ResearchExecutionPanels({
                       </p>
                     </div>
 
-                    <div className="win11-card-subtle inline-flex items-center gap-1 p-1 text-xs" role="group" aria-label="协作视图布局">
-                      <button type="button" onClick={() => setFusionLayout("canvas")} aria-pressed={fusionLayout === "canvas"}
-                        className={`rounded px-2.5 py-1 text-[11px] font-medium ${fusionLayout === "canvas" ? "bg-[var(--accent-solid)] font-semibold text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"}`}>画布</button>
-                      <button type="button" onClick={() => setFusionLayout("list")} aria-pressed={fusionLayout === "list"}
-                        className={`rounded px-2.5 py-1 text-[11px] font-medium ${fusionLayout === "list" ? "bg-[var(--accent-solid)] font-semibold text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"}`}>列表</button>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="win11-card-subtle inline-flex items-center gap-1 p-1 text-xs" role="group" aria-label="协作视图布局">
+                        <button type="button" onClick={() => setFusionLayout("canvas")} aria-pressed={fusionLayout === "canvas"}
+                          className={`rounded px-2.5 py-1 text-[11px] font-medium ${fusionLayout === "canvas" ? "bg-[var(--accent-solid)] font-semibold text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"}`}>画布</button>
+                        <button type="button" onClick={() => setFusionLayout("list")} aria-pressed={fusionLayout === "list"}
+                          className={`rounded px-2.5 py-1 text-[11px] font-medium ${fusionLayout === "list" ? "bg-[var(--accent-solid)] font-semibold text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"}`}>列表</button>
+                      </div>
+                      {fusionLayout === "list" && visibleClusters.length > 0 && (
+                        <div className="win11-card-subtle inline-flex items-center gap-1 p-1 text-xs">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const openAll: Record<string, boolean> = {};
+                              for (const c of visibleClusters) openAll[c.sessionExec.id] = true;
+                              setCollapsedOverrides(openAll);
+                            }}
+                            className="rounded px-2 py-0.5 text-[10.5px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+                          >
+                            全部展开
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const closeAll: Record<string, boolean> = {};
+                              for (const c of visibleClusters) closeAll[c.sessionExec.id] = false;
+                              setCollapsedOverrides(closeAll);
+                            }}
+                            className="rounded px-2 py-0.5 text-[10.5px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+                          >
+                            全部收起
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Filter Pills for Multi-Agent + Subagent Clusters */}
@@ -1033,6 +1101,7 @@ export function ResearchExecutionPanels({
                     {visibleClusters.map((cluster) => {
                       const { sessionExec, title, roleObj, isCaptain, childSubs, childRoleGroups } = cluster;
                       const isLive = live(sessionExec);
+                      const isExpanded = isClusterExpanded(cluster);
                       const mission = getAgentMission(title, isCaptain, sessionExec.kind, sessionExec, cwd);
                       const relation = getAgentRelation(isCaptain, sessionExec.kind);
                       const avatarArt = getMemberArt(title, isCaptain);
@@ -1042,13 +1111,110 @@ export function ResearchExecutionPanels({
                         .replace(/\s+/g, " ")
                         .trim();
 
+                      if (!isExpanded) {
+                        return (
+                          <div
+                            key={sessionExec.id}
+                            data-testid="research-agent-node"
+                            className={`win11-card-interactive cursor-pointer p-3.5 text-xs border-l-4 transition-all ${
+                              isLive
+                                ? "ring-2 ring-emerald-500/80 shadow-[0_0_16px_rgba(16,185,129,0.25)] border-l-emerald-500 bg-gradient-to-r from-emerald-500/10 via-transparent to-transparent"
+                                : isCaptain
+                                ? "border-l-[var(--accent-orange)]"
+                                : childSubs.length > 0
+                                ? "border-l-[var(--accent-blue)]"
+                                : "border-l-[var(--border-strong)]"
+                            }`}
+                            onClick={() => onAgent(roleObj, sessionExec)}
+                          >
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className={`relative shrink-0 ${isLive ? "p-0.5 rounded-full ring-2 ring-emerald-400 ring-offset-2 ring-offset-[var(--bg-primary)] animate-pulse" : ""}`}>
+                                  <img
+                                    src={isCaptain ? leadArt : avatarArt}
+                                    alt={title}
+                                    className="h-8 w-8 object-contain"
+                                  />
+                                  <img
+                                    src={actionArt}
+                                    alt=""
+                                    className="absolute -bottom-1 -right-1 h-4 w-4 object-contain"
+                                  />
+                                </div>
+                                <div className="min-w-0 flex flex-wrap items-center gap-2">
+                                  <span className="text-[13.5px] font-bold text-[var(--text-primary)]">
+                                    {title}
+                                  </span>
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${relation.tintClass}`}
+                                  >
+                                    {relation.tag}
+                                  </span>
+                                  {isLive ? (
+                                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-600 dark:text-emerald-400 shadow-sm animate-pulse">
+                                      <span className="relative flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                      </span>
+                                      <span>⚡ 执行中</span>
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[10.5px] text-[var(--text-secondary)]">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-muted)]" />
+                                      <span>{executionRecordStatus(sessionExec, stale)}</span>
+                                    </span>
+                                  )}
+                                  <span className="inline-flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] font-mono">
+                                    <Icon path={mdiClockOutline} size={0.45} />
+                                    <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {formatTime(sessionExec.endedAt ?? sessionExec.lastActivityAt)}</span>
+                                  </span>
+                                  {childSubs.length > 0 && (
+                                    <span className="tint-action-purple rounded-full border px-2 py-0.5 text-[10px] font-semibold">
+                                      ⚡ 下辖 {childSubs.length} 个 Subagent ({childRoleGroups.length} 类角色)
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-end gap-2 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onAgent(roleObj, sessionExec);
+                                  }}
+                                  className="win11-btn px-2.5 py-1 text-xs"
+                                >
+                                  <Icon path={mdiOpenInNew} size={0.5} />
+                                  <span>详情</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCollapsedOverrides((prev) => ({ ...prev, [sessionExec.id]: true }));
+                                  }}
+                                  className="win11-btn px-2.5 py-1 text-xs text-[var(--accent-text)] flex items-center gap-1"
+                                  title="展开 Agent 卡片"
+                                >
+                                  <Icon path={mdiChevronDown} size={0.55} />
+                                  <span>展开</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       return (
                         <div
                           key={sessionExec.id}
                           data-testid="research-agent-node"
                           onClick={() => onAgent(roleObj, sessionExec)}
-                          className={`win11-card-interactive cursor-pointer p-4 text-xs border-l-4 ${
-                            isCaptain
+                          className={`win11-card-interactive cursor-pointer p-4 text-xs border-l-4 transition-all ${
+                            isLive
+                              ? "ring-2 ring-emerald-500/80 shadow-[0_0_20px_rgba(16,185,129,0.3)] border-l-emerald-500 bg-gradient-to-r from-emerald-500/10 via-transparent to-transparent"
+                              : isCaptain
                               ? "border-l-[var(--accent-orange)]"
                               : childSubs.length > 0
                               ? "border-l-[var(--accent-blue)]"
@@ -1061,7 +1227,7 @@ export function ResearchExecutionPanels({
                             className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"
                           >
                             <div className="flex min-w-0 flex-1 items-start gap-3.5">
-                              <div className="relative shrink-0 mt-0.5">
+                              <div className={`relative shrink-0 mt-0.5 ${isLive ? "p-0.5 rounded-full ring-2 ring-emerald-400 ring-offset-2 ring-offset-[var(--bg-primary)] animate-pulse" : ""}`}>
                                 <img
                                   src={isCaptain ? leadArt : avatarArt}
                                   alt={title}
@@ -1093,20 +1259,20 @@ export function ResearchExecutionPanels({
                                       本地闭环推演
                                     </span>
                                   )}
-                                  <span
-                                    className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[10.5px] font-medium border ${
-                                      isLive
-                                        ? "tint-action-green"
-                                        : "bg-[var(--bg-secondary)] border-[var(--border-primary)] text-[var(--text-secondary)]"
-                                    }`}
-                                  >
-                                    <span
-                                      className={`h-1.5 w-1.5 rounded-full ${
-                                        isLive ? "bg-[var(--accent-green)] animate-ping" : "bg-[var(--text-muted)]"
-                                      }`}
-                                    />
-                                    <span>{executionRecordStatus(sessionExec, stale)}</span>
-                                  </span>
+                                  {isLive ? (
+                                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2.5 py-0.5 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 shadow-sm animate-pulse">
+                                      <span className="relative flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                      </span>
+                                      <span>⚡ 正在全力执行中 · 活跃</span>
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[10.5px] font-medium border bg-[var(--bg-secondary)] border-[var(--border-primary)] text-[var(--text-secondary)]">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-muted)]" />
+                                      <span>{executionRecordStatus(sessionExec, stale)}</span>
+                                    </span>
+                                  )}
                                 </div>
 
                                 {/* Specific Research Duty in This Study */}
@@ -1129,6 +1295,10 @@ export function ResearchExecutionPanels({
                                   <span className="font-mono">
                                     会话 ID: {sessionExec.sessionId?.slice(0, 8) ?? sessionExec.id.slice(0, 14)}
                                   </span>
+                                  <span className="font-mono inline-flex items-center gap-1">
+                                    <Icon path={mdiClockOutline} size={0.45} />
+                                    <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {isLive ? "持续执行中" : formatTime(sessionExec.endedAt ?? sessionExec.lastActivityAt)}</span>
+                                  </span>
                                   {sessionExec.observedModel && (
                                     <span className="rounded bg-[var(--bg-secondary)] border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[var(--text-primary)]">
                                       最新观测模型：{sessionExec.observedModel}
@@ -1139,7 +1309,7 @@ export function ResearchExecutionPanels({
                               </div>
                             </div>
 
-                            <div className="shrink-0 flex items-center justify-end">
+                            <div className="shrink-0 flex items-center justify-end gap-2">
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -1154,6 +1324,18 @@ export function ResearchExecutionPanels({
                               >
                                 <Icon path={mdiOpenInNew} size={0.55} />
                                 <span>会话详情与纠偏</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCollapsedOverrides((prev) => ({ ...prev, [sessionExec.id]: false }));
+                                }}
+                                className="win11-btn px-2.5 py-1.5 text-xs text-[var(--text-secondary)] flex items-center gap-1"
+                                title="收起此 Agent 卡片"
+                              >
+                                <Icon path={mdiChevronUp} size={0.55} />
+                                <span>收起</span>
                               </button>
                             </div>
                           </div>
@@ -1189,14 +1371,18 @@ export function ResearchExecutionPanels({
                                     <div
                                       key={`${sessionExec.id}:${subGroup.roleName}`}
                                       onClick={() => onAgent(subGroup.roleObj, subLatest)}
-                                      className="win11-card-subtle cursor-pointer border-l-[3px] border-l-[var(--accent-purple)] p-3 hover:bg-[var(--bg-hover)] transition-all space-y-1.5"
+                                      className={`win11-card-subtle cursor-pointer p-3 hover:bg-[var(--bg-hover)] transition-all space-y-1.5 border-l-[3px] ${
+                                        subLive
+                                          ? "border-l-emerald-500 ring-1 ring-emerald-500/50 bg-emerald-500/5 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
+                                          : "border-l-[var(--accent-purple)]"
+                                      }`}
                                     >
                                       <div className="flex flex-wrap items-center justify-between gap-1.5">
                                         <span className="flex items-center gap-1.5 font-bold text-[12.5px] text-[var(--text-primary)]">
                                           <img
                                             src={getMemberArt(subGroup.roleName)}
                                             alt=""
-                                            className="h-5 w-5 shrink-0 object-contain"
+                                            className={`h-5 w-5 shrink-0 object-contain ${subLive ? "ring-1 ring-emerald-400 rounded-full animate-pulse" : ""}`}
                                           />
                                           <span>{getSubagentRoleDisplayTitle(subGroup.roleName)}</span>
                                         </span>
@@ -1204,15 +1390,16 @@ export function ResearchExecutionPanels({
                                           <span className="tint-action-purple rounded-full border px-2 py-0.5 font-mono text-[10px] font-bold">
                                             派发 ×{subGroup.executions.length}
                                           </span>
-                                          <span
-                                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium border ${
-                                              subLive
-                                                ? "tint-action-green"
-                                                : "bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[var(--text-secondary)]"
-                                            }`}
-                                          >
-                                            {researchStatusLabel(subLatest.status)}
-                                          </span>
+                                          {subLive ? (
+                                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/50 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
+                                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                                              <span>⚡ 执行中</span>
+                                            </span>
+                                          ) : (
+                                            <span className="rounded px-1.5 py-0.5 text-[10px] font-medium border bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[var(--text-secondary)]">
+                                              {researchStatusLabel(subLatest.status)}
+                                            </span>
+                                          )}
                                         </div>
                                       </div>
 

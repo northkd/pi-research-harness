@@ -63,6 +63,7 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
   const early = new Map<string, any>();
   const deniedCalls = new Set<string>();
   const pendingRPC = new Map<string, { off: () => void; reject: (error: Error) => void }>();
+  let autoApprove = Boolean(env.PI_RESEARCH_AUTO_APPROVE_SUPERVISION === '1' || env.PI_RESEARCH_AUTO_APPROVE_SUPERVISION === 'true' || options.autoApprove === true);
   const sessionId = () => ctx?.sessionManager.getSessionId();
   const sessionFile = () => ctx?.sessionManager.getSessionFile?.();
   const state = () => store?.getState();
@@ -280,7 +281,8 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
   };
   const parameters = {
     type: 'object', additionalProperties: false, required: ['action'], properties: {
-      action: { type: 'string', enum: ['configure', 'status', 'pause', 'resume', 'check', 'checkpoint', 'correction', 'capture', 'allow_operation', 'decision'] },
+      action: { type: 'string', enum: ['configure', 'status', 'pause', 'resume', 'check', 'checkpoint', 'correction', 'capture', 'allow_operation', 'decision', 'auto_approve'] },
+      enabled: { type: 'boolean' },
       stageId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$' }, kind: { type: 'string', enum: CHECKPOINT_KINDS },
       toolName: { type: 'string', enum: ['bash', 'bg_run'] }, operationInput: { type: 'object' },
       operationPaths: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string' } }, repair: { type: 'boolean' },
@@ -355,21 +357,36 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
       update();
       return { content: [{ type: 'text' as const, text: JSON.stringify(receipt) }], details: receipt };
     }
+    else if (params.action === 'auto_approve') {
+      if (typeof params.enabled === 'boolean') autoApprove = params.enabled;
+      else autoApprove = !autoApprove;
+      update();
+      const payload = { autoApprove };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(payload) }], details: payload };
+    }
     else if (params.action !== 'status') throw new Error('Unknown supervision action');
     update();
-    return { content: [{ type: 'text' as const, text: JSON.stringify(state()) }], details: state() };
+    const st = { ...(state() ?? {}), autoApprove };
+    return { content: [{ type: 'text' as const, text: JSON.stringify(st) }], details: st };
   };
   pi.registerTool({ name: OWN_TOOL, label: 'Mainline supervision', description: 'Proportional research mainline supervision. Direction is separate from scientific acceptance; risks, missing evidence and review failures do not freeze a project. Only grounded OFF_TRACK paths pause. capture has fixed-source UI consent; allow_operation records one human-authorized bounded local check; decision records a scoped human disposition without erasing history. Native task permissions, data/egress/resource safety and no unsupported publication remain independent. Evidence accumulates within a stage; only a genuine checkpoint (stable conceptual stageId + plan_change/scope_change/stage_complete/drift_signal) may trigger automatic review. Never checkpoint routine edits, tests, bookkeeping, capture or completion cleanup; identical stage/kind is deduplicated across sessions. Tool check only consumes existing review/checkpoints; human slash check may request one new-material review. Do not create per-turn/timestamp stage IDs.', parameters: parameters as any,
     async execute(_id: string, params: any, _signal: any, _update: any, toolCtx: any) { return act(params, toolCtx); } });
-  pi.registerCommand('mainline-supervision', { description: 'status | pause | resume | check; configure/correction via mainline_supervision tool', async handler(args: string, commandCtx: any) {
+  pi.registerCommand('mainline-supervision', { description: 'status | pause | resume | check | auto-approve [on/off]; configure/correction via mainline_supervision tool', async handler(args: string, commandCtx: any) {
     const input = args.trim() || 'status';
     let params: any = { action: input };
     const action = input.split(' ', 1)[0];
+    if (action === 'auto-approve' || action === 'auto_approve') {
+      const mode = input.slice(action.length).trim().toLowerCase();
+      const nextVal = (mode === 'on' || mode === 'true' || mode === '1') ? true : (mode === 'off' || mode === 'false' || mode === '0') ? false : !autoApprove;
+      const res = await act({ action: 'auto_approve', enabled: nextVal }, commandCtx, true);
+      commandCtx.ui.notify(`主线监督自动放行执行审批：已${nextVal ? '开启 (遇到普通需确认工具将自动放行)' : '关闭 (执行工具需逐次人工确认)'}`, 'info');
+      return;
+    }
     if (['capture', 'allow_operation', 'decision', 'checkpoint'].includes(action)) {
       try { params = { ...JSON.parse(input.slice(action.length + 1)), action }; }
       catch { commandCtx.ui.notify('capture/allow_operation/decision/checkpoint 后需提供限定参数JSON，不提供任意命令执行。', 'error'); return; }
     }
-    if (!['status', 'pause', 'resume', 'check', 'capture', 'allow_operation', 'decision', 'checkpoint'].includes(params.action)) { commandCtx.ui.notify('命令支持 status/pause/resume/check 或 capture/allow_operation/decision/checkpoint {JSON}。', 'info'); return; }
+    if (!['status', 'pause', 'resume', 'check', 'capture', 'allow_operation', 'decision', 'checkpoint', 'auto_approve'].includes(params.action)) { commandCtx.ui.notify('命令支持 status/pause/resume/check/auto-approve 或 capture/allow_operation/decision/checkpoint {JSON}。', 'info'); return; }
     const result = await act(params, commandCtx, true); commandCtx.ui.notify(result.content[0].text, 'info');
   } });
   const readyOff = pi.events.on(READY, (info: any) => {
@@ -396,6 +413,12 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     };
     const decision = operationDecision(store, s, event);
     if (!decision.allow && decision.confirmable) {
+      if (autoApprove) {
+        if (operationLeaves(event).some(needsResource) && !store.resourceGate().ok) return deny('当前资源门槛不满足，未启动新执行。');
+        capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+        ctx?.ui?.notify?.(`主线监督：已自动放宽并批准执行 [${event.toolName}]`, 'info');
+        return undefined;
+      }
       if (!ctx.hasUI) return deny(decision.reason + '（无UI，不默许；可由用户在正式通道处理。）');
       const inputDigest = digest(event.input ?? {}), callGeneration = generation;
       let snapshot: any;

@@ -79,8 +79,8 @@
     },
     {
       "path": "src/index.ts",
-      "sha256": "c5df050d868b9f427cc3c6624301e1de164718eac9cfbd625683c933683b3e70",
-      "localSourceSha256": "bbd94fa3c71c74c81bb3f85389580955d81fe0e004ff96f2eccc295997ae072a"
+      "sha256": "5b90dc480adb7c73fb3a223a7d6249f14b1fc106c7d92eff308068f70265ff4c",
+      "localSourceSha256": "5b90dc480adb7c73fb3a223a7d6249f14b1fc106c7d92eff308068f70265ff4c"
     },
     {
       "path": "src/policy.mjs",

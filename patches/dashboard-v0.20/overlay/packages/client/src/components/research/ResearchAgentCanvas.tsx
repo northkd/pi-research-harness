@@ -137,16 +137,23 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
   const parentNode = (node: CanvasNode, cluster: CanvasSessionCluster, inFocus: boolean) => {
     const row = cluster.sessionExec;
     const summary = (row.prompt ?? row.summary ?? "").replace(/\s+/g, " ").trim();
+    const liveNode = isLive(row.status);
     return (
       <button
         key={node.id} type="button" data-testid="canvas-session-node"
         aria-label={inFocus ? `查看 ${cluster.title} 会话详情` : `聚焦${cluster.title}`}
         onClick={() => { if (inFocus) onAgent(cluster.roleObj, row); else { setRolePage(0); setFocusedId(row.id); } }}
         style={nodeStyle(node)}
-        className="win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] border-l-[var(--accent-primary)] p-3 text-left shadow-sm"
+        className={`win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
+          liveNode
+            ? "ring-2 ring-emerald-500 shadow-[0_0_16px_rgba(16,185,129,0.35)] border-l-emerald-500 bg-gradient-to-br from-emerald-500/10 to-transparent"
+            : "border-l-[var(--accent-primary)]"
+        }`}
       >
         <span className="flex min-w-0 items-center gap-2">
-          <img src={cluster.isCaptain ? leadArt : getMemberArt(cluster.title, false)} alt="" className="h-8 w-8 shrink-0 object-contain" />
+          <div className={`relative shrink-0 ${liveNode ? "ring-2 ring-emerald-400 rounded-full animate-pulse" : ""}`}>
+            <img src={cluster.isCaptain ? leadArt : getMemberArt(cluster.title, false)} alt="" className="h-8 w-8 shrink-0 object-contain" />
+          </div>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[12px] font-bold text-[var(--text-primary)]" title={cluster.title}>{cluster.title}</span>
             <span className="mt-0.5 block truncate text-[10px] text-[var(--text-tertiary)]">{cluster.isCaptain ? "主控入口" : "协同会话"} · {row.sessionId?.slice(0, 8) ?? row.id.slice(0, 12)}</span>
@@ -154,7 +161,17 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
         </span>
         {summary && <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={summary}>{summary}</span>}
         <span className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
-          <span className="inline-flex min-w-0 items-center gap-1 truncate"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isLive(row.status) ? "bg-[var(--accent-green)]" : "bg-[var(--text-tertiary)]"}`} />{statusLabel(row.status)}{stale && row.source === "observation" ? " · 观测已过期" : ""}</span>
+          {liveNode ? (
+            <span className="inline-flex min-w-0 items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span>⚡ 执行中</span>
+            </span>
+          ) : (
+            <span className="inline-flex min-w-0 items-center gap-1 truncate"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]" />{statusLabel(row.status)}{stale && row.source === "observation" ? " · 观测已过期" : ""}</span>
+          )}
           <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-2 py-1 font-semibold text-[var(--accent-text)]">{cluster.childSubs.length} 次派发</span>
         </span>
       </button>
@@ -216,17 +233,29 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
             const group = visibleRoles[index];
             const current = group.latest;
             const summary = (current.prompt ?? current.summary ?? "").replace(/\s+/g, " ").trim();
+            const roleLive = isLive(current.status);
             return (
               <button key={node.id} type="button" data-testid="canvas-role-node" aria-label={`查看 ${roleLabel(group.roleName)} 详情`}
                 onClick={() => onAgent(group.roleObj, current)} style={nodeStyle(node)}
-                className="win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] border-l-[var(--accent-purple)] p-3 text-left shadow-sm">
+                className={`win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
+                  roleLive
+                    ? "border-l-emerald-500 ring-2 ring-emerald-500/70 shadow-[0_0_14px_rgba(16,185,129,0.3)] bg-gradient-to-br from-emerald-500/10 to-transparent"
+                    : "border-l-[var(--accent-purple)]"
+                }`}>
                 <span className="flex min-w-0 items-center gap-2">
-                  <img src={getMemberArt(group.roleName, false)} alt="" className="h-7 w-7 shrink-0 object-contain" />
+                  <img src={getMemberArt(group.roleName, false)} alt="" className={`h-7 w-7 shrink-0 object-contain ${roleLive ? "ring-1 ring-emerald-400 rounded-full animate-pulse" : ""}`} />
                   <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-[var(--text-primary)]" title={roleLabel(group.roleName)}>{roleLabel(group.roleName)}</span>
                   <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--accent-text)]">×{group.executions.length}</span>
                 </span>
                 {summary && <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={summary}>{summary}</span>}
-                <span className="truncate text-[10px] text-[var(--text-secondary)]">{statusLabel(current.status)}{stale && current.source === "observation" ? " · 观测已过期" : ""}</span>
+                {roleLive ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                    <span>⚡ 执行中</span>
+                  </span>
+                ) : (
+                  <span className="truncate text-[10px] text-[var(--text-secondary)]">{statusLabel(current.status)}{stale && current.source === "observation" ? " · 观测已过期" : ""}</span>
+                )}
               </button>
             );
           })}

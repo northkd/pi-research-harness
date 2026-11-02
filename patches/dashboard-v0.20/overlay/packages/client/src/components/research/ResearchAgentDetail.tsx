@@ -52,6 +52,35 @@ export function executionRecordStatus(row: ResearchExecution, stale = false): st
 export function roleLabel(name: string): string { return name.replace(/^research-/, ""); }
 export function instanceKey(instance: ResearchAgentInstance): string { return JSON.stringify([instance.run.runId, instance.step.key]); }
 
+export function formatTimestamp(value?: string | number | null): string {
+  if (!value) return "未记录";
+  const ms = typeof value === "number" ? value : Date.parse(value);
+  if (!Number.isFinite(ms)) return String(value);
+  return new Date(ms).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+export function formatDuration(start?: string | null, end?: string | null): string | null {
+  if (!start || !end) return null;
+  const t1 = Date.parse(start), t2 = Date.parse(end);
+  if (!Number.isFinite(t1) || !Number.isFinite(t2) || t2 < t1) return null;
+  const sec = Math.round((t2 - t1) / 1000);
+  if (sec < 60) return `${sec} 秒`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return `${min} 分 ${remSec} 秒`;
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return `${hr} 小时 ${remMin} 分`;
+}
+
 import { getResearchProjectCharter } from "./research-presentation.js";
 export { getResearchProjectCharter } from "./research-presentation.js";
 
@@ -110,16 +139,32 @@ export function ResearchAgentDetail({
 }) {
   const apiBase = useApiBase();
   const [, navigate] = useLocation();
-  const [selectedInstance, setSelectedInstance] = useState<string | null>(initialInstance ?? null);
-  const activeInstance = instances.find(inst => instanceKey(inst) === selectedInstance);
+
+  // 轮次与实例均按照创建时间由晚到早（降序）排列
+  const sortedExecutions = [...executions].sort((a, b) => {
+    const timeA = a.startedAt ?? a.lastActivityAt ?? a.observedAt ?? "";
+    const timeB = b.startedAt ?? b.lastActivityAt ?? b.observedAt ?? "";
+    return timeB.localeCompare(timeA);
+  });
+
+  const sortedInstances = [...instances].sort((a, b) => {
+    const timeA = a.step.startedAt ?? a.step.lastActivityAt ?? a.run.registeredAt ?? "";
+    const timeB = b.step.startedAt ?? b.step.lastActivityAt ?? b.run.registeredAt ?? "";
+    return timeB.localeCompare(timeA);
+  });
+
+  const [selectedInstance, setSelectedInstance] = useState<string | null>(
+    initialInstance ?? (sortedInstances[0] ? instanceKey(sortedInstances[0]) : null)
+  );
+  const activeInstance = sortedInstances.find(inst => instanceKey(inst) === selectedInstance) ?? sortedInstances[0];
   const subagents = useSessionSubagents(activeInstance?.run.parentSessionId);
   const hasResolvedChildConversation = Boolean(
     activeInstance?.step.childRunId &&
     activeInstance?.run.parentSessionId &&
     subagents.has(activeInstance.step.childRunId)
   );
-  const [selectedExecution, setSelectedExecution] = useState(initialExecution ?? (executions[0]?.id || null));
-  const execution = executions.find(row => row.id === selectedExecution) ?? executions[0];
+  const [selectedExecution, setSelectedExecution] = useState(initialExecution ?? (sortedExecutions[0]?.id || null));
+  const execution = sortedExecutions.find(row => row.id === selectedExecution) ?? sortedExecutions[0];
 
   // User real-time corrections state
   const [corrections, setCorrections] = useState<UserCorrection[]>([]);
@@ -143,6 +188,11 @@ export function ResearchAgentDetail({
   // A lead is identified only by an explicitly named role, not inferred from history.
   const isCaptain = execution?.kind === "pi-session" && role.name === "主控 Agent 会话";
   const isLive = execution ? ["running", "streaming", "started"].includes(execution.status) : false;
+
+  // 开始与结束时间计算
+  const startTime = execution?.startedAt ?? activeInstance?.step.startedAt;
+  const endTime = isLive ? null : (execution?.endedAt ?? activeInstance?.step.endedAt ?? execution?.lastActivityAt);
+  const durationText = formatDuration(startTime, endTime);
 
   const displayTitle =
     execution?.kind === "native-subagent" || role.name.startsWith("research-")
@@ -304,6 +354,22 @@ export function ResearchAgentDetail({
                 <span>模型：<strong className="font-mono text-[var(--text-primary)] font-semibold">{execution?.observedModel ?? role.model ?? "未观测模型"}</strong></span>
                 <span>•</span>
                 <span>阶段：<strong className="text-[var(--text-primary)] font-semibold">{execution?.stage ?? "当前活跃阶段"}</strong></span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1 font-mono">
+                  <Icon path={mdiClockOutline} size={0.5} className="text-[var(--accent-primary)]" />
+                  <span>开始: <strong className="text-[var(--text-primary)] font-semibold">{formatTimestamp(startTime)}</strong></span>
+                </span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1 font-mono">
+                  <Icon path={mdiClockOutline} size={0.5} className="text-[var(--accent-primary)]" />
+                  <span>结束: <strong className="text-[var(--text-primary)] font-semibold">{isLive ? "持续执行中" : formatTimestamp(endTime)}</strong></span>
+                </span>
+                {durationText && (
+                  <>
+                    <span>•</span>
+                    <span>耗时: <strong className="text-[var(--accent-text)] font-semibold">{durationText}</strong></span>
+                  </>
+                )}
                 {parentMultiAgent && (
                   <>
                     <span>•</span>
@@ -318,16 +384,17 @@ export function ResearchAgentDetail({
 
           <div className="flex items-center gap-3 shrink-0">
             {/* Multiple executions selector (capped to 8 pills to prevent header crowding) */}
-            {executions.length > 1 && (
+            {sortedExecutions.length > 1 && (
               <div className="win11-card-subtle hidden sm:flex items-center gap-1 p-1 text-xs">
                 <span className="text-[var(--text-tertiary)] px-1.5 font-medium">
-                  执行轮次 ({executions.length}):
+                  执行轮次 ({sortedExecutions.length}):
                 </span>
-                {executions.slice(0, 8).map((ex, idx) => (
+                {sortedExecutions.slice(0, 8).map((ex, idx) => (
                   <button
                     key={ex.id}
                     type="button"
                     onClick={() => setSelectedExecution(ex.id)}
+                    title={`开始: ${formatTimestamp(ex.startedAt)} · 状态: ${researchStatusLabel(ex.status)}`}
                     className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
                       execution?.id === ex.id
                         ? "bg-[var(--accent-solid)] text-white font-bold shadow-xs"
@@ -337,16 +404,16 @@ export function ResearchAgentDetail({
                     #{idx + 1}
                   </button>
                 ))}
-                {executions.length > 8 && (
+                {sortedExecutions.length > 8 && (
                   <select
                     aria-label="选择更多执行轮次"
                     value={execution?.id ?? ""}
                     onChange={(e) => setSelectedExecution(e.target.value)}
                     className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]"
                   >
-                    {executions.map((ex, idx) => (
+                    {sortedExecutions.map((ex, idx) => (
                       <option key={ex.id} value={ex.id}>
-                        #{idx + 1} · {ex.observedModel?.split("/").pop() ?? ex.id.slice(0, 8)}
+                        #{idx + 1} · {ex.observedModel?.split("/").pop() ?? ex.id.slice(0, 8)} ({formatTimestamp(ex.startedAt)})
                       </option>
                     ))}
                   </select>
@@ -518,6 +585,33 @@ export function ResearchAgentDetail({
                     {isCaptain ? "主控指挥" : execution?.kind === "native-subagent" ? "Subagent" : "Multi-Agent"}
                   </div>
                 </div>
+
+                <div className="win11-card-subtle p-2.5">
+                  <div className="text-[10.5px] text-[var(--text-tertiary)] font-medium flex items-center gap-1">
+                    <Icon path={mdiClockOutline} size={0.45} />
+                    <span>开始时间</span>
+                  </div>
+                  <div className="mt-1 font-mono text-[11px] font-medium text-[var(--text-primary)] truncate" title={formatTimestamp(startTime)}>
+                    {formatTimestamp(startTime)}
+                  </div>
+                </div>
+
+                <div className="win11-card-subtle p-2.5">
+                  <div className="text-[10.5px] text-[var(--text-tertiary)] font-medium flex items-center gap-1">
+                    <Icon path={mdiClockOutline} size={0.45} />
+                    <span>结束时间</span>
+                  </div>
+                  <div className="mt-1 font-mono text-[11px] font-medium text-[var(--text-primary)] truncate" title={isLive ? "持续执行中" : formatTimestamp(endTime)}>
+                    {isLive ? (
+                      <span className="inline-flex items-center gap-1 text-[var(--accent-green)] font-semibold">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-green)] animate-ping" />
+                        <span>持续执行中</span>
+                      </span>
+                    ) : (
+                      formatTimestamp(endTime)
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Model & Config row */}
@@ -670,7 +764,7 @@ export function ResearchAgentDetail({
                   {promptText && <CopyButton text={promptText} />}
                 </div>
                 
-                <div className="win11-card w-full max-w-4xl border-l-4 border-l-[var(--accent-primary)] p-5 text-[14px] leading-relaxed text-[var(--text-primary)] break-words whitespace-pre-wrap font-sans">
+                <div className="win11-card w-full max-w-4xl border-l-4 border-l-[var(--accent-primary)] p-5 text-[14px] leading-relaxed text-[var(--text-primary)] break-words whitespace-pre-wrap font-sans min-w-0 max-w-full overflow-hidden [overflow-wrap:anywhere]">
                   {promptText || "（初始直接调起会话，未指定独立 Prompt）"}
                 </div>
               </div>
@@ -715,7 +809,7 @@ export function ResearchAgentDetail({
                     {outputText && <CopyButton text={outputText} />}
                   </div>
 
-                  <div className="win11-card p-6 text-[14px] leading-relaxed text-[var(--text-primary)] space-y-4">
+                  <div className="win11-card p-6 text-[14px] leading-relaxed text-[var(--text-primary)] space-y-4 min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere]">
                     {errorText && (
                       <div className="mb-3 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-rose-300">
                         <div className="flex items-center gap-1.5 font-bold text-rose-400 text-xs">
@@ -727,7 +821,7 @@ export function ResearchAgentDetail({
                     )}
 
                     {outputText ? (
-                      <div className="prose prose-sm dark:prose-invert max-w-none [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-[var(--border-secondary)] [&_th]:bg-[var(--bg-tertiary)] [&_th]:p-3 [&_th]:text-left [&_th]:font-semibold [&_td]:border [&_td]:border-[var(--border-secondary)] [&_td]:p-3 [&_pre]:bg-[var(--bg-primary)] [&_pre]:p-4 [&_pre]:rounded-xl [&_code]:font-mono">
+                      <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-[var(--border-secondary)] [&_th]:bg-[var(--bg-tertiary)] [&_th]:p-3 [&_th]:text-left [&_th]:font-semibold [&_td]:border [&_td]:border-[var(--border-secondary)] [&_td]:p-3 [&_pre]:bg-[var(--bg-primary)] [&_pre]:p-4 [&_pre]:rounded-xl [&_code]:font-mono">
                         <MarkdownContent content={outputText} />
                       </div>
                     ) : recentOutputs.length > 0 ? (

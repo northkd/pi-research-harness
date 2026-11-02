@@ -380,9 +380,9 @@ function MessageBubble({
   }, [content]);
 
   return (
-    <div className={className}>
+    <div className={`min-w-0 max-w-full overflow-hidden break-words ${className}`}>
       {content ? (
-        <div ref={contentRef}>
+        <div ref={contentRef} className="min-w-0 max-w-full overflow-hidden break-words">
           <MarkdownContent content={content} context={context} />
         </div>
       ) : null}
@@ -1036,9 +1036,9 @@ const ChatViewInner = forwardRef<ChatViewHandle, Props>(function ChatView({ sess
   // Pause the streaming bubble's glow/shimmer when it scrolls off-screen.
   // See change: reduce-chat-render-cpu-umbrella (Phase 1, task 2.5).
   const streamFxRef = useFxVisibility<HTMLDivElement>();
-  const bubbleMax = isMobile ? "max-w-[95%]" : "max-w-[80%]";
+  const bubbleMax = isMobile ? "max-w-[95%] min-w-0 break-words" : "max-w-[80%] min-w-0 break-words";
   /** Force wide when message contains a mermaid diagram */
-  const bubbleWide = isMobile ? "w-[95%]" : "w-[95%]";
+  const bubbleWide = isMobile ? "w-[95%] min-w-0 break-words" : "w-[95%] min-w-0 break-words";
 
   // Group consecutive repeated tool calls for cleaner display.
   // Also drop user messages flagged `retriedFrom` (manual Retry button
