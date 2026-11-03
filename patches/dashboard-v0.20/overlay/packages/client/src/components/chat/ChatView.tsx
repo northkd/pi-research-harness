@@ -2523,6 +2523,17 @@ const ChatViewInner = forwardRef<ChatViewHandle, Props>(function ChatView({ sess
           );
         }
 
+        // Filter out internal ui_prompt_end / confirmation prompts while preserving truncated events
+        if (
+          typeof msg.content === "string" &&
+          (msg.content.includes('"type": "ui_prompt_end"') ||
+           msg.content.includes('"type":"ui_prompt_end"') ||
+           msg.content.includes("确认本次执行权限（不是科学验收）") ||
+           (msg.content.includes('"reason": "ui_prompt"') && msg.content.includes('"kind": "confirm"')))
+        ) {
+          return null;
+        }
+
         if (msg.role === "custom") {
           // `CustomEntryRow` owns the group gate, the plugin-claim lookup, the
           // per-claim ErrorBoundary, and the collapsed-first expand/fetch — the

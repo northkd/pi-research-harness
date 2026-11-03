@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { constants as fsConstants } from "node:fs";
+import { existsSync, realpathSync, constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -148,19 +148,6 @@ function requireAgentConsent(consent: ResWorkflowConsent): void {
 }
 
 export async function resolveInstalledResearchLoopRoot(): Promise<string> {
-  // The harness passes an explicit trusted installation path; HTTP requests
-  // and project contents cannot choose this backend. Invalid overrides fail closed.
-  const configured = process.env.PI_RESEARCH_LOOP_ROOT;
-  if (configured !== undefined) {
-    try {
-      if (!path.isAbsolute(configured)) throw new Error("absolute path required");
-      const info = await lstat(configured);
-      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("directory required");
-      const manifest = JSON.parse((await readBoundedRegular(path.join(configured, "package.json"), 16384)).text);
-      if (manifest.name !== "pi-research-loop-local") throw new Error("wrong package");
-      return await realpath(configured);
-    } catch { throw new ResWorkflowError(503, "research-backend-unavailable"); }
-  }
   let ancestor = path.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 12; depth++) {
     const candidate = path.join(ancestor, "research-loop");
@@ -179,6 +166,7 @@ export async function resolveInstalledResearchLoopRoot(): Promise<string> {
 }
 
 export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
+  deps = { ...deps, privateDir: existsSync(deps.privateDir) ? realpathSync(deps.privateDir) : deps.privateDir };
   const running = new Map<string, { controller: AbortController; operation: PrivateOperation }>();
   const confirming = new Set<string>();
   const locks = new Map<string, Promise<unknown>>();

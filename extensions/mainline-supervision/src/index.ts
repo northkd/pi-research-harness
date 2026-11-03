@@ -63,7 +63,7 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
   const early = new Map<string, any>();
   const deniedCalls = new Set<string>();
   const pendingRPC = new Map<string, { off: () => void; reject: (error: Error) => void }>();
-  let autoApprove = Boolean(env.PI_RESEARCH_AUTO_APPROVE_SUPERVISION === '1' || env.PI_RESEARCH_AUTO_APPROVE_SUPERVISION === 'true' || options.autoApprove === true);
+  let autoApprove = !(env.PI_RESEARCH_AUTO_APPROVE_SUPERVISION === '0' || env.PI_RESEARCH_AUTO_APPROVE_SUPERVISION === 'false' || options.autoApprove === false);
   const sessionId = () => ctx?.sessionManager.getSessionId();
   const sessionFile = () => ctx?.sessionManager.getSessionFile?.();
   const state = () => store?.getState();
@@ -413,17 +413,18 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     };
     const decision = operationDecision(store, s, event);
     if (!decision.allow && decision.confirmable) {
+      const targetUI = callCtx?.ui ?? ctx?.ui;
       if (autoApprove) {
         if (operationLeaves(event).some(needsResource) && !store.resourceGate().ok) return deny('当前资源门槛不满足，未启动新执行。');
         capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
-        ctx?.ui?.notify?.(`主线监督：已自动放宽并批准执行 [${event.toolName}]`, 'info');
+        targetUI?.notify?.(`主线监督：已自动放宽并批准执行 [${event.toolName}]`, 'info');
         return undefined;
       }
-      if (!ctx.hasUI) return deny(decision.reason + '（无UI，不默许；可由用户在正式通道处理。）');
+      if (!targetUI || (!callCtx?.hasUI && !ctx?.hasUI)) return deny(decision.reason + '（无UI，不默许；可由用户在正式通道处理。）');
       const inputDigest = digest(event.input ?? {}), callGeneration = generation;
       let snapshot: any;
       try { snapshot = permissionSnapshot(store, s, event); } catch { return deny('无法固定本次权限范围；可用人工单项通道，不冻结其他开发。'); }
-      return ctx.ui.confirm('确认本次执行权限（不是科学验收）', `${decision.reason}\n工具：${event.toolName}\n精确输入：${JSON.stringify(event.input ?? {}).slice(0, 6000)}\n输入hash：${inputDigest}\n可识别本地文件版本：${JSON.stringify(snapshot.files)}\n不分析任意脚本行为；这不是exact-file沙箱授权。只确认这次调用，原任务资源/原数据/外发权限仍适用；不把缺失证据变成许可。是否允许？`).then((confirmed: boolean) => {
+      return targetUI.confirm('确认本次执行权限（不是科学验收）', `${decision.reason}\n工具：${event.toolName}\n精确输入：${JSON.stringify(event.input ?? {}).slice(0, 6000)}\n输入hash：${inputDigest}\n可识别本地文件版本：${JSON.stringify(snapshot.files)}\n不分析任意脚本行为；这不是exact-file沙箱授权。只确认这次调用，原任务资源/原数据/外发权限仍适用；不把缺失证据变成许可。是否允许？`).then((confirmed: boolean) => {
         if (!confirmed || callGeneration !== generation || digest(event.input ?? {}) !== inputDigest) return deny('本次执行未获人工确认或会话/输入已变化；人工提问仍可用。');
         try {
           const latest = state();

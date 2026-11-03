@@ -113,13 +113,62 @@ export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.home
       scope: 'native-research-workflow',
     };
   } catch { /* Unavailable budget is unknown, never fabricated as zero or unlimited. */ }
-  return { sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, budget };
+
+  let memory = {
+    objective: state.charter?.objective,
+    successCriteria: state.charter?.successCriteria ?? [],
+    claimsCount: Array.isArray(state.claims) ? state.claims.length : 0,
+    acceptedClaims: Array.isArray(state.claims) ? state.claims.filter(c => c.acceptance?.verdict === 'accepted').map(c => c.statement).slice(0, 3) : [],
+    recentFindings: '',
+  };
+  try {
+    const ledgerFile = path.join(cwd, 'ledger.jsonl');
+    if (fs.existsSync(ledgerFile)) {
+      const lines = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').filter(Boolean);
+      const recent = lines.slice(-3).map(l => {
+        try {
+          const item = JSON.parse(l);
+          return `- [${item.kind || '尝试'}] ${item.action || ''}: ${item.observed || item.lesson || ''} (信号: ${item.signal || '未知'})`;
+        } catch { return ''; }
+      }).filter(Boolean);
+      memory.recentFindings = recent.join('\n');
+    }
+  } catch {}
+
+  return { sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, budget, memory };
 }
 
-export function buildWorkbenchRecordProtocol(context) {
+export function buildWorkbenchRecordProtocol(context, memory = {}) {
+  const mem = memory.objective ? [
+    '',
+    '【科研工作流深度记忆与上下文注入 (Research Memory)】',
+    `当前研究核心目标：${memory.objective}`,
+    memory.successCriteria?.length ? `验收成功准则：\n${memory.successCriteria.map(s => '  - ' + s).join('\n')}` : '',
+    `当前阶段已沉淀主张：${memory.claimsCount} 条${memory.acceptedClaims?.length ? '（含已通过内部验收主张：' + memory.acceptedClaims.join('；') + '）' : ''}`,
+    memory.recentFindings ? `最新尝试记录与观测证据：\n${memory.recentFindings}` : '',
+  ].filter(Boolean).join('\n') : '';
+
   return [
     'This Pi session is joined to the confirmed res-workflow research workbench.',
     `Verified current record context: ${JSON.stringify(context)}`,
+    mem,
+    '',
+    '【主 Agent 上下文减负与 Multi-Agent / Subagent 协同准则 (CRITICAL: Context Management)】',
+    '1. 角色定位与主上下文保护：您是本研究的主控/核心会话 (Lead Agent)。请务必严格控制主会话的上下文体积，严禁在主会话中直接执行冗长代码运算、解析几百上千行控制台日志、或通篇阅读几十页长文献。如果所有繁重工作都在主会话中直接完成，会导致上下文急剧膨胀并频繁触发上下文压缩。',
+    '2. 专职 Subagent 任务派发：当需要文献综述、深度检索、数学/物理数值拟合、跨模型对抗审查、代码重构、数据清洗等专门任务时，请立即调用 `subagent` 工具派发专职微任务！',
+    '   - 派发工具名称：`subagent` (以 agentName + prompt 调用，不要误以为没有工具或误用)。',
+    '   - 常用专职角色：research-literature (文献调研与交叉对比), research-numerics (数值计算与拟合), research-critic (反例寻找与对抗审查), research-theory (机理推导), research-mainline-supervisor (主线进度监督), research-ssh (远程集群作业) 等。',
+    '   - 协同机制：Subagent 在独立沙箱中执行，只向主会话返回精炼结论与证据路径，保持主会话上下文始终清爽高效！',
+    '',
+    '【工作流五大阶段自动识别与推进】',
+    '阶段推进准则：',
+    '- 1-idea (探索与构思)：文献调研、方案发散、科研问题收窄；',
+    '- 2-experiment (实验与验证)：可判定实验设计、数值模拟、DFT/AIMD 运行与原始数据产出；',
+    '- 3-review (评审与自检)：跨模型族交叉对抗评审、假收敛排查、反例寻找；',
+    '- 4-summary (主张与闭环)：主张与实验证据逐条核对、边界确认；',
+    '- 5-writing (撰写与定稿)：论文撰写、引用真实性审计、产物打包。',
+    '当您检测到对话与任务已进入对应阶段时，请及时调用 research_loop action="stage" 推进阶段状态。',
+    '',
     'Keep the workbench synchronized through the existing research_loop tool while doing the user-authorized research. This section does not authorize starting or restarting research, replacing the charter, raising budgets, installing software, or publishing.',
     'Before completing a turn that actually finishes a meaningful research attempt, call research_loop action="log" with a stable attemptId, expectedCharterHash equal to this context charterHash, the actionText, kind, expected, observed, lesson, signal and project-relative evidence paths. Reuse the same attemptId only to retry the same already-completed attempt. Do not count every tool call, file read, status query or model response as a scientific attempt.',
     'Record an actual stage change with action="stage". Do not select a stage merely because the dashboard has a template for it. Use action="narrow" only for an explicit evidence-backed narrowing decision.',
@@ -141,8 +190,9 @@ export function registerWorkbenchContext(pi, options = {}) {
     try {
       const context = readWorkbenchRecordContext(ctx, options);
       if (!context) return undefined;
+      const { memory, ...restContext } = context;
       if (!object(opts.sections)) opts.sections = {};
-      opts.sections[WORKBENCH_CONTEXT_SECTION] = buildWorkbenchRecordProtocol(context);
+      opts.sections[WORKBENCH_CONTEXT_SECTION] = buildWorkbenchRecordProtocol(restContext, memory);
     } catch { /* Missing, revoked, changed or partially written records do not abort Pi. */ }
     return undefined;
   });

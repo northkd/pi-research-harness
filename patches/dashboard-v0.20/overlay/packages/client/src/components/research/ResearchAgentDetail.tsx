@@ -21,6 +21,7 @@ import {
   mdiOpenInNew,
   mdiInformationOutline,
   mdiTagOutline,
+  mdiLayersOutline,
 } from "@mdi/js";
 import { Icon } from "@mdi/react";
 import { useApiBase } from "../../lib/api/api-context.js";
@@ -383,41 +384,13 @@ export function ResearchAgentDetail({
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            {/* Multiple executions selector (capped to 8 pills to prevent header crowding) */}
+            {/* Round info badge without redundant selector pills (selected from outer stacked cards) */}
             {sortedExecutions.length > 1 && (
-              <div className="win11-card-subtle hidden sm:flex items-center gap-1 p-1 text-xs">
-                <span className="text-[var(--text-tertiary)] px-1.5 font-medium">
-                  执行轮次 ({sortedExecutions.length}):
+              <div className="win11-card-subtle flex items-center gap-1.5 px-3 py-1 text-xs">
+                <Icon path={mdiLayersOutline} size={0.5} className="text-[var(--accent-purple)]" />
+                <span className="font-semibold text-[var(--text-secondary)]">
+                  当前查看：第 {Math.max(1, sortedExecutions.length - sortedExecutions.findIndex(ex => ex.id === execution?.id))} 轮执行 / 共 {sortedExecutions.length} 轮
                 </span>
-                {sortedExecutions.slice(0, 8).map((ex, idx) => (
-                  <button
-                    key={ex.id}
-                    type="button"
-                    onClick={() => setSelectedExecution(ex.id)}
-                    title={`开始: ${formatTimestamp(ex.startedAt)} · 状态: ${researchStatusLabel(ex.status)}`}
-                    className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
-                      execution?.id === ex.id
-                        ? "bg-[var(--accent-solid)] text-white font-bold shadow-xs"
-                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-                    }`}
-                  >
-                    #{idx + 1}
-                  </button>
-                ))}
-                {sortedExecutions.length > 8 && (
-                  <select
-                    aria-label="选择更多执行轮次"
-                    value={execution?.id ?? ""}
-                    onChange={(e) => setSelectedExecution(e.target.value)}
-                    className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]"
-                  >
-                    {sortedExecutions.map((ex, idx) => (
-                      <option key={ex.id} value={ex.id}>
-                        #{idx + 1} · {ex.observedModel?.split("/").pop() ?? ex.id.slice(0, 8)} ({formatTimestamp(ex.startedAt)})
-                      </option>
-                    ))}
-                  </select>
-                )}
               </div>
             )}
             <button

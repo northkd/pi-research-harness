@@ -79,8 +79,8 @@
     },
     {
       "path": "src/index.ts",
-      "sha256": "5b90dc480adb7c73fb3a223a7d6249f14b1fc106c7d92eff308068f70265ff4c",
-      "localSourceSha256": "5b90dc480adb7c73fb3a223a7d6249f14b1fc106c7d92eff308068f70265ff4c"
+      "sha256": "9f234eb5f932d4d518de7b796a9a2db556dc2bf48ca53df6a8569fa915fc5d5a",
+      "localSourceSha256": "9f234eb5f932d4d518de7b796a9a2db556dc2bf48ca53df6a8569fa915fc5d5a"
     },
     {
       "path": "src/policy.mjs",

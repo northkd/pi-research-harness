@@ -448,7 +448,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/chat/ChatView.tsx": {
-      "sha256": "569dcd06f5f965535631d433c9f4547ee29b000ca21e3b186dfeed6c0007da46",
+      "sha256": "561a4b29a168aea333e6c9c3dd71c57d924286a96cac8b993fc00ccd48d12b25",
       "baseBlob": "80238c70b9c665e4a5b0a9cd0594a683b0300d64"
     },
     "packages/client/src/components/chat/ChatViewMenu.tsx": {
@@ -596,11 +596,11 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchAgentCanvas.tsx": {
-      "sha256": "f0ff17ad4e350f195103a8f17ca259bca99f80666becc47563d4559228362462",
+      "sha256": "735508262c25673e02bb717b2acd85dce4d733f179bd6c62a6a0ed3f2926dc43",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchAgentDetail.tsx": {
-      "sha256": "6cff6fcca40f00dbf8bbde20bf3a226546280686552baae25d6429d4bec81a21",
+      "sha256": "e5fea369d31f47e877f763b2d1d640e841babccb6761fbd29943c6d1dabd1798",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchBudgetControls.tsx": {
@@ -612,7 +612,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchExecutionPanels.tsx": {
-      "sha256": "02a3ad39c1f5dd97f3f98cc36440c78bf6c078f151a26f876a6dd7638f6c3803",
+      "sha256": "3c3a005c283875564361a632b6fd507b535f9d952abf120c0f5fe8bd3f7f4d82",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchOverviewAndBudget.tsx": {

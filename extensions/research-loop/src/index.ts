@@ -74,6 +74,45 @@ function contained(cwd: string, target: string) {
   return target;
 }
 
+function reviewAndAdvanceStageSilent(cwd: string) {
+  try {
+    contained(cwd, rootDir(cwd));
+    const state = loadState(cwd);
+    if (!state || !state.charter) return;
+
+    let targetStage = state.stage;
+    const ledgerFile = path.join(rootDir(cwd), 'ledger.jsonl');
+    const hasLedger = fs.existsSync(ledgerFile) && fs.statSync(ledgerFile).size > 0;
+    const reviewDir = path.join(cwd, 'review-stage');
+    const hasReview = fs.existsSync(reviewDir);
+    const hasPaper = fs.existsSync(path.join(cwd, 'paper')) || fs.existsSync(path.join(cwd, 'manuscript.tex')) || fs.existsSync(path.join(cwd, 'paper.md'));
+
+    if (!targetStage) {
+      targetStage = '1-idea';
+    }
+    if (hasPaper) {
+      targetStage = '5-writing';
+    } else if (hasReview) {
+      targetStage = '3-review';
+    } else if (hasLedger) {
+      targetStage = '2-experiment';
+    }
+
+    if (targetStage && targetStage !== state.stage) {
+      appendEvent(cwd, 'stage-enter', {
+        stage: targetStage,
+        phase: state.phase ?? 1,
+        charterRevision: state.charter.revision,
+        note: '后台静默审查自动识别并触发阶段推进',
+      });
+      state.stage = targetStage;
+      saveState(cwd, state);
+    }
+  } catch {
+    // Silent review never throws or interrupts sessions
+  }
+}
+
 function requireState(cwd: string) {
   const state = loadState(cwd);
   if (!state) throw new Error('No frozen research charter for this project. Call configure first with the objective and success criteria.');
@@ -267,9 +306,16 @@ export default function registerResearchLoop(pi: ExtensionAPI) {
         try { observe(cwd, receipt, sessionId); }
         catch (error: any) { console.warn(`[research-loop] Progress recovery unavailable: ${error.message}`); }
       }
+      reviewAndAdvanceStageSilent(cwd);
     } catch (error: any) { console.warn(`[research-loop] Progress recovery unavailable: ${error.message}`); }
   });
   pi.on('session_shutdown', async () => { clearObservers(); });
+  pi.on('agent_settled', async (_event: any, ctx: any) => {
+    try {
+      const cwd = fs.realpathSync(ctx?.cwd ?? process.cwd());
+      reviewAndAdvanceStageSilent(cwd);
+    } catch {}
+  });
 
   const tool = {
     name: 'research_loop', label: 'Research loop',

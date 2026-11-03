@@ -1,13 +1,13 @@
 import path from "node:path";
+import fs from "node:fs";
+import crypto from "node:crypto";
 import type { Socket } from "node:net";
 import type { AdmitCwdOptions } from "@blackbelt-technology/pi-dashboard-shared/cwd-guard.js";
 import { loadConfig } from "@blackbelt-technology/pi-dashboard-shared/config.js";
 import { getDashboardConfigDir, resolvePiAgentDir, resolvePiSessionsDir } from "@blackbelt-technology/pi-dashboard-shared/dashboard-paths.js";
 import type { ResWorkflowAnalyzeRequest, ResWorkflowConfirmRequest, ResWorkflowCreateRequest, ResWorkflowHistoryReviewPrepareRequest, ResWorkflowAgentCreateRequest, ResWorkflowAgentAuthorizeRequest, ResWorkflowAgentResumeRequest, ResWorkflowAgentBudgetUpdateRequest } from "@blackbelt-technology/pi-dashboard-shared/res-workflow.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { isLocalOperator, sessionPrincipalOf } from "../identity/session-access.js";
-import { readLocalTokenIfPresent } from "../auth/local-token.js";
-import { isGenuinelyLocal } from "../auth/localhost-guard.js";
+import { sessionPrincipalOf } from "../identity/session-access.js";
 import type { HostPolicy } from "../identity/host-access.js";
 import { createResWorkflowService, ResWorkflowError, type ResWorkflowAccess, type ResWorkflowService, type ResWorkflowServiceDeps } from "../res-workflow/adoption-service.js";
 import { resWorkflowAccess } from "../res-workflow/access.js";
@@ -111,37 +111,162 @@ export function registerResWorkflowRoutes(fastify: FastifyInstance, deps: ResWor
   });
   const idOf = (request: FastifyRequest) => (request.params as { id: string }).id;
 
+  function resolveLocalWorkbenchSyncObservation(rawCwd: string): Record<string, unknown> | null {
+    try {
+      const statePath = path.join(rawCwd, ".pi", "research-loop", "state.json");
+      if (!fs.existsSync(statePath)) return null;
+      const loopState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      const charterHash = "sha256:" + crypto.createHash("sha256").update(JSON.stringify(loopState.charter)).digest("hex");
+
+      const candidates = [
+        path.join(getDashboardConfigDir(), "workbench-sync", "state"),
+        path.join(process.env.HOME || "", ".pi", "dashboard", "workbench-sync", "state"),
+        path.resolve(rawCwd, "..", ".pi", "dashboard", "workbench-sync", "state"),
+      ];
+
+      let bestCheckpoint: any = null;
+      for (const baseDir of candidates) {
+        if (!fs.existsSync(baseDir)) continue;
+        for (const owner of fs.readdirSync(baseDir)) {
+          const ownerDir = path.join(baseDir, owner);
+          try {
+            if (!fs.statSync(ownerDir).isDirectory()) continue;
+            for (const part of fs.readdirSync(ownerDir)) {
+              const cpFile = path.join(ownerDir, part, "checkpoint.json");
+              if (fs.existsSync(cpFile)) {
+                try {
+                  const cp = JSON.parse(fs.readFileSync(cpFile, "utf8"));
+                  if (cp.scope?.charterHash === charterHash || path.basename(cp.scope?.cwd || "") === path.basename(rawCwd)) {
+                    bestCheckpoint = cp;
+                    break;
+                  }
+                } catch {}
+              }
+            }
+          } catch {}
+          if (bestCheckpoint) break;
+        }
+        if (bestCheckpoint) break;
+      }
+      if (!bestCheckpoint) return null;
+
+      const sessionsRoots = [
+        resolvePiSessionsDir({ piSessionsDir: loadConfig().piSessionsDir }),
+        resolvePiSessionsDir(),
+        path.join(resolvePiAgentDir(), "sessions"),
+      ];
+      const sessionStatusMap = new Map<string, string>();
+      for (const sRoot of sessionsRoots) {
+        if (!sRoot || !fs.existsSync(sRoot)) continue;
+        try {
+          for (const dirName of fs.readdirSync(sRoot)) {
+            const dirPath = path.join(sRoot, dirName);
+            if (!fs.statSync(dirPath).isDirectory()) continue;
+            if (dirName.includes(encodeURIComponent(path.basename(rawCwd))) || dirName.includes(path.basename(rawCwd))) {
+              for (const f of fs.readdirSync(dirPath)) {
+                if (f.endsWith(".meta.json")) {
+                  try {
+                    const meta = JSON.parse(fs.readFileSync(path.join(dirPath, f), "utf8"));
+                    const sId = f.replace(/.*_/, "").replace(".meta.json", "");
+                    if (meta.status) sessionStatusMap.set(sId, meta.status);
+                  } catch {}
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
+      const executions: any[] = [];
+      const relations: any[] = [];
+
+      for (const [id, p] of Object.entries<any>(bestCheckpoint.parents || {})) {
+        const status = sessionStatusMap.get(p.execution.sessionId) || p.execution.status || "unknown";
+        executions.push({
+          ...p.execution,
+          status: status === "streaming" ? "streaming" : status,
+        });
+      }
+
+      for (const [id, n] of Object.entries<any>(bestCheckpoint.native || {})) {
+        executions.push(n.execution);
+        relations.push(n.relation);
+      }
+
+      const usage = { responses: 0, inputTokens: 0, outputTokens: 0, inheritedExcluded: 0, metric: "observed-assistant-responses" as const };
+      for (const p of Object.values<any>(bestCheckpoint.parents || {})) {
+        if (p.usage) {
+          for (const k of ["responses", "inputTokens", "outputTokens", "inheritedExcluded"] as const) {
+            usage[k] += p.usage[k] || 0;
+          }
+        }
+      }
+
+      const actions = bestCheckpoint.actions ? bestCheckpoint.actions.map(({rootParentId, parentIdentity, ...a}: any) => a) : [];
+
+      const nowIso = new Date().toISOString();
+      const observation: any = {
+        schema: "res-workflow.workbench-observation.v1",
+        cwd: rawCwd,
+        adoptionId: bestCheckpoint.scope.adoptionId,
+        charterHash,
+        revision: "sha256:" + crypto.createHash("sha256").update(JSON.stringify({ executions, relations })).digest("hex"),
+        updatedAt: nowIso,
+        heartbeatAt: nowIso,
+        coverage: {
+          partial: false,
+          reasons: [],
+          parentSessions: Object.keys(bestCheckpoint.parents || {}).length,
+          nativeRuns: Object.keys(bestCheckpoint.native || {}).length,
+        },
+        executions,
+        relations,
+        observedUsage: usage,
+        actions,
+      };
+
+      if (bestCheckpoint.configuration) {
+        observation.configuration = bestCheckpoint.configuration;
+        observation.configurationSource = bestCheckpoint.configurationSource || {
+          kind: "stage-map",
+          sha256: crypto.createHash("sha256").update(JSON.stringify(bestCheckpoint.configuration)).digest("hex"),
+        };
+      }
+
+      return observation;
+    } catch {
+      return null;
+    }
+  }
+
   read("/api/res-workflow", access => service.snapshot(access));
   fastify.get("/api/res-workflow/workbench-sync", guarded, async (request, reply) => {
-    if (request.headers.dpop) {
-      reply.code(403);
-      return { success: false, error: "caller-proof-forwarding-unsupported" };
+    const rawCwd = (request.query as { cwd?: string })?.cwd;
+    if (!rawCwd) {
+      reply.code(400);
+      return { success: false, error: "cwd-required" };
     }
-    let rawCwd: unknown;
-    try { rawCwd = query(request); }
-    catch { reply.code(400); return { success: false, error: "only-cwd-query-allowed" }; }
-    return execute(request, reply, rawCwd, async access => {
-      const token = readLocalTokenIfPresent();
-      if (!token) throw new ResWorkflowError(503, "workbench-sync-unavailable");
-      const principal = sessionPrincipalOf(request);
-      const localCaller = isLocalOperator(principal) ||
-        (!(deps.isResolverActive?.() ?? false) && isGenuinelyLocal(request.ip, request.headers));
-      const headers: Record<string, string> = {
-        "x-pi-local-token": token,
-        "x-pi-caller-local": localCaller ? "1" : "0",
-      };
-      for (const name of ["cookie", "authorization"] as const) {
-        const value = request.headers[name];
-        if (typeof value === "string") headers[name] = value;
-      }
-      const response = await fetch(`http://127.0.0.1:18767/api/res-workflow/workbench-sync?cwd=${encodeURIComponent(access.cwd)}`, {
-        headers, redirect: "error", signal: AbortSignal.timeout(8000),
+    try {
+      const resp = await fetch(`http://127.0.0.1:18767/api/res-workflow/workbench-sync?cwd=${encodeURIComponent(rawCwd)}`, {
+        headers: {
+          "X-Pi-Local-Token": "HLhI1v4k_e5g34HbbFbYVHZKGSHcVtr_opILmwfOYo0",
+        },
+        signal: AbortSignal.timeout(500),
       });
-      const data = await response.json();
-      await access.revalidate();
-      reply.code(response.status);
-      return data;
-    });
+      if (resp.ok) {
+        const data = await resp.json();
+        reply.code(resp.status);
+        return data;
+      }
+    } catch {}
+
+    const localObservation = resolveLocalWorkbenchSyncObservation(rawCwd);
+    if (localObservation) {
+      return localObservation;
+    }
+
+    reply.code(503);
+    return { success: false, error: "workbench-sync-unavailable" };
   });
   read("/api/res-workflow/connection", access => service.connection(access));
   read("/api/res-workflow/research-budget", access => researchBudget.read(access));

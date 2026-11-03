@@ -18,6 +18,8 @@ export interface CanvasSessionCluster {
   isCaptain: boolean;
   childSubs: ResearchExecution[];
   childRoleGroups: CanvasRoleGroup[];
+  isUserCreated?: boolean;
+  workflowDuty?: string;
 }
 interface Props {
   clusters: CanvasSessionCluster[];
@@ -136,7 +138,6 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
 
   const parentNode = (node: CanvasNode, cluster: CanvasSessionCluster, inFocus: boolean) => {
     const row = cluster.sessionExec;
-    const summary = (row.prompt ?? row.summary ?? "").replace(/\s+/g, " ").trim();
     const liveNode = isLive(row.status);
     return (
       <button
@@ -147,7 +148,9 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
         className={`win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
           liveNode
             ? "ring-2 ring-emerald-500 shadow-[0_0_16px_rgba(16,185,129,0.35)] border-l-emerald-500 bg-gradient-to-br from-emerald-500/10 to-transparent"
-            : "border-l-[var(--accent-primary)]"
+            : cluster.isCaptain
+            ? "border-l-[var(--accent-orange)]"
+            : "border-l-[var(--accent-blue)]"
         }`}
       >
         <span className="flex min-w-0 items-center gap-2">
@@ -156,10 +159,23 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
           </div>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[12px] font-bold text-[var(--text-primary)]" title={cluster.title}>{cluster.title}</span>
-            <span className="mt-0.5 block truncate text-[10px] text-[var(--text-tertiary)]">{cluster.isCaptain ? "主控入口" : "协同会话"} · {row.sessionId?.slice(0, 8) ?? row.id.slice(0, 12)}</span>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className={`font-semibold ${cluster.isCaptain ? "text-[var(--accent-orange)]" : "text-[var(--accent-blue)]"}`}>
+                {cluster.isCaptain ? "👑 主agent" : "🤖 协同agent"}
+              </span>
+              <span className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${
+                cluster.isUserCreated
+                  ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
+                  : "border-purple-500/40 bg-purple-500/10 text-purple-400"
+              }`}>
+                {cluster.isUserCreated ? "👤 我创建的" : "⚡ 工作流生成"}
+              </span>
+            </div>
           </span>
         </span>
-        {summary && <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={summary}>{summary}</span>}
+        <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={cluster.workflowDuty ?? cluster.title}>
+          {cluster.workflowDuty ?? "科研工作流协同推进"}
+        </span>
         <span className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
           {liveNode ? (
             <span className="inline-flex min-w-0 items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
@@ -170,9 +186,15 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
               <span>⚡ 执行中</span>
             </span>
           ) : (
-            <span className="inline-flex min-w-0 items-center gap-1 truncate"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]" />{statusLabel(row.status)}{stale && row.source === "observation" ? " · 观测已过期" : ""}</span>
+            <span className="inline-flex min-w-0 items-center gap-1 truncate">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]" />
+              {row.status === "idle" ? "就绪待命" : statusLabel(row.status)}
+              {stale && row.source === "observation" ? " · 观测已过期" : ""}
+            </span>
           )}
-          <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-2 py-1 font-semibold text-[var(--accent-text)]">{cluster.childSubs.length} 次派发</span>
+          <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-2 py-0.5 font-semibold text-[var(--accent-text)]">
+            {cluster.childSubs.length} 次派发
+          </span>
         </span>
       </button>
     );

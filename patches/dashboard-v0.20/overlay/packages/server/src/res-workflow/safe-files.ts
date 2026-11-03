@@ -8,13 +8,14 @@ export function inside(root: string, target: string): boolean {
 }
 
 export async function assertNoLinks(root: string, target: string): Promise<void> {
-  if (!inside(root, target)) throw new Error("path-outside-root");
-  let current = root;
-  for (const part of path.relative(root, target).split(path.sep).filter(Boolean)) {
+  const realRoot = await realpath(root).catch(() => root);
+  const realTarget = await realpath(target).catch(() => target);
+  if (!inside(realRoot, realTarget)) throw new Error("path-outside-root");
+  let current = realRoot;
+  for (const part of path.relative(realRoot, realTarget).split(path.sep).filter(Boolean)) {
     current = path.join(current, part);
     if ((await lstat(current)).isSymbolicLink()) throw new Error("symlink");
   }
-  if ((await realpath(target)) !== target) throw new Error("path-outside-root");
 }
 
 export async function readBoundedRegular(file: string, maxBytes: number, root?: string): Promise<{ text: string; bytes: number; timestamp: string }> {
@@ -35,14 +36,16 @@ export async function readBoundedRegular(file: string, maxBytes: number, root?: 
 
 /** Existing project components are checked, not followed or chmodded. */
 export async function ensureProjectDirectory(cwd: string, parts: string[]): Promise<string> {
-  let current = cwd;
+  const realCwd = await realpath(cwd).catch(() => cwd);
+  let current = realCwd;
   for (const part of parts) {
     if (!part || part === "." || part === ".." || /[/\\]/.test(part)) throw new Error("invalid-directory-part");
     current = path.join(current, part);
     try { await mkdir(current, { mode: 0o700 }); }
     catch (err) { if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err; }
     const entry = await lstat(current);
-    if (!entry.isDirectory() || entry.isSymbolicLink() || (await realpath(current)) !== current) throw new Error("unsafe-research-directory");
+    const realCurrent = await realpath(current).catch(() => current);
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !inside(realCwd, realCurrent)) throw new Error("unsafe-research-directory");
   }
   return current;
 }

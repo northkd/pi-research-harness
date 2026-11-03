@@ -91,17 +91,17 @@ export function getAgentRelation(
 ): { tag: string; label: string; linkText: string; tintClass: string } {
   if (isCaptain) {
     return {
-      tag: "👑 主控入口",
-      label: "工作流主控 · 驱动多智能体集群并接收用户指令",
-      linkText: "主控入口",
+      tag: "👑 主agent",
+      label: "工作流主agent · 统筹协同多智能体并接收指示",
+      linkText: "主agent",
       tintClass: "tint-action-orange",
     };
   }
   if (kind === "pi-session") {
     return {
-      tag: "🤖 Multi-Agent 独立会话",
-      label: "与主控双向状态同步 · 上下文镜像与协同推演",
-      linkText: "双向状态同步 ⇄",
+      tag: "🤖 协同agent",
+      label: "协同agent · 与主agent状态同步协同推演",
+      linkText: "协同推演 ⇄",
       tintClass: "tint-action-blue",
     };
   }
@@ -214,6 +214,58 @@ export function ResearchExecutionPanels({
 
   const isWorkflowActive = executions.some((row) => live(row));
 
+  // Session metadata cache for matching real session names and user vs workflow origin
+  const [sessionInfoMap, setSessionInfoMap] = useState<
+    Record<string, { id?: string; name?: string; firstMessage?: string; nameSource?: string; via?: string }>
+  >({});
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadSessions = async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/sessions`);
+        if (res.ok) {
+          const json = await res.json();
+          const list = Array.isArray(json) ? json : json?.data || [];
+          const map: Record<string, any> = {};
+          for (const s of list) {
+            if (s.id) map[s.id] = s;
+          }
+          if (isMounted) setSessionInfoMap(map);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    loadSessions();
+    const interval = setInterval(loadSessions, 8000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [apiBase]);
+
+  const getSessionDisplayName = (sessionExec: ResearchExecution, isCaptain: boolean) => {
+    const sid = sessionExec.sessionId || sessionExec.id;
+    const info = sessionInfoMap[sid] || sessionInfoMap[sessionExec.id];
+    if (info?.name) return info.name;
+    if (info?.firstMessage) {
+      const clean = info.firstMessage.replace(/[#*`>-]/g, "").replace(/\s+/g, " ").trim();
+      return clean.length > 28 ? clean.slice(0, 28) + "…" : clean;
+    }
+    return isCaptain ? "主agent" : "协同agent";
+  };
+
+  const getSessionWorkflowDuty = (sessionExec: ResearchExecution, isCaptain: boolean) => {
+    if (isCaptain) return "全流程主控协调与用户指示接收，调度多智能体集群";
+    if (sessionExec.stage === "1-idea") return "探索与构思阶段协同：文献溯源、假说发散与论据调研";
+    if (sessionExec.stage === "2-experiment") return "实验与验证阶段协同：数值仿真、脚本执行与数据产出";
+    if (sessionExec.stage === "3-review") return "评审与自检阶段协同：反例核查、交叉评审与收敛判定";
+    if (sessionExec.stage === "4-summary") return "主张与闭环阶段协同：主张清单与实验证据逐条映射校验";
+    if (sessionExec.stage === "5-writing") return "撰写与定稿阶段协同：论文定稿、引文审计与产物交付";
+    return "阶段任务协同推演、代码沙箱执行与结果汇交";
+  };
+
   // Main Agent (Captain) Selection & User Confirmation
   const [mainAgentId, setMainAgentId] = useState<string | null>(null);
   const [pendingMainAgentId, setPendingMainAgentId] = useState<string | null>(null);
@@ -267,21 +319,25 @@ export function ResearchExecutionPanels({
     [projection.currentRun],
   );
 
+  // Subagent 卡片平铺展开覆盖（key 为 sessionExec.id:roleName）
+  const [expandedSubGroups, setExpandedSubGroups] = useState<Record<string, boolean>>({});
+
   // Stage independent start state & handlers
   const [startingStageId, setStartingStageId] = useState<string | null>(null);
+  const [editingStagePrompt, setEditingStagePrompt] = useState<{
+    stageId: StageId;
+    stageName: string;
+    stageIndex: number;
+    promptText: string;
+  } | null>(null);
   const [stageStartNotification, setStageStartNotification] = useState<{
     stageName: string;
     message: string;
     type: "success" | "error";
   } | null>(null);
 
-  const handleStartIndependentStage = async (stageId: StageId, stageName: string, stageIndex: number) => {
-    if (startingStageId) return;
-    setStartingStageId(stageId);
-    setStageStartNotification(null);
-
-    const targetCwd = cwd || (projection as any).cwd;
-    const initialPrompt = `【阶段独立启动任务】用户要求独立/提前启动科研工作流的阶段：${stageName}（阶段 ${stageIndex + 1}/5：${stageId}）。
+  const getDefaultStagePrompt = (stageId: StageId, stageName: string, stageIndex: number) => {
+    return `【阶段独立启动任务】用户要求独立/提前启动科研工作流的阶段：${stageName}（阶段 ${stageIndex + 1}/5：${stageId}）。
 
 请按以下步骤执行工作：
 1. 首先深度总结目前的研究基础与进展现状：
@@ -292,6 +348,25 @@ export function ResearchExecutionPanels({
    - 您希望本次独立启动重点聚焦在 ${stageName} 的哪个具体目标或任务？
    - 是否有需要优先调整的假设、参数范围、评估指标或写作重点？
    - 请明确告诉我您的指示，我将全力推进本阶段的具体工作！`;
+  };
+
+  const handleOpenStagePromptEditor = (stageId: StageId, stageName: string, stageIndex: number) => {
+    setEditingStagePrompt({
+      stageId,
+      stageName,
+      stageIndex,
+      promptText: getDefaultStagePrompt(stageId, stageName, stageIndex),
+    });
+  };
+
+  const handleConfirmStartIndependentStage = async () => {
+    if (!editingStagePrompt || startingStageId) return;
+    const { stageId, stageName, promptText } = editingStagePrompt;
+    setStartingStageId(stageId);
+    setStageStartNotification(null);
+    setEditingStagePrompt(null);
+
+    const targetCwd = cwd || (projection as any).cwd;
 
     try {
       const res = await fetch(`${apiBase}/api/session/spawn`, {
@@ -299,7 +374,7 @@ export function ResearchExecutionPanels({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           cwd: targetCwd,
-          initialPrompt,
+          initialPrompt: promptText,
         }),
       });
 
@@ -310,7 +385,7 @@ export function ResearchExecutionPanels({
 
       setStageStartNotification({
         stageName,
-        message: `已成功为「${stageName}」创建新会话！新智能体已自动注入研究基础总结指令，并将主动向您询问当前阶段的工作指示。`,
+        message: `已成功为「${stageName}」创建新会话！新智能体已接收自定义首条指令，并将主动向您询问当前阶段的工作指示。`,
         type: "success",
       });
     } catch (err: any) {
@@ -406,11 +481,19 @@ export function ResearchExecutionPanels({
         };
       }).sort((a, b) => execTime(b.latest).localeCompare(execTime(a.latest)));
 
+      const sid = sessionExec.sessionId || sessionExec.id;
+      const sessionInfo = sessionInfoMap[sid] || sessionInfoMap[sessionExec.id];
+      const isUserCreated = sessionInfo?.nameSource === "user" || sessionInfo?.via === "manual" || (isCaptain && !sessionInfo?.via?.includes("workflow"));
+      const title = getSessionDisplayName(sessionExec, isCaptain);
+      const workflowDuty = getSessionWorkflowDuty(sessionExec, isCaptain);
+
       return {
         sessionExec,
-        title: executionRoleName(sessionExec),
+        title,
         roleObj: roles.get(executionRoleName(sessionExec)) ?? { name: executionRoleName(sessionExec), skills: [] },
         isCaptain,
+        isUserCreated: Boolean(isUserCreated),
+        workflowDuty,
         childSubs,
         childRoleGroups,
       };
@@ -467,7 +550,7 @@ export function ResearchExecutionPanels({
       sessionsWithSubsCount: withSubs,
       sessionsWithoutSubsCount: withoutSubs,
     };
-  }, [executions, captainExecution, configured, roles]);
+  }, [executions, captainExecution, configured, roles, sessionInfoMap]);
 
   const visibleClusters = useMemo(() => {
     if (fusionFilter === "with-subs") {
@@ -593,7 +676,7 @@ export function ResearchExecutionPanels({
               {captainExecution && (
                 <div className="tint-action-orange inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold">
                   <Icon path={mdiCrown} size={0.6} />
-                  <span>主控入口: {executionRoleName(captainExecution)}</span>
+                  <span>👑 主agent: {getSessionDisplayName(captainExecution, true)}</span>
                 </div>
               )}
             </div>
@@ -645,11 +728,11 @@ export function ResearchExecutionPanels({
                       <button
                         type="button"
                         disabled={isStarting}
-                        onClick={() => handleStartIndependentStage(item.id, item.info.name, index)}
+                        onClick={() => handleOpenStagePromptEditor(item.id, item.info.name, index)}
                         className={`w-full py-1.5 px-3 text-xs ${
                           item.isCurrent ? "win11-btn-accent" : "win11-btn"
                         } disabled:cursor-not-allowed disabled:opacity-50`}
-                        title="独立创建新会话启动此阶段，总结研究基础并等待指示"
+                        title="编辑第一条 Prompt 并独立创建新会话启动此阶段"
                       >
                         <Icon
                           path={isStarting ? mdiSync : mdiRocketLaunchOutline}
@@ -663,6 +746,84 @@ export function ResearchExecutionPanels({
                 );
               })}
             </div>
+
+            {/* Prompt Editing Modal for Independent Stage Start */}
+            {editingStagePrompt && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+                <div className="win11-card w-full max-w-2xl p-5 space-y-4 shadow-2xl border border-[var(--border-primary)]">
+                  <div className="flex items-center justify-between border-b border-[var(--border-primary)] pb-3">
+                    <div className="flex items-center gap-2">
+                      <Icon path={mdiRocketLaunchOutline} size={0.7} className="text-[var(--accent-primary)]" />
+                      <h3 className="text-sm font-bold text-[var(--text-primary)]">
+                        独立启动阶段会话 · 编辑首条 Prompt（{editingStagePrompt.stageName}）
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditingStagePrompt(null)}
+                      className="rounded p-1 hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                    即将为「<strong>{editingStagePrompt.stageName}</strong>」创建独立科研会话。您可以在启动前自由修改或补充对新智能体的第一条指令、研究假设、约束条件或提问方向：
+                  </p>
+
+                  <textarea
+                    value={editingStagePrompt.promptText}
+                    onChange={(e) =>
+                      setEditingStagePrompt({
+                        ...editingStagePrompt,
+                        promptText: e.target.value,
+                      })
+                    }
+                    rows={12}
+                    className="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 font-mono text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                    placeholder="输入该阶段新智能体的第一条启动 Prompt…"
+                  />
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--border-primary)]">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditingStagePrompt({
+                          ...editingStagePrompt,
+                          promptText: getDefaultStagePrompt(
+                            editingStagePrompt.stageId,
+                            editingStagePrompt.stageName,
+                            editingStagePrompt.stageIndex
+                          ),
+                        })
+                      }
+                      className="win11-btn px-3 py-1.5 text-xs text-[var(--text-secondary)]"
+                    >
+                      恢复默认模板
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingStagePrompt(null)}
+                        className="win11-btn px-3.5 py-1.5 text-xs"
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!editingStagePrompt.promptText.trim()}
+                        onClick={handleConfirmStartIndependentStage}
+                        className="win11-btn-accent px-4 py-1.5 text-xs font-semibold flex items-center gap-1.5"
+                      >
+                        <Icon path={mdiRocketLaunchOutline} size={0.55} />
+                        <span>确认并新建会话启动</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Detailed Executions List */}
             <div className="space-y-2.5 pt-2">
@@ -1150,6 +1311,15 @@ export function ResearchExecutionPanels({
                                   >
                                     {relation.tag}
                                   </span>
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[9.5px] font-medium ${
+                                      cluster.isUserCreated
+                                        ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
+                                        : "border-purple-500/40 bg-purple-500/10 text-purple-400"
+                                    }`}
+                                  >
+                                    {cluster.isUserCreated ? "👤 我创建的" : "⚡ 工作流生成"}
+                                  </span>
                                   {isLive ? (
                                     <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-600 dark:text-emerald-400 shadow-sm animate-pulse">
                                       <span className="relative flex h-2 w-2">
@@ -1159,14 +1329,17 @@ export function ResearchExecutionPanels({
                                       <span>⚡ 执行中</span>
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[10.5px] text-[var(--text-secondary)]">
+                                    <span
+                                      className="inline-flex items-center gap-1 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[10.5px] text-[var(--text-secondary)]"
+                                      title={sessionExec.status === "idle" ? "已完成上一轮执行，处于就绪待命状态，等待新指令" : undefined}
+                                    >
                                       <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-muted)]" />
-                                      <span>{executionRecordStatus(sessionExec, stale)}</span>
+                                      <span>{sessionExec.status === "idle" ? "就绪待命" : executionRecordStatus(sessionExec, stale)}</span>
                                     </span>
                                   )}
                                   <span className="inline-flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] font-mono">
                                     <Icon path={mdiClockOutline} size={0.45} />
-                                    <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {formatTime(sessionExec.endedAt ?? sessionExec.lastActivityAt)}</span>
+                                    <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {isLive ? "持续执行中" : formatTime(sessionExec.endedAt ?? sessionExec.lastActivityAt)}</span>
                                   </span>
                                   {childSubs.length > 0 && (
                                     <span className="tint-action-purple rounded-full border px-2 py-0.5 text-[10px] font-semibold">
@@ -1201,6 +1374,10 @@ export function ResearchExecutionPanels({
                                   <span>展开</span>
                                 </button>
                               </div>
+                            </div>
+                            <div className="mt-1.5 pl-11 text-[11.5px] text-[var(--text-secondary)] truncate">
+                              <strong className="text-[var(--text-primary)]">会话科研职责：</strong>
+                              {cluster.workflowDuty ?? "科研工作流协同推进"}
                             </div>
                           </div>
                         );
@@ -1250,6 +1427,15 @@ export function ResearchExecutionPanels({
                                   >
                                     {relation.tag} · {relation.linkText}
                                   </span>
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[9.5px] font-medium ${
+                                      cluster.isUserCreated
+                                        ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
+                                        : "border-purple-500/40 bg-purple-500/10 text-purple-400"
+                                    }`}
+                                  >
+                                    {cluster.isUserCreated ? "👤 我创建的" : "⚡ 工作流生成"}
+                                  </span>
                                   {childSubs.length > 0 ? (
                                     <span className="tint-action-purple rounded-full border px-2.5 py-0.5 text-[10.5px] font-semibold">
                                       ⚡ 下辖 {childSubs.length} 个 Subagent 子任务 ({childRoleGroups.length} 类角色)
@@ -1268,17 +1454,20 @@ export function ResearchExecutionPanels({
                                       <span>⚡ 正在全力执行中 · 活跃</span>
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[10.5px] font-medium border bg-[var(--bg-secondary)] border-[var(--border-primary)] text-[var(--text-secondary)]">
+                                    <span
+                                      className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[10.5px] font-medium border bg-[var(--bg-secondary)] border-[var(--border-primary)] text-[var(--text-secondary)]"
+                                      title={sessionExec.status === "idle" ? "已完成上一轮执行，处于就绪待命状态，等待新指令" : undefined}
+                                    >
                                       <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-muted)]" />
-                                      <span>{executionRecordStatus(sessionExec, stale)}</span>
+                                      <span>{sessionExec.status === "idle" ? "就绪待命" : executionRecordStatus(sessionExec, stale)}</span>
                                     </span>
                                   )}
                                 </div>
 
                                 {/* Specific Research Duty in This Study */}
                                 <p className="text-[12.5px] leading-relaxed text-[var(--text-secondary)]">
-                                  <strong className="text-[var(--text-primary)]">本研究职责：</strong>
-                                  {mission}
+                                  <strong className="text-[var(--text-primary)]">会话科研职责：</strong>
+                                  {cluster.workflowDuty ?? "科研工作流协同推进"}
                                 </p>
 
                                 {/* Latest Deliverable / Output Snippet */}
@@ -1360,6 +1549,8 @@ export function ResearchExecutionPanels({
 
                               <div className="win11-grid-cards">
                                 {childRoleGroups.map((subGroup) => {
+                                  const groupKey = `${sessionExec.id}:${subGroup.roleName}`;
+                                  const isExpanded = Boolean(expandedSubGroups[groupKey]);
                                   const subLatest = subGroup.latest;
                                   const subLive = subGroup.executions.some((ex) => live(ex));
                                   const subTaskSnippet = (subLatest.prompt ?? subLatest.output ?? "")
@@ -1367,9 +1558,169 @@ export function ResearchExecutionPanels({
                                     .replace(/\s+/g, " ")
                                     .trim();
 
+                                  if (subGroup.executions.length > 1 && !isExpanded) {
+                                    return (
+                                      <div
+                                        key={groupKey}
+                                        onClick={() => setExpandedSubGroups((prev) => ({ ...prev, [groupKey]: true }))}
+                                        className="relative cursor-pointer group"
+                                        title="点击平铺展开多轮执行卡片"
+                                      >
+                                        {subGroup.executions.length > 2 && (
+                                          <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] opacity-40 shadow-xs pointer-events-none" />
+                                        )}
+                                        <div className="absolute inset-0 translate-x-1 translate-y-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] opacity-70 shadow-xs pointer-events-none" />
+                                        <div
+                                          className={`relative win11-card-subtle p-3 hover:bg-[var(--bg-hover)] transition-all space-y-1.5 border-l-[3px] ${
+                                            subLive
+                                              ? "border-l-emerald-500 ring-2 ring-emerald-500/80 shadow-[0_0_16px_rgba(16,185,129,0.25)] bg-gradient-to-r from-emerald-500/10 via-transparent to-transparent"
+                                              : "border-l-[var(--accent-purple)]"
+                                          }`}
+                                        >
+                                          <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                            <span className="flex items-center gap-1.5 font-bold text-[12.5px] text-[var(--text-primary)]">
+                                              <img
+                                                src={getMemberArt(subGroup.roleName)}
+                                                alt=""
+                                                className={`h-5 w-5 shrink-0 object-contain ${subLive ? "ring-1 ring-emerald-400 rounded-full animate-pulse" : ""}`}
+                                              />
+                                              <span>{getSubagentRoleDisplayTitle(subGroup.roleName)}</span>
+                                            </span>
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="tint-action-purple rounded-full border px-2 py-0.5 font-mono text-[10px] font-bold shadow-xs">
+                                                📚 叠放卡片 · 共 {subGroup.executions.length} 轮
+                                              </span>
+                                              {subLive ? (
+                                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
+                                                  <span className="relative flex h-2 w-2">
+                                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                                  </span>
+                                                  <span>⚡ 正在工作</span>
+                                                </span>
+                                              ) : (
+                                                <span className="rounded px-1.5 py-0.5 text-[10px] font-medium border bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[var(--text-secondary)]">
+                                                  {researchStatusLabel(subLatest.status)}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+
+                                          <p className="text-[11.5px] leading-relaxed text-[var(--text-secondary)] line-clamp-2">
+                                            {subTaskSnippet
+                                              ? `最新专项任务：${subTaskSnippet.slice(0, 88)}${subTaskSnippet.length > 88 ? "…" : ""}`
+                                              : getAgentMission(subGroup.roleName, false, "native-subagent", subLatest, cwd)}
+                                          </p>
+
+                                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--border-primary)]/60 text-[10.5px]">
+                                            <span className="font-mono text-[var(--text-tertiary)]">
+                                              模型: <strong className="text-[var(--text-primary)]">{subLatest.observedModel ?? "默认配置"}</strong>
+                                            </span>
+                                            <span className="text-[var(--accent-text)] font-semibold inline-flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
+                                              <span>点击平铺展开 {subGroup.executions.length} 轮卡片</span>
+                                              <Icon path={mdiChevronDown} size={0.5} />
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  if (subGroup.executions.length > 1 && isExpanded) {
+                                    return (
+                                      <div
+                                        key={groupKey}
+                                        className="col-span-full rounded-xl border border-[var(--accent-purple)]/40 bg-[var(--accent-purple)]/5 p-3.5 space-y-3"
+                                      >
+                                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-primary)] pb-2">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <img src={getMemberArt(subGroup.roleName)} alt="" className="h-5 w-5 object-contain" />
+                                            <span className="font-bold text-[13px] text-[var(--text-primary)]">
+                                              {getSubagentRoleDisplayTitle(subGroup.roleName)}
+                                            </span>
+                                            <span className="rounded-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10.5px] text-[var(--text-secondary)]">
+                                              共 {subGroup.executions.length} 轮执行 · 点击单张卡片直接查看该轮详情
+                                            </span>
+                                            {subLive && (
+                                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
+                                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                                                <span>⚡ 有执行正在进行</span>
+                                              </span>
+                                            )}
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() => setExpandedSubGroups((prev) => ({ ...prev, [groupKey]: false }))}
+                                            className="win11-btn px-2.5 py-1 text-xs text-[var(--text-secondary)] flex items-center gap-1"
+                                            title="收起为重叠卡片"
+                                          >
+                                            <Icon path={mdiChevronUp} size={0.5} />
+                                            <span>收起叠放</span>
+                                          </button>
+                                        </div>
+
+                                        <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                                          {subGroup.executions.map((exec, idx) => {
+                                            const isExecLive = live(exec);
+                                            const roundTaskSnippet = (exec.prompt ?? exec.output ?? "")
+                                              .replace(/^Task:\s*/i, "")
+                                              .replace(/\s+/g, " ")
+                                              .trim();
+                                            return (
+                                              <div
+                                                key={exec.id}
+                                                onClick={() => onAgent(subGroup.roleObj, exec)}
+                                                className={`win11-card-interactive cursor-pointer p-3 text-xs border-l-4 transition-all space-y-1.5 ${
+                                                  isExecLive
+                                                    ? "border-l-emerald-500 ring-2 ring-emerald-500/80 shadow-[0_0_14px_rgba(16,185,129,0.25)] bg-gradient-to-r from-emerald-500/10 via-transparent to-transparent"
+                                                    : "border-l-[var(--accent-purple)]"
+                                                }`}
+                                              >
+                                                <div className="flex items-center justify-between gap-1.5">
+                                                  <span className="font-bold text-[12px] text-[var(--text-primary)]">
+                                                    第 {subGroup.executions.length - idx} 轮执行
+                                                    {idx === 0 ? " (最新)" : ""}
+                                                  </span>
+                                                  {isExecLive ? (
+                                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
+                                                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                                                      <span>⚡ 正在工作</span>
+                                                    </span>
+                                                  ) : (
+                                                    <span className="rounded px-1.5 py-0.5 text-[10px] font-medium border bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[var(--text-secondary)]">
+                                                      {researchStatusLabel(exec.status)}
+                                                    </span>
+                                                  )}
+                                                </div>
+
+                                                <p className="text-[11px] leading-relaxed text-[var(--text-secondary)] line-clamp-2">
+                                                  {roundTaskSnippet ? roundTaskSnippet.slice(0, 75) : "专职计算与模型推理执行"}
+                                                </p>
+
+                                                <div className="pt-1 border-t border-[var(--border-primary)]/50 space-y-1 text-[10px] text-[var(--text-tertiary)]">
+                                                  <div className="flex items-center justify-between font-mono">
+                                                    <span>模型: {exec.observedModel ?? "默认"}</span>
+                                                    <span className="text-[var(--accent-text)] font-semibold inline-flex items-center gap-0.5">
+                                                      <span>查看此轮详情</span>
+                                                      <Icon path={mdiArrowRight} size={0.4} />
+                                                    </span>
+                                                  </div>
+                                                  <div className="flex items-center gap-1 font-mono">
+                                                    <Icon path={mdiClockOutline} size={0.4} />
+                                                    <span>开始: {formatTime(exec.startedAt)} · 结束: {isExecLive ? "执行中" : formatTime(exec.endedAt ?? exec.lastActivityAt)}</span>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
                                   return (
                                     <div
-                                      key={`${sessionExec.id}:${subGroup.roleName}`}
+                                      key={groupKey}
                                       onClick={() => onAgent(subGroup.roleObj, subLatest)}
                                       className={`win11-card-subtle cursor-pointer p-3 hover:bg-[var(--bg-hover)] transition-all space-y-1.5 border-l-[3px] ${
                                         subLive
@@ -1387,9 +1738,6 @@ export function ResearchExecutionPanels({
                                           <span>{getSubagentRoleDisplayTitle(subGroup.roleName)}</span>
                                         </span>
                                         <div className="flex items-center gap-1.5">
-                                          <span className="tint-action-purple rounded-full border px-2 py-0.5 font-mono text-[10px] font-bold">
-                                            派发 ×{subGroup.executions.length}
-                                          </span>
                                           {subLive ? (
                                             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/50 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
                                               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
@@ -1414,7 +1762,7 @@ export function ResearchExecutionPanels({
                                           模型: <strong className="text-[var(--text-primary)]">{subLatest.observedModel ?? "默认配置"}</strong>
                                         </span>
                                         <span className="text-[var(--accent-text)] font-medium inline-flex items-center gap-0.5">
-                                          <span>查看 {subGroup.executions.length} 次执行</span>
+                                          <span>查看详情</span>
                                           <Icon path={mdiArrowRight} size={0.45} />
                                         </span>
                                       </div>
@@ -1506,11 +1854,11 @@ export function ResearchExecutionPanels({
 
                             {/* Fused Attribution: Which Multi-Agent Sessions Dispatched This Subagent Role */}
                             {parentAttributions.length > 0 && (
-                              <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2.5 space-y-1.5">
-                                <div className="text-[10.5px] font-semibold text-[var(--text-tertiary)]">
+                              <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2.5 space-y-1.5 text-left">
+                                <div className="text-[10.5px] font-semibold text-[var(--text-tertiary)] text-left">
                                   派发源 Multi-Agent 会话归属 ({parentAttributions.length} 个父会话)：
                                 </div>
-                                <div className="flex flex-wrap gap-1.5">
+                                <div className="flex flex-wrap gap-1.5 justify-start text-left">
                                   {parentAttributions.map(({ parent, count }) => (
                                     <button
                                       key={parent.id}
@@ -1520,10 +1868,11 @@ export function ResearchExecutionPanels({
                                         const pName = executionRoleName(parent);
                                         onAgent(roles.get(pName) ?? { name: pName, skills: [] }, parent);
                                       }}
-                                      className="tint-action-blue rounded border px-2 py-0.5 text-[10.5px] font-medium hover:opacity-85 transition-opacity"
+                                      className="tint-action-blue rounded border px-2 py-0.5 text-[10.5px] font-medium hover:opacity-85 transition-opacity text-left inline-flex items-center justify-start gap-1"
                                       title={`点击查看父会话：${executionRoleName(parent)}`}
                                     >
-                                      🤖 {executionRoleName(parent)} (×{count})
+                                      <span>🤖 {executionRoleName(parent)}</span>
+                                      <span className="font-mono text-[9.5px] opacity-80">(×{count})</span>
                                     </button>
                                   ))}
                                 </div>
@@ -1576,14 +1925,14 @@ export function ResearchExecutionPanels({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
                     <Icon path={mdiAccountGroup} size={0.7} className="text-[var(--accent-blue)]" />
-                    <span>1. 主控 & Multi-Agent 独立会话矩阵 ({piSessions.length} 个独立研究会话)</span>
+                    <span>1. 主agent & 协同agent 独立会话矩阵 ({piSessions.length} 个独立研究会话)</span>
                   </div>
                   <span className="text-[11px] text-[var(--text-secondary)]">
-                    每个会话拥有独立上下文并与主控双向状态同步
+                    每个会话拥有独立上下文并与主agent双向状态同步
                   </span>
                 </div>
                 <div className="win11-grid-cards">
-                  {fusedSessionClusters.map(({ sessionExec, title, roleObj, isCaptain, childSubs }) => (
+                  {fusedSessionClusters.map(({ sessionExec, title, roleObj, isCaptain, isUserCreated, workflowDuty, childSubs }) => (
                     <div
                       key={sessionExec.id}
                       onClick={() => onAgent(roleObj, sessionExec)}
@@ -1601,12 +1950,21 @@ export function ResearchExecutionPanels({
                           <span className="font-bold text-sm text-[var(--text-primary)] truncate">
                             {title}
                           </span>
-                          <span className="tint-action-purple rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold">
-                            派发 {childSubs.length} 子任务
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`rounded-full border px-2 py-0.2 text-[9.5px] font-medium ${
+                              isUserCreated
+                                ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
+                                : "border-purple-500/40 bg-purple-500/10 text-purple-400"
+                            }`}>
+                              {isUserCreated ? "👤 我创建的" : "⚡ 工作流生成"}
+                            </span>
+                            <span className="tint-action-purple rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold">
+                              派发 {childSubs.length} 子任务
+                            </span>
+                          </div>
                         </div>
                         <div className="text-xs leading-relaxed text-[var(--text-secondary)] line-clamp-2">
-                          {getAgentMission(title, isCaptain, sessionExec.kind, sessionExec, cwd)}
+                          {workflowDuty ?? getAgentMission(title, isCaptain, sessionExec.kind, sessionExec, cwd)}
                         </div>
                       </div>
                     </div>
