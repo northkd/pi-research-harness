@@ -21,7 +21,6 @@ import {
   mdiOpenInNew,
   mdiInformationOutline,
   mdiTagOutline,
-  mdiLayersOutline,
 } from "@mdi/js";
 import { Icon } from "@mdi/react";
 import { useApiBase } from "../../lib/api/api-context.js";
@@ -384,15 +383,6 @@ export function ResearchAgentDetail({
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            {/* Round info badge without redundant selector pills (selected from outer stacked cards) */}
-            {sortedExecutions.length > 1 && (
-              <div className="win11-card-subtle flex items-center gap-1.5 px-3 py-1 text-xs">
-                <Icon path={mdiLayersOutline} size={0.5} className="text-[var(--accent-purple)]" />
-                <span className="font-semibold text-[var(--text-secondary)]">
-                  当前查看：第 {Math.max(1, sortedExecutions.length - sortedExecutions.findIndex(ex => ex.id === execution?.id))} 轮执行 / 共 {sortedExecutions.length} 轮
-                </span>
-              </div>
-            )}
             <button
               type="button"
               onClick={onClose}

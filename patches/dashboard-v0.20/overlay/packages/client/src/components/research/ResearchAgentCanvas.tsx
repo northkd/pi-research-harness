@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Icon } from "@mdi/react";
-import { mdiAccountGroup, mdiArrowLeft, mdiArrowExpandAll, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew } from "@mdi/js";
+import { mdiAccountGroup, mdiArrowLeft, mdiArrowExpandAll, mdiClose, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew } from "@mdi/js";
 import type { ConfiguredRole, ResearchExecution } from "./research-projection.js";
 import { getMemberArt, leadArt } from "./agent-teams-artwork.js";
 import { fitGraph, layoutFocusedSession, layoutOverview, zoomGraphAt, type CanvasNode, type CanvasView } from "./research-agent-canvas-layout.js";
@@ -44,6 +44,7 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
   const dragRef = useRef<{ pointerId: number; x: number; y: number; startX: number; startY: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [expandedRoleGroup, setExpandedRoleGroup] = useState<CanvasRoleGroup | null>(null);
   const [query, setQuery] = useState("");
   const [rolePage, setRolePage] = useState(0);
   const [size, setSize] = useState({ width: 800, height: 520 });
@@ -255,30 +256,100 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
             const group = visibleRoles[index];
             const current = group.latest;
             const summary = (current.prompt ?? current.summary ?? "").replace(/\s+/g, " ").trim();
-            const roleLive = isLive(current.status);
+            const hasMultiple = group.executions.length > 1;
+            const anyLive = group.executions.some(ex => isLive(ex.status));
+            const roleLive = isLive(current.status) || anyLive;
+
             return (
-              <button key={node.id} type="button" data-testid="canvas-role-node" aria-label={`查看 ${roleLabel(group.roleName)} 详情`}
-                onClick={() => onAgent(group.roleObj, current)} style={nodeStyle(node)}
-                className={`win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
-                  roleLive
-                    ? "border-l-emerald-500 ring-2 ring-emerald-500/70 shadow-[0_0_14px_rgba(16,185,129,0.3)] bg-gradient-to-br from-emerald-500/10 to-transparent"
-                    : "border-l-[var(--accent-purple)]"
-                }`}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <img src={getMemberArt(group.roleName, false)} alt="" className={`h-7 w-7 shrink-0 object-contain ${roleLive ? "ring-1 ring-emerald-400 rounded-full animate-pulse" : ""}`} />
-                  <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-[var(--text-primary)]" title={roleLabel(group.roleName)}>{roleLabel(group.roleName)}</span>
-                  <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--accent-text)]">×{group.executions.length}</span>
-                </span>
-                {summary && <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={summary}>{summary}</span>}
-                {roleLive ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
-                    <span>⚡ 执行中</span>
-                  </span>
-                ) : (
-                  <span className="truncate text-[10px] text-[var(--text-secondary)]">{statusLabel(current.status)}{stale && current.source === "observation" ? " · 观测已过期" : ""}</span>
+              <div key={node.id} style={nodeStyle(node)} className="relative group">
+                {/* 3D Overlapping back layers when multiple executions exist */}
+                {hasMultiple && (
+                  <>
+                    {group.executions.length > 2 && (
+                      <div
+                        className="absolute inset-0 translate-x-2.5 translate-y-2.5 rounded-xl border border-[var(--accent-purple)]/40 bg-[var(--bg-secondary)] shadow-sm pointer-events-none"
+                        style={{ zIndex: 0, opacity: 0.55 }}
+                      />
+                    )}
+                    <div
+                      className="absolute inset-0 translate-x-1.5 translate-y-1.5 rounded-xl border border-[var(--accent-purple)]/60 bg-[var(--bg-secondary)] shadow-sm pointer-events-none"
+                      style={{ zIndex: 1, opacity: 0.8 }}
+                    />
+                  </>
                 )}
-              </button>
+
+                {/* Top interactive card */}
+                <button
+                  type="button"
+                  data-testid="canvas-role-node"
+                  aria-label={`查看 ${roleLabel(group.roleName)} 详情`}
+                  onClick={() => {
+                    if (hasMultiple) {
+                      setExpandedRoleGroup(group);
+                    } else {
+                      onAgent(group.roleObj, current);
+                    }
+                  }}
+                  className={`relative z-10 w-full h-full win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
+                    roleLive
+                      ? "border-l-emerald-500 ring-2 ring-emerald-500/80 shadow-[0_0_16px_rgba(16,185,129,0.35)] bg-gradient-to-br from-emerald-500/10 to-transparent"
+                      : hasMultiple
+                      ? "border-l-[var(--accent-purple)] hover:border-l-[var(--accent-primary)] hover:shadow-md"
+                      : "border-l-[var(--accent-blue)]"
+                  }`}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <img
+                      src={getMemberArt(group.roleName, false)}
+                      alt=""
+                      className={`h-7 w-7 shrink-0 object-contain ${roleLive ? "ring-1 ring-emerald-400 rounded-full animate-pulse" : ""}`}
+                    />
+                    <span
+                      className="min-w-0 flex-1 truncate text-[11px] font-bold text-[var(--text-primary)]"
+                      title={roleLabel(group.roleName)}
+                    >
+                      {roleLabel(group.roleName)}
+                    </span>
+                    {hasMultiple ? (
+                      <span
+                        className="shrink-0 rounded-full bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[10px] font-semibold text-purple-300 shadow-xs"
+                        title={`共 ${group.executions.length} 轮独立执行，点击平铺展开各轮卡片`}
+                      >
+                        📚 叠 {group.executions.length} 轮
+                      </span>
+                    ) : (
+                      <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--accent-text)]">
+                        ×1
+                      </span>
+                    )}
+                  </span>
+
+                  {summary && (
+                    <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={summary}>
+                      {summary}
+                    </span>
+                  )}
+
+                  <span className="flex items-center justify-between gap-1 text-[10px] text-[var(--text-secondary)]">
+                    {roleLive ? (
+                      <span className="inline-flex min-w-0 items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                        <span>⚡ 执行中</span>
+                      </span>
+                    ) : (
+                      <span className="truncate text-[10px] text-[var(--text-secondary)]">
+                        {statusLabel(current.status)}
+                        {stale && current.source === "observation" ? " · 观测已过期" : ""}
+                      </span>
+                    )}
+                    {hasMultiple && (
+                      <span className="text-[10px] text-[var(--accent-purple)] font-semibold group-hover:underline flex items-center gap-0.5">
+                        点击平铺展开 ▾
+                      </span>
+                    )}
+                  </span>
+                </button>
+              </div>
             );
           })}
         </div>
@@ -288,9 +359,127 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
         )}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-primary)] px-3 py-2 text-[10px] text-[var(--text-tertiary)]">
-        <span>{focused ? "实线表示已记录的父子归属；按角色合并多次派发。" : "虚线仅表示工作区分组，不代表会话之间有通信记录。"}</span>
+        <span>{focused ? "实线表示已记录的父子归属；多轮任务支持点击卡片平铺展开与独立查看。" : "虚线仅表示工作区分组，不代表会话之间有通信记录。"}</span>
         {focused && <button type="button" onClick={() => onAgent(focused.roleObj, focused.sessionExec)} className="inline-flex items-center gap-1 font-medium text-[var(--accent-text)] hover:underline"><Icon path={mdiOpenInNew} size={0.5} />会话详情与纠偏</button>}
       </div>
+
+      {/* 铺开各轮独立执行卡片的轻量级弹层 (Spread Out Execution Cards) */}
+      {expandedRoleGroup && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+          onClick={() => setExpandedRoleGroup(null)}
+        >
+          <div
+            className="win11-card w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl border border-[var(--border-strong)] bg-[var(--bg-primary)] rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-3.5 bg-[var(--bg-secondary)]">
+              <div className="flex items-center gap-3 min-w-0">
+                <img
+                  src={getMemberArt(expandedRoleGroup.roleName, false)}
+                  alt=""
+                  className="h-8 w-8 object-contain shrink-0"
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">
+                      {roleLabel(expandedRoleGroup.roleName)}
+                    </h3>
+                    <span className="rounded-full bg-purple-500/20 border border-purple-500/50 px-2.5 py-0.5 text-[10.5px] font-semibold text-purple-300">
+                      已平铺展开全部 {expandedRoleGroup.executions.length} 轮独立执行
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">
+                    直接点击下方对应轮次的任务卡片，即可进入该轮的独立工作流详情与实时纠偏
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpandedRoleGroup(null)}
+                className="win11-btn px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-1 rounded-lg"
+              >
+                <Icon path={mdiClose} size={0.7} />
+                <span>收起卡片</span>
+              </button>
+            </div>
+
+            {/* Body: Grid of all execution run cards */}
+            <div className="flex-1 overflow-y-auto p-5 grid grid-cols-1 sm:grid-cols-2 gap-3.5 bg-[var(--bg-canvas)]">
+              {expandedRoleGroup.executions.map((ex, roundIdx) => {
+                const roundNumber = expandedRoleGroup.executions.length - roundIdx;
+                const isLatest = roundIdx === 0;
+                const execLive = isLive(ex.status);
+                const taskSnippet = (ex.prompt ?? ex.output ?? "")
+                  .replace(/^Task:\s*/i, "")
+                  .replace(/\s+/g, " ")
+                  .trim();
+
+                return (
+                  <div
+                    key={ex.id}
+                    onClick={() => {
+                      const targetEx = ex;
+                      setExpandedRoleGroup(null);
+                      onAgent(expandedRoleGroup.roleObj, targetEx);
+                    }}
+                    className={`win11-card-interactive cursor-pointer flex flex-col justify-between p-4 rounded-xl border text-left transition-all ${
+                      execLive
+                        ? "ring-2 ring-emerald-500 border-emerald-500/80 shadow-[0_0_16px_rgba(16,185,129,0.25)] bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent"
+                        : "border-[var(--border-primary)] hover:border-[var(--accent-primary)] hover:shadow-md bg-[var(--bg-primary)]"
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-xs font-bold text-[var(--text-primary)]">
+                            第 {roundNumber} 轮执行{isLatest ? " (最新)" : ""}
+                          </span>
+                          {ex.id && (
+                            <span className="font-mono text-[9.5px] text-[var(--text-tertiary)] opacity-70">
+                              ({ex.id.slice(0, 8)})
+                            </span>
+                          )}
+                        </div>
+                        {execLive ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                            <span>⚡ 正在执行中</span>
+                          </span>
+                        ) : (
+                          <span className="rounded bg-[var(--bg-secondary)] border border-[var(--border-secondary)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">
+                            {statusLabel(ex.status)}
+                          </span>
+                        )}
+                      </div>
+
+                      {ex.observedModel && (
+                        <div className="text-[10px] font-mono text-[var(--text-tertiary)] mb-1.5 truncate">
+                          🤖 {ex.observedModel}
+                        </div>
+                      )}
+
+                      <div className="text-xs leading-relaxed text-[var(--text-secondary)] line-clamp-3 mb-3">
+                        {taskSnippet || "暂无具体任务描述，点击查看详细执行日志与结果"}
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-[var(--border-secondary)] flex items-center justify-between text-[10.5px]">
+                      <span className="text-[var(--text-tertiary)]">
+                        {ex.startedAt ? new Date(ex.startedAt).toLocaleTimeString() : "未记录时间"}
+                      </span>
+                      <span className="font-medium text-[var(--accent-text)] flex items-center gap-1">
+                        进入此轮详情 <span>→</span>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
