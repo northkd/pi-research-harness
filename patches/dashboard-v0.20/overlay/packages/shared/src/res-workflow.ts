@@ -1,4 +1,5 @@
 import type { ModelInfo, ResWorkflowParticipation } from "./types.js";
+import type { ResearchSessionProvenance } from "./research-session.js";
 export type { ResWorkflowParticipation } from "./types.js";
 
 export const RES_WORKFLOW_MAX_HISTORY_SELECTION = 40;
@@ -37,6 +38,8 @@ export interface ResWorkflowParticipantRequest {
 export interface ResWorkflowParticipantResponse {
   sessionId: string;
   resWorkflow: ResWorkflowParticipation;
+  /** Present only for top-level native collaborators; never a subagent marker. */
+  researchSession?: ResearchSessionProvenance;
 }
 
 export interface ResWorkflowParticipantFailure {

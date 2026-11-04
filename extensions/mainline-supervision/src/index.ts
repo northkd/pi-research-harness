@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { MainlineStore, CHECKPOINT_KINDS, MODEL } from './core.mjs';
 import { prepareCapture, capturePreview, publishCapture } from './capture.mjs';
-import { REVIEW_SCHEMA, validReview, operationDecision, humanChannel, validateLocalOperation, digest, operationLeaves, permissionSnapshot, needsResource } from './policy.mjs';
+import { autoApproveDefault, autoApproveExplicitlyDisabled, readAutoApproveState, writeAutoApproveState } from './auto-approve.mjs';
+import { REVIEW_SCHEMA, validReview, operationDecision, humanChannel, validateLocalOperation, digest, operationLeaves, permissionSnapshot, needsResource, observationTool } from './policy.mjs';
 export { REVIEW_SCHEMA, validReview } from './policy.mjs';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -63,7 +64,33 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
   const early = new Map<string, any>();
   const deniedCalls = new Set<string>();
   const pendingRPC = new Map<string, { off: () => void; reject: (error: Error) => void }>();
-  let autoApprove = !(env.PI_RESEARCH_AUTO_APPROVE_SUPERVISION === '0' || env.PI_RESEARCH_AUTO_APPROVE_SUPERVISION === 'false' || options.autoApprove === false);
+  // autoApprove used to be memory-only, so every process restart silently reverted an
+  // explicit user toggle (and stale processes kept pre-deploy defaults). Persist the
+  // human choice per project; env/options explicit false always wins over a stale sidecar.
+  const autoApproveExplicitlyOff = autoApproveExplicitlyDisabled(env, options);
+  let autoApprove = autoApproveDefault(env, options);
+  function loadAutoApproveForCwd(nextCwd: string) {
+    cwd = nextCwd;
+    autoApprove = autoApproveDefault(env, options);
+    if (autoApproveExplicitlyOff) return;
+    const saved = readAutoApproveState(cwd);
+    if (saved.status === 'restored') autoApprove = saved.autoApprove;
+    else if (saved.status === 'invalid' || saved.status === 'unsafe')
+      ctx?.ui?.notify?.(`主线监督自动放行设置${saved.status === 'unsafe' ? '路径不安全' : '无效'}，已使用默认值；本次未保存任何新设置。`, 'warning');
+  }
+  function persistAutoApprove() { return writeAutoApproveState(cwd, autoApprove); }
+  function ensureCwd(nextCwd: string) {
+    if (store && cwd === nextCwd) return;
+    generation++;
+    store = undefined;
+    gateMessageKey = undefined;
+    warnedRequest = undefined;
+    captureFault = false;
+    turnHadWork = false;
+    turnHadCheckpoint = false;
+    loadAutoApproveForCwd(nextCwd);
+    store = new Store(cwd);
+  }
   const sessionId = () => ctx?.sessionManager.getSessionId();
   const sessionFile = () => ctx?.sessionManager.getSessionFile?.();
   const state = () => store?.getState();
@@ -296,7 +323,7 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
   };
   const act = async (params: any, toolCtx: any, humanCommand = false) => {
     ctx = toolCtx;
-    if (!store || cwd !== ctx.cwd) { cwd = ctx.cwd; store = new Store(cwd); }
+    ensureCwd(ctx.cwd);
     if (params.action === 'configure') {
       // An agent cannot replace an existing frozen core or revoke consent to evade a gate.
       const prior = state();
@@ -360,8 +387,10 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     else if (params.action === 'auto_approve') {
       if (typeof params.enabled === 'boolean') autoApprove = params.enabled;
       else autoApprove = !autoApprove;
+      const persisted = persistAutoApprove();
       update();
-      const payload = { autoApprove };
+      const payload: any = { autoApprove, persisted: persisted.persisted };
+      if (!persisted.persisted) payload.persistenceError = persisted.error;
       return { content: [{ type: 'text' as const, text: JSON.stringify(payload) }], details: payload };
     }
     else if (params.action !== 'status') throw new Error('Unknown supervision action');
@@ -377,9 +406,13 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     const action = input.split(' ', 1)[0];
     if (action === 'auto-approve' || action === 'auto_approve') {
       const mode = input.slice(action.length).trim().toLowerCase();
-      const nextVal = (mode === 'on' || mode === 'true' || mode === '1') ? true : (mode === 'off' || mode === 'false' || mode === '0') ? false : !autoApprove;
+      const nextVal = (mode === 'on' || mode === 'true' || mode === '1') ? true : (mode === 'off' || mode === 'false' || mode === '0') ? false : undefined;
       const res = await act({ action: 'auto_approve', enabled: nextVal }, commandCtx, true);
-      commandCtx.ui.notify(`主线监督自动放行执行审批：已${nextVal ? '开启 (遇到普通需确认工具将自动放行)' : '关闭 (执行工具需逐次人工确认)'}`, 'info');
+      const saved = res?.details;
+      const suffix = saved?.persisted === false
+        ? `；未保存：${saved.persistenceError ?? '未知错误'}（仅本会话生效）`
+        : '；已保存到本项目';
+      commandCtx.ui.notify(`主线监督自动放行执行审批：已${saved?.autoApprove ? '开启 (遇到普通需确认工具将自动放行)' : '关闭 (执行工具需逐次人工确认)'}${suffix}`, saved?.persisted === false ? 'error' : 'info');
       return;
     }
     if (['capture', 'allow_operation', 'decision', 'checkpoint'].includes(action)) {
@@ -394,7 +427,7 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
   });
   pi.on('session_start', (_event: any, sessionCtx: any) => {
     generation++; completionWake = false; turnHadWork = false; turnHadCheckpoint = false; gateMessageKey = undefined; captureFault = false;
-    ctx = sessionCtx; cwd = ctx.cwd; store = new Store(cwd); disposed = false; warnedRequest = undefined;
+    ctx = sessionCtx; loadAutoApproveForCwd(ctx.cwd); store = new Store(cwd); disposed = false; warnedRequest = undefined;
     clearInterval(timer);
     timer = setInterval(() => detach(reconcile), options.reconcileIntervalMs ?? 5000); timer.unref?.();
     update(); // Restore only; opening a project is not new evidence or a model-call trigger.
@@ -404,13 +437,17 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     ctx = callCtx;
     if (humanChannel(event.toolName)) return; // Never load damaged state or capture before permitting human input.
     let s: any;
-    try { s = state(); }
-    catch { captureFault = true; s = { enabled: true, coreRevision: -1, branchRestrictions: [], operationGrants: [], reviewHealth: { status: 'BLIND_SPOT' } }; }
+    try {
+      ensureCwd(callCtx.cwd);
+      s = state();
+      if (!s) throw new Error('Supervision state unavailable');
+    } catch { captureFault = true; s = { enabled: true, coreRevision: -1, branchRestrictions: [], operationGrants: [], reviewHealth: { status: 'BLIND_SPOT' } }; }
     const deny = (reason: string) => {
       if (deniedCalls.size < 1024) deniedCalls.add(event.toolCallId);
       capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input, isError: true, gateDenied: true });
       return { block: true, reason };
     };
+    if (!store) return observationTool(event.toolName, event.input) ? undefined : deny('当前项目监督状态无法初始化；观察与人工通道仍可用，未默许新执行。');
     const decision = operationDecision(store, s, event);
     if (!decision.allow && decision.confirmable) {
       const targetUI = callCtx?.ui ?? ctx?.ui;
@@ -442,6 +479,7 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
   });
   pi.on('tool_result', (event: any, resultCtx: any) => {
     ctx = resultCtx;
+    try { ensureCwd(resultCtx.cwd); } catch { captureFault = true; return; }
     const gateDenied = deniedCalls.delete(event.toolCallId);
     capture({ type: 'tool_result', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input,
       result: { content: event.content, details: event.details }, isError: event.isError, gateDenied });
@@ -465,11 +503,12 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
   });
   pi.on('before_agent_start', (event: any, startCtx: any) => {
     turnHadWork = false; turnHadCheckpoint = false;
-    completionWake = event.prompt.startsWith('Subagent updates above.')
-      || /^Background task(?:s)? (?:completed|failed|stopped|paused)/.test(event.prompt)
-      || event.prompt.includes('<background-task-notification>');
+    const prompt = typeof event.prompt === 'string' ? event.prompt : '';
+    completionWake = event.messageType === 'custom' || prompt.startsWith('Subagent updates above.')
+      || /^Background task(?:s)? (?:completed|failed|stopped|paused)/.test(prompt)
+      || prompt.includes('<background-task-notification>');
     ctx = startCtx;
-    try { update(); } catch { captureFault = true; }
+    try { ensureCwd(startCtx.cwd); update(); } catch { captureFault = true; }
     let current: any; try { current = state(); } catch { current = { enabled: true, reviewHealth: { status: 'BLIND_SPOT' } }; }
     const nextGateKey = digest({ core: current?.coreRevision, verdict: current?.lastVerdict, health: current?.reviewHealth?.kind,
       restrictions: current?.branchRestrictions?.filter((r: any) => r.active)?.map((r: any) => r.id), captureFault });

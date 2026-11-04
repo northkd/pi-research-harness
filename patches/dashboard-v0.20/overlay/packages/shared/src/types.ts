@@ -2,6 +2,7 @@
 // character. `HostPressure` is defined beside the thresholds that produce it so
 // the verdict is not described twice. See change: fix-false-unresponsive-badge.
 import type { HostPressure } from "./host-pressure.js";
+import type { ResearchSessionProvenance } from "./research-session.js";
 
 /**
  * The auto-namer's enumerated durable state set: carried across an extension
@@ -591,6 +592,12 @@ export interface DashboardSession {
   pluginRefs?: Record<string, Record<string, unknown>>;
   /** Projection of the host association stored in pluginRefs["res-workflow"]. */
   resWorkflow?: ResWorkflowParticipation;
+  /**
+   * Provenance for a top-level session created by the native `research_session`
+   * tool. Absent on ordinary sessions and on native subagents. Persisted to
+   * `.meta.json` and mirrored beside `resWorkflow` in the res-workflow bag.
+   */
+  researchSession?: ResearchSessionProvenance;
   /**
    * Core-owned cold-start recovery opt-out, mirror of `SessionMeta.recover`.
    * Absent ⇒ recoverable (`true`). Resolved from an owning plugin's lifecycle

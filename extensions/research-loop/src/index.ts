@@ -11,7 +11,11 @@ import {
 import { createWorkflowObserver, readEventsTolerant, validateRunIdentity } from './workflow-progress.mjs';
 import { configureResearch, charterHash, withScientificRecordLock } from './adoption.mjs';
 import { spawnBudgetedResearchWorkflow } from './research-budget-bridge.mjs';
-import { registerWorkbenchContext } from './workbench-context.mjs';
+import { readWorkbenchRecordContext, registerWorkbenchContext } from './workbench-context.mjs';
+import { observeStageTurn } from './stage-observer.mjs';
+import { registerDelegationPolicy } from './delegation-policy.mjs';
+import { registerWorkbenchSessionTool } from './workbench-session-tool.mjs';
+import { recordStageTaskSummary } from './stage-task-summary.mjs';
 import {
   buildRoundPrompt, gateReview, readMemory, readTrace, recordRound, reviewDir,
 } from './reviewer.mjs';
@@ -74,43 +78,57 @@ function contained(cwd: string, target: string) {
   return target;
 }
 
-function reviewAndAdvanceStageSilent(cwd: string) {
-  try {
-    contained(cwd, rootDir(cwd));
-    const state = loadState(cwd);
-    if (!state || !state.charter) return;
+type ToolObservation = { id?: string; name: string; input: Record<string, string>; ok?: boolean; observedAt?: string };
+type ObservationBuffer = { users: string[]; tools: ToolObservation[]; turnStart: number; promptAt?: string };
+const observationBuffers = new Map<string, ObservationBuffer>();
+const TOOL_FIELDS = ['path', 'file_path', 'command', 'cmd', 'action', 'agentName', 'agent', 'name', 'topic', 'skill', 'pattern'];
 
-    let targetStage = state.stage;
-    const ledgerFile = path.join(rootDir(cwd), 'ledger.jsonl');
-    const hasLedger = fs.existsSync(ledgerFile) && fs.statSync(ledgerFile).size > 0;
-    const reviewDir = path.join(cwd, 'review-stage');
-    const hasReview = fs.existsSync(reviewDir);
-    const hasPaper = fs.existsSync(path.join(cwd, 'paper')) || fs.existsSync(path.join(cwd, 'manuscript.tex')) || fs.existsSync(path.join(cwd, 'paper.md'));
-
-    if (!targetStage) {
-      targetStage = '1-idea';
-    }
-    if (hasPaper) {
-      targetStage = '5-writing';
-    } else if (hasReview) {
-      targetStage = '3-review';
-    } else if (hasLedger) {
-      targetStage = '2-experiment';
-    }
-
-    if (targetStage && targetStage !== state.stage) {
-      appendEvent(cwd, 'stage-enter', {
-        stage: targetStage,
-        phase: state.phase ?? 1,
-        charterRevision: state.charter.revision,
-        note: '后台静默审查自动识别并触发阶段推进',
-      });
-      state.stage = targetStage;
-      saveState(cwd, state);
-    }
-  } catch {
-    // Silent review never throws or interrupts sessions
+function boundedToolInput(input: any): Record<string, string> {
+  if (!input || typeof input !== 'object') return {};
+  const result: Record<string, string> = {};
+  for (const field of TOOL_FIELDS) {
+    const value = input[field];
+    if (typeof value === 'string' && value.trim()) result[field] = value.replace(/\s+/g, ' ').trim().slice(0, 200);
   }
+  return result;
+}
+
+function bufferFor(sessionId: string) {
+  let buffer = observationBuffers.get(sessionId);
+  if (!buffer) {
+    if (observationBuffers.size >= 64) {
+      const oldest = observationBuffers.keys().next().value;
+      if (typeof oldest === 'string') observationBuffers.delete(oldest);
+    }
+    buffer = { users: [], tools: [], turnStart: 0 };
+    observationBuffers.set(sessionId, buffer);
+  }
+  return buffer;
+}
+
+function rememberTool(ctx: any, event: any, ok?: boolean) {
+  const sessionId = ctx?.sessionManager?.getSessionId?.();
+  if (typeof sessionId !== 'string' || !sessionId) return;
+  const buffer = bufferFor(sessionId);
+  const id = typeof event?.toolCallId === 'string' ? event.toolCallId : undefined;
+  const input = boundedToolInput(event?.input);
+  const name = typeof event?.toolName === 'string' ? event.toolName.slice(0, 64) : '';
+  const previous = id ? buffer.tools.find(item => item.id === id) : undefined;
+  if (previous) { if (ok !== undefined) previous.ok = ok; return; }
+  // Capture when the action was actually observed, not when the turn settles.
+  buffer.tools.push({ id, name, input, ok, observedAt: new Date().toISOString() });
+  if (buffer.tools.length > 32) buffer.tools.splice(0, buffer.tools.length - 32);
+}
+
+/**
+ * Observe a joined session's real user text and bounded tool activity. The
+ * active stage is still whatever the last stage-enter event says; this only
+ * records a new entry and never claims a scientific pass or completed stage.
+ */
+function observeConversation(context: any, cwd: string, userText: string, tools: ToolObservation[], at?: string) {
+  // The verified context and its charter CAS are re-checked inside the record
+  // lock; a stale source time must not overwrite a newer human stage choice.
+  return observeStageTurn(cwd, context, { userText, tools, at });
 }
 
 function requireState(cwd: string) {
@@ -258,6 +276,10 @@ function dispatchHint(cwd: string, state: any, packet: any) {
 
 export default function registerResearchLoop(pi: ExtensionAPI) {
   registerWorkbenchContext(pi);
+  registerWorkbenchSessionTool(pi);
+  registerDelegationPolicy(pi, { isJoined: (ctx: any) => {
+    try { return Boolean(readWorkbenchRecordContext(ctx)); } catch { return false; }
+  } });
   const observers = new Map<string, ReturnType<typeof createWorkflowObserver>>();
   const observe = (cwd: string, receipt: any, sessionId?: string) => {
     const details = receipt?.result?.details ?? receipt;
@@ -306,15 +328,46 @@ export default function registerResearchLoop(pi: ExtensionAPI) {
         try { observe(cwd, receipt, sessionId); }
         catch (error: any) { console.warn(`[research-loop] Progress recovery unavailable: ${error.message}`); }
       }
-      reviewAndAdvanceStageSilent(cwd);
+      observationBuffers.delete(sessionId);
     } catch (error: any) { console.warn(`[research-loop] Progress recovery unavailable: ${error.message}`); }
   });
-  pi.on('session_shutdown', async () => { clearObservers(); });
+  pi.on('session_shutdown', async () => { clearObservers(); observationBuffers.clear(); });
+  pi.on('before_agent_start', (event: any, ctx: any) => {
+    try {
+      const cwd = fs.realpathSync(ctx?.cwd ?? process.cwd());
+      const context = readWorkbenchRecordContext(ctx);
+      if (!context) return;
+      const prompt = event?.messageType === 'user' && typeof event.prompt === 'string' ? event.prompt.slice(0, 4000) : '';
+      const buffer = bufferFor(context.sessionId);
+      buffer.promptAt = new Date().toISOString();
+      // A completion wake must not replay the previous user's intent as new work.
+      buffer.users = prompt.trim() ? [prompt] : [];
+      if (prompt.trim()) recordStageTaskSummary(cwd, context, prompt);
+      // A new turn starts here; earlier turns were already observed at settlement.
+      buffer.turnStart = buffer.tools.length;
+      observeConversation(context, cwd, prompt, [], buffer.promptAt);
+    } catch { /* Observation is best effort and never interrupts the user's turn. */ }
+  });
+  pi.on('tool_call', (event: any, ctx: any) => {
+    try { rememberTool(ctx, event); } catch { /* Bounded observation only. */ }
+  });
+  pi.on('tool_result', (event: any, ctx: any) => {
+    try { rememberTool(ctx, event, event?.isError !== true); } catch { /* Bounded observation only. */ }
+  });
   pi.on('agent_settled', async (_event: any, ctx: any) => {
     try {
       const cwd = fs.realpathSync(ctx?.cwd ?? process.cwd());
-      reviewAndAdvanceStageSilent(cwd);
-    } catch {}
+      const context = readWorkbenchRecordContext(ctx);
+      if (!context) return;
+      const buffer = bufferFor(context.sessionId);
+      const tools = buffer.tools.slice(buffer.turnStart);
+      // Classify against the actual prompt/tool observation time. Using the
+      // settlement wall clock would let an old turn outrank a human stage click.
+      const at = [buffer.promptAt, ...tools.map(tool => tool.observedAt)]
+        .filter((value): value is string => typeof value === 'string').sort().at(-1);
+      observeConversation(context, cwd, buffer.users.at(-1) ?? '', tools, at);
+      buffer.turnStart = buffer.tools.length;
+    } catch { /* Settlement observation is best effort. */ }
   });
 
   const tool = {
@@ -413,8 +466,14 @@ export default function registerResearchLoop(pi: ExtensionAPI) {
           // stages; it only binds them to the frozen charter and ledger phase.
           if (!STAGE_IDS.includes(params.stage)) throw new Error(`stage must be one of ${STAGE_IDS.join(', ')}`);
           return updateResearchState(cwd, params, state => {
-            appendEvent(cwd, 'stage-enter', { stage: params.stage, phase: state.phase ?? 1, charterRevision: state.charter.revision, note: params.focus });
+            const selectedAt = new Date().toISOString();
+            appendEvent(cwd, 'stage-enter', { stage: params.stage, phase: state.phase ?? 1, charterRevision: state.charter.revision, source: 'manual', observed: false, selectedAt, note: params.focus });
             state.stage = params.stage;
+            state.stageSource = 'manual';
+            // A human selection is the authority for its charter; older automatic
+            // observations must not overwrite it.
+            state.stageObservedAt = selectedAt;
+            state.stageCharterRevision = state.charter.revision;
             const map = loadStageMap();
             return { stage: params.stage, mapping: map.stages?.[params.stage] ?? null, health: analyze(cwd, state) };
           });

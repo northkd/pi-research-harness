@@ -1,6 +1,6 @@
 {
   "schema": "pi-research-mainline-supervision-source.v1",
-  "date": "2026-10-15",
+  "date": "2026-11-04",
   "license": "Apache-2.0",
   "source": "Author-owned locally deployed policy-v2 / cadence-v1 implementation; not an upstream package",
   "localPriorAcceptance": {
@@ -17,7 +17,8 @@
     "No private project state, review packets, transcripts, raw logs, runtime/deployment records or authenticated model tests exported",
     "Historical SDK gates retained with portable dependency roots; real model/host claims remain separate from mocks",
     "Remove four trailing spaces inherited from local author-owned source/tests; no behavioral change",
-    "macOS capture reports OS total/free memory separately; Linux-only resource admission remains fail-closed"
+    "macOS capture reports OS total/free memory separately; Linux-only resource admission remains fail-closed",
+    "Project-local auto-approval preference is persisted separately from scientific acceptance; explicit startup defaults and existing hard gates are preserved"
   ],
   "liveNewModelRoundtrip": "NOT_RUN",
   "persistentWorkflowHumanAdjudication": "NOT_IMPLEMENTED",
@@ -68,8 +69,13 @@
       "localSourceSha256": "d69961d17e1f40c25e320bfa2742ab3ad3e03c79a4a12f4c9512bb9483b636fa"
     },
     {
+      "path": "src/auto-approve.mjs",
+      "sha256": "180ca6ae2801224353776daabd8eb8f46f7260fcfcf2aa52a92b467abd5957a6",
+      "localSourceSha256": null
+    },
+    {
       "path": "src/capture.mjs",
-      "sha256": "431d04ce5c01f8f16bc383fbf7391b46b24b1ee610904df052273ade5de0a1cf",
+      "sha256": "9bedb037eb46cf6d0e8dad774b19c7c514742a21dac3f6ba45fb23b9e7edc7bd",
       "localSourceSha256": "02704f09bda900fa20c65b6c172cff4093a1f3d07f1783a726258e93be41fd01"
     },
     {
@@ -79,18 +85,23 @@
     },
     {
       "path": "src/index.ts",
-      "sha256": "9f234eb5f932d4d518de7b796a9a2db556dc2bf48ca53df6a8569fa915fc5d5a",
+      "sha256": "37d2fc63f56c1874eedf2079f41aa4298504900ae536bf4e9c9393938bbef2b5",
       "localSourceSha256": "9f234eb5f932d4d518de7b796a9a2db556dc2bf48ca53df6a8569fa915fc5d5a"
     },
     {
       "path": "src/policy.mjs",
-      "sha256": "1d463b2f3f7c70054cada527b614d0795c855a8fbeae2e7dc1aebf12d1b6f93b",
+      "sha256": "fada12c2c27a71ec15480d7e5753dac7e1d094a2fda46312dfb75e91a7952fb7",
       "localSourceSha256": "1d463b2f3f7c70054cada527b614d0795c855a8fbeae2e7dc1aebf12d1b6f93b"
     },
     {
       "path": "test/adapter.test.mjs",
-      "sha256": "cc049765fcafbf9961da5b6c263f6acd1f4cbf5bfecb3954d398a2fa69aaa883",
+      "sha256": "babc47662304d05860c4b945f6b6b9cdf41d9d532457e9708f077c880e9ba49d",
       "localSourceSha256": "bdec5458ab378c4369648e6ba16f8259ffc1e3bb7f7be0cefabe45025f9016fe"
+    },
+    {
+      "path": "test/auto-approve.test.mjs",
+      "sha256": "ec1772e42388b0960f3f979455cbba618a773a799285b4a3b8a0883ef155ff9b",
+      "localSourceSha256": null
     },
     {
       "path": "test/cadence.test.mjs",
@@ -109,7 +120,7 @@
     },
     {
       "path": "test/integration.test.mjs",
-      "sha256": "7012413847f29e4fe6e4428daae9075d67ced90eb2a587d5d72af6bba4d5ef26",
+      "sha256": "ea4787f4039979a433ca926674d1acc6fdf9f8a2610241de432b8f245d930d67",
       "localSourceSha256": "3e9d10bf74dac3ca5a06e48e31c759619c484fa63aad83408177bddd1243cb0c"
     },
     {
@@ -124,7 +135,7 @@
     },
     {
       "path": "test/proportional-policy.test.mjs",
-      "sha256": "003c33e51880f2b8655b815576a548f67032ceb265526a93c90c6cf61ade635e",
+      "sha256": "2beda466792792d2c7b9b693e42499b63b6972dc022897b05ea27d44e77687c9",
       "localSourceSha256": "003c33e51880f2b8655b815576a548f67032ceb265526a93c90c6cf61ade635e"
     },
     {

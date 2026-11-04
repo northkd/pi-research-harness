@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readResearchBudget } from './research-budget.mjs';
+import { buildDelegationGuidance, mergeDelegationRestrictions } from './delegation-policy.mjs';
 
 export const WORKBENCH_CONTEXT_SECTION = 'res_workflow_records';
 const STAGES = new Set(['1-idea', '2-experiment', '3-review', '4-summary', '5-writing']);
@@ -138,27 +139,28 @@ export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.home
   return { sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, budget, memory };
 }
 
-export function buildWorkbenchRecordProtocol(context, memory = {}) {
-  const mem = memory.objective ? [
+export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?? {}, options = {}) {
+  const memSource = object(memory) ? memory : {};
+  const mem = memSource.objective ? [
     '',
     '【科研工作流深度记忆与上下文注入 (Research Memory)】',
-    `当前研究核心目标：${memory.objective}`,
-    memory.successCriteria?.length ? `验收成功准则：\n${memory.successCriteria.map(s => '  - ' + s).join('\n')}` : '',
-    `当前阶段已沉淀主张：${memory.claimsCount} 条${memory.acceptedClaims?.length ? '（含已通过内部验收主张：' + memory.acceptedClaims.join('；') + '）' : ''}`,
-    memory.recentFindings ? `最新尝试记录与观测证据：\n${memory.recentFindings}` : '',
+    `当前研究核心目标：${memSource.objective}`,
+    memSource.successCriteria?.length ? `验收成功准则：\n${memSource.successCriteria.map(s => '  - ' + s).join('\n')}` : '',
+    `当前阶段已沉淀主张：${memSource.claimsCount} 条${memSource.acceptedClaims?.length ? '（含已通过内部验收主张：' + memSource.acceptedClaims.join('；') + '）' : ''}`,
+    memSource.recentFindings ? `最新尝试记录与观测证据：\n${memSource.recentFindings}` : '',
   ].filter(Boolean).join('\n') : '';
+  const delegation = buildDelegationGuidance({
+    selectedTools: options.selectedTools,
+    restrictions: options.restrictions,
+    env: options.env,
+  });
 
   return [
     'This Pi session is joined to the confirmed res-workflow research workbench.',
     `Verified current record context: ${JSON.stringify(context)}`,
     mem,
     '',
-    '【主 Agent 上下文减负与 Multi-Agent / Subagent 协同准则 (CRITICAL: Context Management)】',
-    '1. 角色定位与主上下文保护：您是本研究的主控/核心会话 (Lead Agent)。请务必严格控制主会话的上下文体积，严禁在主会话中直接执行冗长代码运算、解析几百上千行控制台日志、或通篇阅读几十页长文献。如果所有繁重工作都在主会话中直接完成，会导致上下文急剧膨胀并频繁触发上下文压缩。',
-    '2. 专职 Subagent 任务派发：当需要文献综述、深度检索、数学/物理数值拟合、跨模型对抗审查、代码重构、数据清洗等专门任务时，请立即调用 `subagent` 工具派发专职微任务！',
-    '   - 派发工具名称：`subagent` (以 agentName + prompt 调用，不要误以为没有工具或误用)。',
-    '   - 常用专职角色：research-literature (文献调研与交叉对比), research-numerics (数值计算与拟合), research-critic (反例寻找与对抗审查), research-theory (机理推导), research-mainline-supervisor (主线进度监督), research-ssh (远程集群作业) 等。',
-    '   - 协同机制：Subagent 在独立沙箱中执行，只向主会话返回精炼结论与证据路径，保持主会话上下文始终清爽高效！',
+    delegation,
     '',
     '【工作流五大阶段自动识别与推进】',
     '阶段推进准则：',
@@ -180,6 +182,21 @@ export function buildWorkbenchRecordProtocol(context, memory = {}) {
   ].join('\n');
 }
 
+const restrictionBySession = new Map();
+
+/** Keep a user's opt-out/read-only/export limit across neutral follow-up turns. */
+function restrictionsFor(event, ctx) {
+  const sessionId = ctx?.sessionManager?.getSessionId?.();
+  if (typeof sessionId !== 'string' || !sessionId) return undefined;
+  if (event?.messageType === 'user' && typeof event?.prompt === 'string') {
+    const restrictions = mergeDelegationRestrictions(restrictionBySession.get(sessionId), event.prompt);
+    if (restrictionBySession.size >= 64) restrictionBySession.delete(restrictionBySession.keys().next().value);
+    restrictionBySession.set(sessionId, restrictions);
+    return restrictions;
+  }
+  return restrictionBySession.get(sessionId);
+}
+
 /** New sessions load the hook once; each turn revalidates live membership and metadata. */
 export function registerWorkbenchContext(pi, options = {}) {
   pi.on('before_agent_start', (event, ctx) => {
@@ -192,7 +209,11 @@ export function registerWorkbenchContext(pi, options = {}) {
       if (!context) return undefined;
       const { memory, ...restContext } = context;
       if (!object(opts.sections)) opts.sections = {};
-      opts.sections[WORKBENCH_CONTEXT_SECTION] = buildWorkbenchRecordProtocol(restContext, memory);
+      opts.sections[WORKBENCH_CONTEXT_SECTION] = buildWorkbenchRecordProtocol(restContext, memory, {
+        selectedTools: opts.selectedTools,
+        restrictions: restrictionsFor(event, ctx),
+        env: options.env,
+      });
     } catch { /* Missing, revoked, changed or partially written records do not abort Pi. */ }
     return undefined;
   });

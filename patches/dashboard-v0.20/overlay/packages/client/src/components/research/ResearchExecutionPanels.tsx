@@ -22,10 +22,14 @@ import { useApiBase } from "../../lib/api/api-context.js";
 import {
   configuredRolesForStage,
   latestObservedExecution,
+  projectExecutionOrigin,
+  projectResearchSessionRelations,
   RESEARCH_STAGE_IDS,
   type ConfiguredRole,
   type ResearchExecution,
+  type ResearchExecutionOrigin,
   type ResearchProjection,
+  type ResearchSessionInfoLike,
   type StageId,
 } from "./research-projection.js";
 import { executionRecordStatus, researchStatusLabel, roleLabel } from "./ResearchAgentDetail.js";
@@ -152,14 +156,6 @@ export function formatTime(iso?: string | null): string {
   });
 }
 
-const PROOF_SOURCES: Record<string, string> = {
-  "tool-call": "工具调用记录",
-  "native-event": "原生事件",
-  "native-status": "原生状态中的父子记录",
-  "explicit-record": "明确记录",
-};
-const proofSource = (source: string) => PROOF_SOURCES[source] ?? source;
-
 const STAGE_LABELS: Record<StageId, { name: string; desc: string }> = {
   "1-idea": { name: "1. 探索与构思", desc: "文献调研、独立发散、收窄科研问题" },
   "2-experiment": { name: "2. 实验与验证", desc: "可判定实验、数值模拟与运行输出" },
@@ -192,32 +188,11 @@ export function ResearchExecutionPanels({
     (row) => stage === null || row.stage === stage || (includeUnstaged && !row.stage)
   );
 
-  const configured = stage ? configuredRolesForStage(projection.configuration, stage) : [];
-  const roles = new Map<string, ConfiguredRole>(configured.map((role) => [role.name, role]));
-  for (const row of executions) {
-    const name = executionRoleName(row);
-    if (!roles.has(name)) roles.set(name, { name, skills: [] });
-  }
-
-  const relations = projection.relations.filter(
-    (row) =>
-      executions.some((node) => node.id === row.fromExecutionId) &&
-      executions.some((node) => node.id === row.toExecutionId)
-  );
   const run = projection.currentRun;
-  const source = (row: ResearchExecution) =>
-    row.source === "workflow-record"
-      ? "已登记工作流步骤"
-      : row.kind === "pi-session"
-      ? "已接入 Pi 会话"
-      : "已观测原生子任务";
-
   const isWorkflowActive = executions.some((row) => live(row));
 
-  // Session metadata cache for matching real session names and user vs workflow origin
-  const [sessionInfoMap, setSessionInfoMap] = useState<
-    Record<string, { id?: string; name?: string; firstMessage?: string; nameSource?: string; via?: string }>
-  >({});
+  // Session metadata cache for matching real session names and the three origins.
+  const [sessionInfoMap, setSessionInfoMap] = useState<Record<string, ResearchSessionInfoLike>>({});
 
   useEffect(() => {
     let isMounted = true;
@@ -245,9 +220,47 @@ export function ResearchExecutionPanels({
     };
   }, [apiBase]);
 
+  const sessionIdFor = (row: ResearchExecution) => row.sessionId || (row.kind === "pi-session" && row.id.startsWith("session-") ? row.id.slice(8) : row.id);
+  const sessionInfoFor = (row: ResearchExecution) => sessionInfoMap[sessionIdFor(row)] || sessionInfoMap[row.id];
+  const originFor = (row: ResearchExecution): ResearchExecutionOrigin => {
+    const origin = projectExecutionOrigin(row, sessionInfoFor(row), run?.parentSessionId);
+    const creator = origin.creatorSessionId ? sessionInfoMap[origin.creatorSessionId] : undefined;
+    const name = creator?.nameSource !== "firstMessage" ? creator?.name?.trim().slice(0, 80) : undefined;
+    return name && name !== origin.creatorSessionId ? { ...origin, creatorLabel: name } : origin;
+  };
+  const roleNameOf = (row: ResearchExecution) => originFor(row).role ?? executionRoleName(row);
+  const configured = stage ? configuredRolesForStage(projection.configuration, stage) : [];
+  const roles = new Map<string, ConfiguredRole>(configured.map((role) => [role.name, role]));
+  for (const row of executions) {
+    const name = roleNameOf(row);
+    if (!roles.has(name)) roles.set(name, { name, skills: [] });
+  }
+  const originText = (row: ResearchExecution) => {
+    const origin = originFor(row);
+    return `${origin.label} · 创建者：${origin.creatorLabel}${origin.role ? ` · 角色：${roleLabel(origin.role)}` : ""}`;
+  };
+  const sessionRows = useMemo(() => Object.values(sessionInfoMap).filter(
+    (row): row is ResearchSessionInfoLike & { id: string } => typeof row.id === "string",
+  ), [sessionInfoMap]);
+  const relations = useMemo(() => {
+    const merged = [...projection.relations, ...projectResearchSessionRelations(executions, sessionRows)];
+    const byId = new Map<string, (typeof merged)[number]>();
+    for (const relation of merged) {
+      if (executions.some(node => node.id === relation.fromExecutionId) &&
+          executions.some(node => node.id === relation.toExecutionId)) {
+        byId.set(relation.id, relation);
+      }
+    }
+    return [...byId.values()];
+  }, [projection.relations, executions, sessionRows]);
+
   const getSessionDisplayName = (sessionExec: ResearchExecution, isCaptain: boolean) => {
-    const sid = sessionExec.sessionId || sessionExec.id;
-    const info = sessionInfoMap[sid] || sessionInfoMap[sessionExec.id];
+    const info = sessionInfoFor(sessionExec);
+    const origin = originFor(sessionExec);
+    if (info?.name && info.nameSource !== "firstMessage") return info.name;
+    // A lead-created collaborator is named by its assigned role and creator;
+    // never by the raw first prompt.
+    if (origin.kind === "lead-agent-created" && origin.role) return `${roleLabel(origin.role)} · Lead 协作`;
     if (info?.name) return info.name;
     if (info?.firstMessage) {
       const clean = info.firstMessage.replace(/[#*`>-]/g, "").replace(/\s+/g, " ").trim();
@@ -280,7 +293,7 @@ export function ResearchExecutionPanels({
 
   const captainExecution = useMemo(() => {
     if (mainAgentId) {
-      const found = executions.find((ex) => ex.sessionId === mainAgentId || ex.id === mainAgentId);
+      const found = executions.find((ex) => sessionIdFor(ex) === mainAgentId || ex.id === mainAgentId);
       if (found) return found;
     }
     const piSessions = executions.filter((ex) => ex.kind === "pi-session");
@@ -375,6 +388,7 @@ export function ResearchExecutionPanels({
         body: JSON.stringify({
           cwd: targetCwd,
           initialPrompt: promptText,
+          joinResWorkflow: true,
         }),
       });
 
@@ -403,14 +417,16 @@ export function ResearchExecutionPanels({
     return RESEARCH_STAGE_IDS.map((stageId) => {
       const stageExecs = projection.executions.filter((ex) => ex.stage === stageId);
       const isCurrent = projection.stage === stageId;
-      const isCompleted = projection.enteredStages.has(stageId) && !isCurrent;
+      // Entered is not completed: no artifact or acceptance checkmark exists
+      // until a later real run or claim proves it.
+      const isEntered = projection.enteredStages.has(stageId) && !isCurrent;
       const hasExecs = stageExecs.length > 0;
       return {
         id: stageId,
         info: STAGE_LABELS[stageId],
         executions: stageExecs,
         isCurrent,
-        isCompleted,
+        isEntered,
         hasExecs,
         active: stageExecs.some((ex) => live(ex)),
       };
@@ -465,7 +481,7 @@ export function ResearchExecutionPanels({
         .sort((a, b) => execTime(b).localeCompare(execTime(a)));
       const byRole = new Map<string, ResearchExecution[]>();
       for (const s of childSubs) {
-        const rName = executionRoleName(s);
+        const rName = roleNameOf(s);
         const arr = byRole.get(rName) ?? [];
         arr.push(s);
         byRole.set(rName, arr);
@@ -481,18 +497,20 @@ export function ResearchExecutionPanels({
         };
       }).sort((a, b) => execTime(b.latest).localeCompare(execTime(a.latest)));
 
-      const sid = sessionExec.sessionId || sessionExec.id;
-      const sessionInfo = sessionInfoMap[sid] || sessionInfoMap[sessionExec.id];
-      const isUserCreated = sessionInfo?.nameSource === "user" || sessionInfo?.via === "manual" || (isCaptain && !sessionInfo?.via?.includes("workflow"));
+      const origin = originFor(sessionExec);
       const title = getSessionDisplayName(sessionExec, isCaptain);
       const workflowDuty = getSessionWorkflowDuty(sessionExec, isCaptain);
 
       return {
         sessionExec,
         title,
-        roleObj: roles.get(executionRoleName(sessionExec)) ?? { name: executionRoleName(sessionExec), skills: [] },
+        roleObj: roles.get(roleNameOf(sessionExec)) ?? { name: roleNameOf(sessionExec), skills: [] },
         isCaptain,
-        isUserCreated: Boolean(isUserCreated),
+        isUserCreated: origin.kind === "user-created",
+        origin: origin.kind,
+        originLabel: origin.label,
+        creatorLabel: origin.creatorLabel,
+        assignedRole: origin.role,
         workflowDuty,
         childSubs,
         childRoleGroups,
@@ -505,12 +523,12 @@ export function ResearchExecutionPanels({
       subRoleNames.add(c.name);
     }
     for (const s of subs) {
-      subRoleNames.add(executionRoleName(s));
+      subRoleNames.add(roleNameOf(s));
     }
 
     const roleSummaries = [...subRoleNames].map((rName) => {
       const roleObj = roles.get(rName) ?? { name: rName, skills: [] };
-      const roleExecs = executions.filter((ex) => executionRoleName(ex) === rName);
+      const roleExecs = executions.filter((ex) => roleNameOf(ex) === rName);
       const latestObserved = latestObservedExecution(roleExecs);
       const primaryExec = latestObserved ?? roleExecs[0];
 
@@ -704,8 +722,15 @@ export function ResearchExecutionPanels({
                             <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-green)] animate-pulse" />
                             <span>运行中</span>
                           </span>
-                        ) : item.isCompleted ? (
-                          <Icon path={mdiCheckCircle} size={0.65} className="text-[var(--accent-green)]" />
+                        ) : item.isCurrent ? (
+                          <span className="tint-action-blue inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold">
+                            <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-primary)]" />
+                            <span>已进入</span>
+                          </span>
+                        ) : item.isEntered ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
+                            <span>已进入</span>
+                          </span>
                         ) : item.hasExecs ? (
                           <Icon path={mdiClockOutline} size={0.65} className="text-[var(--accent-text)]" />
                         ) : (
@@ -845,7 +870,7 @@ export function ResearchExecutionPanels({
                   {executions.map((row) => {
                     const isCaptain = captainExecution?.id === row.id;
                     const isLive = live(row);
-                    const rName = executionRoleName(row);
+                    const rName = roleNameOf(row);
                     const parentRow = row.parentExecutionId ? parentById.get(row.parentExecutionId) : undefined;
                     return (
                       <li
@@ -883,16 +908,13 @@ export function ResearchExecutionPanels({
 
                           <div className="mt-2.5 space-y-1 text-xs text-[var(--text-secondary)]">
                             <span className="block truncate">
-                              来源：{source(row)} · {row.stage ? STAGE_LABELS[row.stage]?.name || row.stage : "阶段未登记"}
+                              来源：{originText(row)} · {row.stage ? STAGE_LABELS[row.stage]?.name || row.stage : "阶段未登记"}
                             </span>
                             {parentRow && (
                               <span className="block truncate text-[var(--accent-text)] font-medium">
-                                派发自 Multi-Agent：{executionRoleName(parentRow)}
+                                派发自 Multi-Agent：{roleNameOf(parentRow)}
                               </span>
                             )}
-                            <span className="block truncate font-mono text-[11px] text-[var(--text-tertiary)]">
-                              ID: {row.id}
-                            </span>
                             <span className="block truncate">
                               模型：<strong className="font-mono text-[var(--text-primary)]">{row.observedModel ?? "未记录"}</strong>
                             </span>
@@ -914,33 +936,6 @@ export function ResearchExecutionPanels({
                 </ul>
               )}
             </div>
-
-            {/* Explicit Relations & Dispatch Evidence */}
-            {relations.length > 0 && (
-              <div className="win11-card-subtle p-3.5 space-y-2">
-                <div className="text-xs font-semibold text-[var(--text-primary)]">
-                  实际派发协同证据链 ({relations.length})
-                </div>
-                <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
-                  {relations.map((rel) => (
-                    <div
-                      key={rel.id}
-                      data-testid="research-relation"
-                      className="flex flex-wrap items-center justify-between gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-secondary)]"
-                    >
-                      <span className="font-mono font-semibold text-[var(--accent-text)]">
-                        {rel.fromExecutionId} → {rel.toExecutionId}
-                      </span>
-                      {rel.evidence && (
-                        <span className="text-[11px] text-[var(--text-tertiary)]">
-                          派发证据：{proofSource(rel.evidence.source)} ({rel.evidence.eventId})
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </CollapsibleSection>
       )}
@@ -1130,8 +1125,8 @@ export function ResearchExecutionPanels({
                               type="button"
                               onClick={() =>
                                 onAgent(
-                                  roles.get(executionRoleName(matchedExec)) ?? {
-                                    name: executionRoleName(matchedExec),
+                                  roles.get(roleNameOf(matchedExec)) ?? {
+                                    name: roleNameOf(matchedExec),
                                     skills: [],
                                   },
                                   matchedExec
@@ -1255,7 +1250,7 @@ export function ResearchExecutionPanels({
 
                   {/* Keep the detailed list available, with the canvas as the compact default. */}
                   {fusionLayout === "canvas" ? (
-                    visibleClusters.length ? <ResearchAgentCanvas clusters={visibleClusters} stale={stale} onAgent={onAgent} statusLabel={researchStatusLabel} roleLabel={getSubagentRoleDisplayTitle} />
+                    visibleClusters.length ? <ResearchAgentCanvas clusters={visibleClusters} stale={stale} relations={relations} onAgent={onAgent} statusLabel={researchStatusLabel} roleLabel={getSubagentRoleDisplayTitle} />
                       : <div className="win11-card-subtle p-4 text-xs text-[var(--text-secondary)]">没有符合筛选条件的会话。</div>
                   ) : (
                   <div className="space-y-3.5">
@@ -1865,13 +1860,13 @@ export function ResearchExecutionPanels({
                                       type="button"
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        const pName = executionRoleName(parent);
+                                        const pName = roleNameOf(parent);
                                         onAgent(roles.get(pName) ?? { name: pName, skills: [] }, parent);
                                       }}
                                       className="tint-action-blue rounded border px-2 py-0.5 text-[10.5px] font-medium hover:opacity-85 transition-opacity text-left inline-flex items-center justify-start gap-1"
-                                      title={`点击查看父会话：${executionRoleName(parent)}`}
+                                      title={`点击查看父会话：${roleNameOf(parent)}`}
                                     >
-                                      <span>🤖 {executionRoleName(parent)}</span>
+                                      <span>🤖 {roleNameOf(parent)}</span>
                                       <span className="font-mono text-[9.5px] opacity-80">(×{count})</span>
                                     </button>
                                   ))}
@@ -1985,7 +1980,7 @@ export function ResearchExecutionPanels({
                 </div>
                 <div className="win11-grid-cards">
                   {subagentExecutions.slice(0, 36).map((row) => {
-                    const rName = executionRoleName(row);
+                    const rName = roleNameOf(row);
                     const parentRow = row.parentExecutionId ? parentById.get(row.parentExecutionId) : undefined;
                     const taskSnippet = (row.prompt ?? row.output ?? "")
                       .replace(/^Task:\s*/i, "")
@@ -2009,7 +2004,7 @@ export function ResearchExecutionPanels({
                           </div>
                           {parentRow && (
                             <div className="text-[11px] font-medium text-[var(--accent-text)] truncate">
-                              ← 由「{executionRoleName(parentRow)}」单向派发
+                              ← 由「{roleNameOf(parentRow)}」单向派发
                             </div>
                           )}
                           <div className="text-xs leading-relaxed text-[var(--text-secondary)] line-clamp-2">

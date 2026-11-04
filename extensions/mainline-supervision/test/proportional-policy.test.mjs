@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { MainlineStore } from '../src/core.mjs';
-import { validReview, operationDecision, validateLocalOperation, referencesEvent } from '../src/policy.mjs';
+import { validReview, operationDecision, validateLocalOperation, referencesEvent, needsResource, observationTool } from '../src/policy.mjs';
 function fixture(t) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'mainline-proportional-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
@@ -38,6 +38,28 @@ function off(store) {
     restrictions: [{ paths: ['src/a.py'], eventIds: ['actual-a'], evidence: 'EVIDENCE.json event actual-a', reason: 'Observed unrelated action' }] });
   return complete(store, result);
 }
+test('top-level research sessions retain resource, scoped-branch and egress gates', t => {
+  const { store } = fixture(t);
+  const input = { role: 'literature', task: 'Review the synthetic task', stage: '1-idea' };
+  const event = { toolName: 'research_session', input };
+  assert.equal(needsResource(event), true);
+  assert.equal(needsResource({ ...event, input: { ...input, action: 'status' } }), true);
+  assert.equal(observationTool(event.toolName, input), false);
+  const pending = { ...store.getState(), pendingChanges: true };
+  const decision = operationDecision(store, pending, event);
+  assert.equal(decision.allow, false);
+  assert.equal(decision.confirmable, true);
+  store.meminfo = 'MemAvailable: 1000 kB';
+  assert.equal(operationDecision(store, pending, event).hard, true);
+  const batch = { toolName: 'parallel', input: { tool_uses: [{ recipient_name: 'functions.research_session', parameters: input }] } };
+  assert.equal(operationDecision(store, pending, batch).hard, true);
+  assert.equal(decide(store, 'ask_user', {}).allow, true);
+  store.meminfo = 'MemAvailable: 4194304 kB';
+  off(store);
+  const restricted = decide(store, 'research_session', { ...input, task: 'Inspect src/a.py' });
+  assert.equal(restricted.allow, false);
+  assert.equal(restricted.confirmable, undefined);
+});
 test('direction ON_TRACK coexists with science UNVERIFIED and does not authorize publication', t => {
   const { store } = fixture(t); const v = review(); assert.equal(validReview(v), true); complete(store, v);
   assert.equal(store.getState().lastVerdict, 'ON_TRACK'); assert.equal(store.getState().lastScience.status, 'UNVERIFIED');

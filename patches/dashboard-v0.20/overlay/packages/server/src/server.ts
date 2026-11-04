@@ -266,6 +266,7 @@ import { registerDoctorRoutes } from "./routes/doctor-routes.js";
 import { registerFileRoutes } from "./routes/file-routes.js";
 import { registerFolderProjectRoutes } from "./routes/folder-project-routes.js";
 import { registerResWorkflowRoutes } from "./routes/res-workflow-routes.js";
+import { registerResWorkflowResearchSessionRoutes } from "./routes/res-workflow-research-session-routes.js";
 import { registerScienceViewerRoutes } from "./routes/science-viewer-routes.js";
 import { registerScienceInstancesRoutes } from "./routes/science-instances-routes.js";
 import type { ScienceInstancesHost } from "@blackbelt-technology/pi-dashboard-shared/science-instances.js";
@@ -2425,6 +2426,10 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     pendingPrincipalOwnerRegistry,
     pendingResumeIntents,
     pendingAttachRegistry,
+    pendingInitialPromptRegistry,
+    resWorkflowSpawnSupport: () => resWorkflowParticipants
+      ? { prepare: resWorkflowParticipants.prepareSpawn, registry: pendingPluginRefRegistry }
+      : undefined,
     pendingPromptAcks,
     sessionArchive,
     pendingArchiveIntents,
@@ -2659,6 +2664,24 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     broadcast: (id, update) => browserGateway.broadcastSessionUpdated(id, update),
   });
   browserGateway.setResWorkflowSpawnSupport({ prepare: resWorkflowParticipants.prepareSpawn, registry: pendingPluginRefRegistry });
+  registerResWorkflowResearchSessionRoutes(fastify, {
+    networkGuard, sessionManager,
+    accessFor: (cwd, identity) => resWorkflowAccess(resWorkflowAccessDeps, identity, cwd),
+    prepareSpawn: (cwd, identity, verified) => resWorkflowParticipants!.prepareSpawn(cwd, identity, verified),
+    pendingPluginRefRegistry, pendingPrincipalOwnerRegistry,
+    initialPrompts: pendingInitialPromptRegistry,
+    spawn: (cwd, options) => spawnPiSession(cwd, options),
+    spawnStrategy: () => loadConfig().spawnStrategy,
+    isResolverActive: identityEnforced,
+    onSpawnResult: (cwd, result) => {
+      if (!result.success) return;
+      armSpawnWatchdog(cwd, loadConfig().spawnStrategy, result);
+      if (result.process && result.pid) {
+        browserGateway.headlessPidRegistry.register(result.pid, cwd, result.process, result.spawnToken, keeperOptsFromSpawnResult(result));
+      }
+      if (result.dashboardSpawned) pendingDashboardSpawns.set(cwd, (pendingDashboardSpawns.get(cwd) ?? 0) + 1);
+    },
+  });
   // Settings → Access review surface + the one endpoint that can create a
   // filesystem grant. See change: add-access-grants-and-review.
   registerAccessRoutes(fastify, { networkGuard, preferencesStore, writeConfigPartial });

@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Icon } from "@mdi/react";
 import { mdiAccountGroup, mdiArrowLeft, mdiArrowExpandAll, mdiClose, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew } from "@mdi/js";
-import type { ConfiguredRole, ResearchExecution } from "./research-projection.js";
+import type { ConfiguredRole, ResearchExecution, ResearchExecutionOriginKind } from "./research-projection.js";
+import type { ResearchWorkbenchRelation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
 import { getMemberArt, leadArt } from "./agent-teams-artwork.js";
 import { fitGraph, layoutFocusedSession, layoutOverview, zoomGraphAt, type CanvasNode, type CanvasView } from "./research-agent-canvas-layout.js";
 
@@ -19,15 +20,30 @@ export interface CanvasSessionCluster {
   childSubs: ResearchExecution[];
   childRoleGroups: CanvasRoleGroup[];
   isUserCreated?: boolean;
+  origin?: ResearchExecutionOriginKind;
+  originLabel?: string;
+  creatorLabel?: string;
+  assignedRole?: string;
   workflowDuty?: string;
 }
 interface Props {
   clusters: CanvasSessionCluster[];
   stale: boolean;
+  /** Only relations whose actual endpoint executions exist are passed in. */
+  relations?: ResearchWorkbenchRelation[];
   onAgent: (role: ConfiguredRole, execution?: ResearchExecution) => void;
   statusLabel: (status: string) => string;
   roleLabel: (role: string) => string;
 }
+
+const originTint = (origin?: ResearchExecutionOriginKind) =>
+  origin === "lead-agent-created"
+    ? "border-purple-500/40 bg-purple-500/10 text-[var(--text-secondary)]"
+    : origin === "workflow-created"
+    ? "border-amber-500/40 bg-amber-500/10 text-[var(--text-secondary)]"
+    : "border-sky-500/40 bg-sky-500/10 text-[var(--text-secondary)]";
+const originGlyph = (origin?: ResearchExecutionOriginKind) =>
+  origin === "lead-agent-created" ? "🧭 Lead 创建" : origin === "workflow-created" ? "⚡ 工作流创建" : "👤 我创建的";
 
 const nodeStyle = (node: CanvasNode) => ({ position: "absolute" as const, left: node.x, top: node.y, width: node.width, height: node.height });
 const curve = (fromX: number, fromY: number, toX: number, toY: number) => {
@@ -39,7 +55,7 @@ const verticalBranch = (parent: CanvasNode, child: CanvasNode) =>
 const isLive = (status: string) => ["streaming", "started", "running"].includes(status);
 
 /** A read-only map of recorded sessions and their observed child roles. */
-export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, roleLabel }: Props) {
+export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, statusLabel, roleLabel }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; startX: number; startY: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -164,17 +180,19 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
               <span className={`font-semibold ${cluster.isCaptain ? "text-[var(--accent-orange)]" : "text-[var(--accent-blue)]"}`}>
                 {cluster.isCaptain ? "👑 主agent" : "🤖 协同agent"}
               </span>
-              <span className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${
-                cluster.isUserCreated
-                  ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
-                  : "border-purple-500/40 bg-purple-500/10 text-purple-400"
-              }`}>
-                {cluster.isUserCreated ? "👤 我创建的" : "⚡ 工作流生成"}
+              <span className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${originTint(cluster.origin)}`}>
+                {originGlyph(cluster.origin)}
               </span>
+              {cluster.assignedRole && (
+                <span className="rounded px-1.5 py-0.2 border border-[var(--border-primary)] text-[9.5px] text-[var(--text-secondary)]">
+                  角色：{roleLabel(cluster.assignedRole)}
+                </span>
+              )}
             </div>
           </span>
         </span>
-        <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={cluster.workflowDuty ?? cluster.title}>
+        <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={[cluster.creatorLabel && `创建者：${cluster.creatorLabel}`, cluster.workflowDuty].filter(Boolean).join(" · ") || cluster.title}>
+          {cluster.origin === "lead-agent-created" && cluster.creatorLabel ? `创建者：${cluster.creatorLabel} · ` : ""}
           {cluster.workflowDuty ?? "科研工作流协同推进"}
         </span>
         <span className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
@@ -244,6 +262,19 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
             )) : overview.nodes.map(node => (
               <path key={node.id} d={curve(overview.hub.x + overview.hub.width / 2, overview.hub.y + overview.hub.height, node.x + node.width / 2, node.y)} fill="none" stroke="var(--text-tertiary)" strokeWidth="1.5" strokeDasharray="5 6" opacity="0.32" />
             ))}
+            {!detail && relations.map(relation => {
+              const from = overview.nodes.find(node => node.id === relation.fromExecutionId);
+              const to = overview.nodes.find(node => node.id === relation.toExecutionId);
+              if (!from || !to) return null;
+              return (
+                <path
+                  key={relation.id}
+                  data-testid="canvas-relation-edge"
+                  d={curve(from.x + from.width / 2, from.y + from.height, to.x + to.width / 2, to.y)}
+                  fill="none" stroke="var(--accent-purple)" strokeWidth="2" strokeDasharray="4 5" opacity="0.7"
+                />
+              );
+            })}
           </svg>
           {!detail && (
             <div style={nodeStyle(overview.hub)} className="win11-card-subtle flex flex-col items-center justify-center rounded-xl border border-[var(--border-secondary)] text-center shadow-sm">
@@ -359,7 +390,12 @@ export function ResearchAgentCanvas({ clusters, stale, onAgent, statusLabel, rol
         )}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-primary)] px-3 py-2 text-[10px] text-[var(--text-tertiary)]">
-        <span>{focused ? "实线表示已记录的父子归属；多轮任务支持点击卡片平铺展开与独立查看。" : "虚线仅表示工作区分组，不代表会话之间有通信记录。"}</span>
+        {!focused && (
+          <div aria-label="连线图例" className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t border-dashed border-[var(--text-tertiary)]" />会话分组</span>
+            {relations.length > 0 && <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t-2 border-dashed border-[var(--accent-purple)]" />任务派发</span>}
+          </div>
+        )}
         {focused && <button type="button" onClick={() => onAgent(focused.roleObj, focused.sessionExec)} className="inline-flex items-center gap-1 font-medium text-[var(--accent-text)] hover:underline"><Icon path={mdiOpenInNew} size={0.5} />会话详情与纠偏</button>}
       </div>
 

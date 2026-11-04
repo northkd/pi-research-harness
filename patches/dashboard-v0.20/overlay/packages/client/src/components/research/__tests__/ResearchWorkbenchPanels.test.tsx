@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResearchWorkbenchObservation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
 import { ResearchExecutionPanels } from "../ResearchExecutionPanels.js";
@@ -19,7 +19,9 @@ describe("research scientific panels", () => {
     expect(screen.getAllByTestId("research-execution")).toHaveLength(2); expect(screen.queryAllByTestId("research-relation")).toHaveLength(0); expect(projection.stage).toBeNull();
     observed.relations = [{ id: "relation-1", fromExecutionId: "pi:main", toExecutionId: "native:child", kind: "dispatch", evidence: { source: "tool-call", eventId: "call-1" } }];
     view.rerender(<ResearchExecutionPanels projection={projectResearch(snapshot, observed)} stage={null} includeUnstaged stale={false} onAgent={onAgent} />);
-    expect(screen.getAllByTestId("research-relation")).toHaveLength(1); expect(screen.getByText(/派发证据/).textContent).toContain("call-1");
+    expect(projectResearch(snapshot, observed).relations).toHaveLength(1);
+    expect(screen.queryAllByTestId("research-relation")).toHaveLength(0);
+    expect(document.body.textContent).not.toMatch(/pi:main|native:child|call-1|tool-call|派发证据|实际派发/);
     fireEvent.click(screen.getByTestId("research-role-numerics")); expect(onAgent).toHaveBeenCalled();
   });
   it("opens the compact canvas by default and keeps the detailed list available", () => {
@@ -53,5 +55,48 @@ describe("research scientific panels", () => {
   it("normalizes optional malformed gate detail without turning it into accepted evidence", () => {
     const parsed = parseResearchSnapshot({ "state.json": JSON.stringify({ claims: [{ id: "c", statement: "s", status: "proposed", acceptance: { verdict: "blocked", jury: "bad", diagnostics: [{ private: true }], counterexample: "bad" } }] }), "ledger.jsonl": "", "events.jsonl": "", "auto-run.json": null });
     render(<ResearchClaimPanels claims={parsed.state?.claims ?? []} reviews={[]} />); expect(screen.getByText("反例检查：未记录")).toBeTruthy(); expect(document.body.textContent).not.toContain("[object Object]");
+  });
+  it("resolves prefixed execution ids to real names, creator names and recorded collaborator origins", async () => {
+    const observed = observation();
+    observed.executions = [
+      { id: "session-parent-uuid", kind: "pi-session", status: "idle" },
+      { id: "session-child-uuid", kind: "pi-session", status: "idle", stage: "2-experiment" },
+    ];
+    const provenance = {
+      schema: "pi-research-session.v1", parentSessionId: "parent-uuid", creatorSessionId: "parent-uuid",
+      creatorAgent: "research_session", role: "experiment", task: "A bounded synthetic task", stage: "2-experiment",
+      charterHash: `sha256:${"a".repeat(64)}`, adoptionId: `adopt-${"b".repeat(24)}`, workflowCwd: "/project",
+      spawnToken: "spawn-token-1234", createdAt: "2026-11-04T00:00:00.000Z", origin: "research_session", relation: "dispatch",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ data: [
+      { id: "parent-uuid", name: "研究主会话", nameSource: "manual" },
+      { id: "child-uuid", name: "实验协作者", nameSource: "manual", firstMessage: "DO_NOT_USE_RAW_FIRST_PROMPT", researchSession: provenance },
+    ] }) })));
+    try {
+      render(<ResearchExecutionPanels projection={projectResearch(snapshot, observed)} stage={null} includeUnstaged stale={false} onAgent={vi.fn()} />);
+      const canvas = screen.getByRole("region", { name: "协作拓扑画布" });
+      await waitFor(() => expect(within(canvas).getAllByText("实验协作者").length).toBeGreaterThan(0));
+      expect(canvas.textContent).toContain("创建者：研究主会话");
+      expect(canvas.textContent).toContain("Lead 创建");
+      expect(canvas.textContent).toContain("全流程主控协调");
+      expect(canvas.textContent).not.toMatch(/parent-uuid|child-uuid|DO_NOT_USE_RAW_FIRST_PROMPT/);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("requests res-workflow membership when independently launching a stage session", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ success: true }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const projection = projectResearch(snapshot);
+      render(<ResearchExecutionPanels projection={projection} stage="1-idea" includeUnstaged stale={false} onAgent={vi.fn()} cwd="/project" />);
+      fireEvent.click(screen.getAllByText("独立启动阶段")[0]!);
+      fireEvent.click(screen.getByText("确认并新建会话启动"));
+      await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/session/spawn"))).toBe(true));
+      const spawnCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/session/spawn"))!;
+      expect(JSON.parse(String(spawnCall[1]?.body))).toMatchObject({ cwd: "/project", joinResWorkflow: true });
+      expect(String(spawnCall[1]?.body)).toContain("阶段独立启动任务");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

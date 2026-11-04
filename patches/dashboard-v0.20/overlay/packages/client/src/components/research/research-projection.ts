@@ -1,4 +1,5 @@
 import type { ResearchWorkbenchObservation, ResearchWorkbenchRelation, ResearchWorkbenchExecution } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
+import { deriveResearchSessionRelations, projectResearchSession, type ResearchSessionProvenance } from "@blackbelt-technology/pi-dashboard-shared/research-session.js";
 
 export const RESEARCH_STAGE_IDS = ["1-idea", "2-experiment", "3-review", "4-summary", "5-writing"] as const;
 export type StageId = typeof RESEARCH_STAGE_IDS[number];
@@ -45,6 +46,81 @@ export interface ResearchExecution extends Omit<ResearchWorkbenchExecution, "kin
   observedAt?: string;
 }
 export interface ConfiguredRole { name: string; skills: string[]; note?: string; model?: string }
+export type ResearchExecutionOriginKind = "user-created" | "workflow-created" | "lead-agent-created";
+export interface ResearchSessionInfoLike {
+  id?: string;
+  name?: string;
+  firstMessage?: string;
+  nameSource?: string;
+  via?: string;
+  resWorkflow?: { via?: string };
+  researchSession?: unknown;
+  pluginRefs?: Record<string, Record<string, unknown>>;
+}
+export interface ResearchExecutionOrigin {
+  kind: ResearchExecutionOriginKind;
+  label: string;
+  creatorSessionId?: string;
+  creatorLabel: string;
+  role?: string;
+  provenance?: ResearchSessionProvenance;
+}
+
+/**
+ * Three distinct origins for a real execution. A lead-created collaborator is
+ * identified only by persisted provenance (role + true creator session); its
+ * prompt is never used as identity. Workflow-created means the session was
+ * spawned by the workflow host rather than typed by the user.
+ */
+export function projectExecutionOrigin(
+  row: ResearchExecution,
+  info?: ResearchSessionInfoLike | null,
+  workflowParentSessionId?: string,
+): ResearchExecutionOrigin {
+  const provenance = projectResearchSession({
+    id: info?.id ?? row.sessionId ?? row.id,
+    researchSession: info?.researchSession,
+    pluginRefs: info?.pluginRefs,
+  })?.provenance;
+  if (provenance) {
+    return {
+      kind: "lead-agent-created",
+      label: "Lead 会话创建",
+      creatorSessionId: provenance.creatorSessionId,
+      creatorLabel: "主agent",
+      role: provenance.role,
+      provenance,
+    };
+  }
+  const workflowCreated = row.source === "workflow-record" || !!row.workflowRunId ||
+    info?.via === "spawn" || info?.resWorkflow?.via === "spawn";
+  if (workflowCreated) {
+    return {
+      kind: "workflow-created",
+      label: "工作流创建",
+      ...(workflowParentSessionId ? { creatorSessionId: workflowParentSessionId } : {}),
+      creatorLabel: "工作流",
+      role: row.role,
+    };
+  }
+  return { kind: "user-created", label: "用户创建", creatorLabel: "用户", role: row.role };
+}
+
+/**
+ * Dispatch edges for lead-created collaborators, resolved through the actual
+ * workbench execution ids (`session-<sessionId>`), never raw session ids.
+ */
+export function projectResearchSessionRelations(
+  executions: ResearchExecution[],
+  sessions: ResearchSessionInfoLike[],
+): ResearchWorkbenchRelation[] {
+  return deriveResearchSessionRelations(
+    executions.map(row => ({ id: row.id, ...(row.sessionId ? { sessionId: row.sessionId } : {}) })),
+    sessions.flatMap(session => typeof session.id === "string"
+      ? [{ id: session.id, researchSession: session.researchSession, pluginRefs: session.pluginRefs }]
+      : []),
+  );
+}
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -218,14 +294,20 @@ export function projectResearch(snapshot: ResearchSnapshot, observation?: Resear
   const stageEvents = events.map((e, index) => ({ e, index })).filter(({ e }) => {
     const d = e.detail ?? {};
     if (e.kind !== "stage-enter" || !isResearchStage(d.stage)) return false;
+    // A stage event from an older charter cannot describe the current charter.
+    const eventRevision = number(d.charterRevision);
+    if (eventRevision !== undefined && revision !== undefined && eventRevision !== revision) return false;
     const id = text(d.runId);
     if (id) return id === currentRun?.runId;
     return !frozenAt || !timestamp(e.at) || timestamp(e.at)! >= frozenAt;
   }).sort((a, b) => {
     const x = number(a.e.detail?.sourceSeq), y = number(b.e.detail?.sourceSeq);
-    if (a.e.detail?.runId && a.e.detail.runId === b.e.detail?.runId && x !== undefined && y !== undefined) return x - y;
-    const t1 = timestamp(a.e.detail?.sourceAt) ?? timestamp(a.e.at);
-    const t2 = timestamp(b.e.detail?.sourceAt) ?? timestamp(b.e.at);
+    const ar = text(a.e.detail?.runId), br = text(b.e.detail?.runId);
+    if (ar && ar === br && x !== undefined && y !== undefined) return x - y;
+    // Runless observations have no source sequence; their real observation
+    // time wins, and append order only breaks exact ties.
+    const t1 = timestamp(a.e.detail?.selectedAt) ?? timestamp(a.e.detail?.observedAt) ?? timestamp(a.e.detail?.sourceAt) ?? timestamp(a.e.at);
+    const t2 = timestamp(b.e.detail?.selectedAt) ?? timestamp(b.e.detail?.observedAt) ?? timestamp(b.e.detail?.sourceAt) ?? timestamp(b.e.at);
     return t1 && t2 ? t1.localeCompare(t2) || a.index - b.index : a.index - b.index;
   });
   const enteredStages = new Set(stageEvents.map(({ e }) => e.detail!.stage as StageId));

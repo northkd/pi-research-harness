@@ -1,0 +1,41 @@
+{
+  "_comment": "Template only; not loadable until every %h and <...> placeholder is replaced. Install as ~/.config/pi-research/idle-stage-review.json with mode 0600 and keep enabled false until the user has authorized the exact upstream, model, project and material.",
+  "enabled": false,
+  "stateDir": "%h/.local/state/pi-research-idle-stage-review",
+  "adoptionRoot": "%h/.pi/research-workbench/adoptions",
+  "projectAllowlist": [
+    "<absolute-path-to-the-one-approved-project>"
+  ],
+  "dashboardOrigin": "http://127.0.0.1:8000",
+  "dashboardAuthFile": "%h/.config/pi-research/dashboard-auth.json",
+  "workbench": {
+    "syncOrigin": "http://127.0.0.1:18767",
+    "tokenFile": "%h/.config/pi-research/workbench-sync-token",
+    "heartbeatMaxAgeMs": 120000
+  },
+  "provider": "openai-compatible",
+  "model": "<exact-model-id>",
+  "modelBaseUrl": "http://127.0.0.1:18006/v1",
+  "modelUpstreamHost": "<exact-upstream-host>",
+  "modelEndpoint": "/chat/completions",
+  "apiKeyEnv": "PI_STAGE_REVIEW_API_KEY",
+  "authorization": {
+    "approved": false,
+    "approvedBy": "<user-identity>",
+    "approvedAt": "<ISO-8601-timestamp>",
+    "purpose": "stage-classification",
+    "provider": "openai-compatible",
+    "model": "<exact-model-id>",
+    "upstreamHost": "<exact-upstream-host>",
+    "project": "<absolute-path-to-the-one-approved-project>",
+    "materialMode": "metadata",
+    "maxCallsPerDay": 12
+  },
+  "packet": {
+    "mode": "metadata"
+  },
+  "idleAfterMs": 300000,
+  "cooldownMs": 3600000,
+  "maxRequestsPerProjectPerDay": 8,
+  "skipAuditIntervalMs": 600000
+}

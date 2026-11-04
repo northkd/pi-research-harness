@@ -1938,8 +1938,28 @@ export function wireEvents(deps: EventWiringDeps): void {
       // always notified before its first prompt is dispatched (task 3.1).
       // Moved here from `onSessionRegistered`. See change:
       // detach-automation-goal-from-core (was project-init-skill-and-profiles).
+      //
+      // Token-first: a trusted spawn (REST `/api/session/spawn`, plugin spawn)
+      // files the prompt under the EXACT spawn token before its spawn await.
+      // That is the only race-safe correlation; concurrent same-cwd spawns
+      // cannot swap prompts. Legacy WS callers still file by cwd, so a token
+      // that was never consumed/rolled back may fall back to the cwd FIFO.
+      // A consumed/rolled-back/expired token never falls back — otherwise a
+      // duplicate register could steal a concurrent legacy prompt.
       if (pendingInitialPromptRegistry) {
-        const prompt = pendingInitialPromptRegistry.consume(msg.cwd);
+        let prompt: string | null = null;
+        if (msg.spawnToken) {
+          prompt = pendingInitialPromptRegistry.consume(msg.cwd, msg.spawnToken);
+          if (prompt === null && !pendingInitialPromptRegistry.wasSpawnConsumed(msg.spawnToken)) {
+            prompt = pendingInitialPromptRegistry.consume(msg.cwd);
+            // Legacy WS caller filed this prompt by cwd (the token only
+            // carried ownership). Retire the token so a duplicate register
+            // cannot drain another same-cwd legacy intent.
+            pendingInitialPromptRegistry.remove(msg.cwd, msg.spawnToken);
+          }
+        } else {
+          prompt = pendingInitialPromptRegistry.consume(msg.cwd);
+        }
         if (prompt) {
           piGateway.sendToSession(sessionId, { type: "send_prompt", sessionId, text: prompt });
         }

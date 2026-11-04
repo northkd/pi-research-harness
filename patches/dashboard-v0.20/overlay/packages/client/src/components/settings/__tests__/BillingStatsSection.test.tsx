@@ -247,6 +247,37 @@ describe("billing statistics", () => {
       "—",
     );
   });
+  it("keeps entry names on the left and pins cost amounts to the right", async () => {
+    render(<BillingStatsSection />);
+    await respond(0, report());
+    const expectPinnedCost = (row: HTMLElement) => {
+      const amounts = Array.from(
+        row.querySelectorAll<HTMLElement>("span, div"),
+      ).filter(
+        (element) =>
+          element.children.length === 0 &&
+          element.textContent?.trim() === "¥3.0000",
+      );
+      expect(amounts).toHaveLength(1);
+      const tokens = amounts[0].className.split(/\s+/);
+      expect(tokens).toEqual(
+        expect.arrayContaining([
+          "shrink-0",
+          "text-right",
+          "font-mono",
+          "tabular-nums",
+        ]),
+      );
+      expect(tokens).not.toContain("text-left");
+      const breakdown = row.querySelector(".flex-wrap");
+      if (breakdown) expect(breakdown.className).toContain("tabular-nums");
+    };
+    expectPinnedCost(screen.getByTestId("billing-directory-row"));
+    fireEvent.click(screen.getByRole("tab", { name: "Sessions" }));
+    expectPinnedCost(screen.getByTestId("billing-session-row"));
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    expectPinnedCost(screen.getByTestId("billing-model-row"));
+  });
   it("keeps a selected historical month when the calendar rolls forward", async () => {
     vi.useFakeTimers();
     const clock = vi

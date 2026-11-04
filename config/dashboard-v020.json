@@ -596,7 +596,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchAgentCanvas.tsx": {
-      "sha256": "01192f092586a6f500e93150d4cb7bb4159914266142daede3ee5e3cd1bd08b7",
+      "sha256": "a6682ed8379d96ac00ccaba903de97b1f28e01265360486f63daf1c44ff48d47",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchAgentDetail.tsx": {
@@ -612,7 +612,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchExecutionPanels.tsx": {
-      "sha256": "3c3a005c283875564361a632b6fd507b535f9d952abf120c0f5fe8bd3f7f4d82",
+      "sha256": "ceadef0d619109d5902906947fbfe964813f65ea8257b94c018995b43951b061",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchOverviewAndBudget.tsx": {
@@ -672,7 +672,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchAgentCanvas.test.tsx": {
-      "sha256": "eef4b87987a0357923755704fa0d4ed1ed278a191676af0e2e3c87908508a171",
+      "sha256": "fe55b08ab78de98268fb4a3c470b0ad47db82a504623740f7d7b2445e3f291a4",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchAgentDetail.test.tsx": {
@@ -688,7 +688,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchWorkbenchPanels.test.tsx": {
-      "sha256": "1ae4fafd848f6c83af04cdbca318f3e472a007db6a66861f46adc1de3d99111c",
+      "sha256": "076273a68754539d077475373b6ac40bcc005f79ebf36a2621a6cd11716583c2",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ScienceArtifactViewer.test.tsx": {
@@ -712,7 +712,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/research-projection.test.ts": {
-      "sha256": "f4b848741d876016853a2b7f503af40f1487bd1da502421bf0704dbd87c15470",
+      "sha256": "35233261acf803794de79de071c47187b564dc49eda3c1ef6e6a64c11bd5dec6",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/use-research-loop-live.test.tsx": {
@@ -736,7 +736,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/research-projection.ts": {
-      "sha256": "af4fed819649b5afd7aed0d9adf5d0a834039e93533dd530e34f93089f668788",
+      "sha256": "06ee23abde0987809a0d5751a1f47ed41e83b155082f885c5a5889f256deedeb",
       "baseBlob": null
     },
     "packages/client/src/components/research/use-research-loop-live.ts": {
@@ -776,7 +776,7 @@
       "baseBlob": "d896d9b8d6e0578387b25ac073bee71866df4c7f"
     },
     "packages/client/src/components/settings/BillingStatsSection.tsx": {
-      "sha256": "4d92f72c7dd7b63257db217b7d099d35cff2ba1fd643952fd03768427bdf4130",
+      "sha256": "36e525258eaf1c2dbb22aa1f94714c31c4a8b3636e4b628dfae85d0e0da62931",
       "baseBlob": null
     },
     "packages/client/src/components/settings/ModelSelector.tsx": {
@@ -792,7 +792,7 @@
       "baseBlob": "5b53414c811d9f2044a40e266b9b8948b16d360f"
     },
     "packages/client/src/components/settings/__tests__/BillingStatsSection.test.tsx": {
-      "sha256": "9b1b8ef087ff950a160ef114f8f0442b17d52ad9ebcaba0a6ec68a867d3ab19b",
+      "sha256": "8126b6f76f0c320448009b4875733e1b4f552eb5c3e57226b7794b36c54de6fb",
       "baseBlob": null
     },
     "packages/client/src/components/settings/__tests__/settings-chat-motion.test.tsx": {
@@ -1596,7 +1596,7 @@
       "baseBlob": null
     },
     "packages/server/src/__tests__/res-workflow-participants.test.ts": {
-      "sha256": "e4235562c8076dd0ef4ff71cde8c7c5f238cccfb0a9154479f647f3277ed09cd",
+      "sha256": "627b20a135ef652def559362855021cbcb46cd51ba80d475725adb1cc88ce92c",
       "baseBlob": null
     },
     "packages/server/src/__tests__/res-workflow-routes.test.ts": {
@@ -1752,7 +1752,7 @@
       "baseBlob": "53430c8b072730dbcff03968f3e378689945d3b0"
     },
     "packages/server/src/event-wiring.ts": {
-      "sha256": "5762333a6c2082c6c6ced5e39b9c75347cb6fb5b2b956fe84ff6b21a2fb870b2",
+      "sha256": "96be05b148a5b5406fd3f8786f63c85f185a504b8a29f19fed44dc5cb00ae77c",
       "baseBlob": "81caad7ebac2737ac39b89e6f5434b40a3dfcbd9"
     },
     "packages/server/src/identity/__tests__/http-road-classification.test.ts": {
@@ -1810,6 +1810,10 @@
     "packages/server/src/pairing/socket-locality.ts": {
       "sha256": "3ab156db350873be67acfaa39184768d7ab03399a094a61afad469cf8846b41b",
       "baseBlob": null
+    },
+    "packages/server/src/pending/pending-initial-prompt-registry.ts": {
+      "sha256": "b42cfbb568e390a09c59db5f1517d22c4996786ed4b76767c7eba4b584f2741d",
+      "baseBlob": "99ff913c8e3406dd7177552e7902c2374f22a43f"
     },
     "packages/server/src/pending/pending-plugin-ref-registry.ts": {
       "sha256": "fa9668c68d34515191a4d2ddd70398f62951976570f6412edc177da2c57ffa1e",
@@ -1948,11 +1952,19 @@
       "baseBlob": null
     },
     "packages/server/src/res-workflow/participants.ts": {
-      "sha256": "c37488b67f928189684c72bd1712f6489d9326c01e4351168a4cfbea347027b1",
+      "sha256": "6d9524c4e04157d1c6615d755f16c6a56cdd339b7e6c6c2f0061911c5783dd4b",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-budget-service.ts": {
       "sha256": "83aebe9c3f4bb9b20b3cb7847d533500c16d62de4509bac2013139ba650a8993",
+      "baseBlob": null
+    },
+    "packages/server/src/res-workflow/research-session-service.d.mts": {
+      "sha256": "75092b1a599e06503b3c1684eb1a72a597239bea2303d48330ee74504cc2a3e6",
+      "baseBlob": null
+    },
+    "packages/server/src/res-workflow/research-session-service.mjs": {
+      "sha256": "33e12a9b9aa520582cc73560b06e0812d1634d164326f32a45b7e35b9e5dda6b",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/safe-files.ts": {
@@ -2043,6 +2055,10 @@
       "sha256": "f5f874e0b2f6cfde993072e98a16d65503eade3fe618a973ef386898b45f69fa",
       "baseBlob": "ffefb6ae35b9cc75d44e5582a74b754a0cac5ad5"
     },
+    "packages/server/src/routes/res-workflow-research-session-routes.ts": {
+      "sha256": "a71c70743b523e014cb11ec618334954a01e29e32d1eca6fe68f3b9abc4fa61b",
+      "baseBlob": null
+    },
     "packages/server/src/routes/res-workflow-routes.ts": {
       "sha256": "36b538c86af1b3bb5abac7a1a8b2e4e79cb23d71585c43369545bc91950efb0c",
       "baseBlob": null
@@ -2068,7 +2084,7 @@
       "baseBlob": null
     },
     "packages/server/src/server.ts": {
-      "sha256": "8b2d7dc867aaca6308b8ba6f8d09c55ac05236ecea09cf161e1a67eed9c680a3",
+      "sha256": "04f5fb393eb214719859887ed66f7b820584c399b88a81bde0fb57a62ec9b801",
       "baseBlob": "ee4f0d47762d85dd6814ffa22f98165a39418f34"
     },
     "packages/server/src/session/__tests__/replay-exit-controller.test.ts": {
@@ -2102,6 +2118,10 @@
     "packages/server/src/session/retained-transcript.ts": {
       "sha256": "301ed86c60af52b18d0ea44457f7d5a0868e89f51d04d1b9398d54ec8523a5f9",
       "baseBlob": "7c0151bf28bfb6bce3ccd60f4aab9f750d05f6c2"
+    },
+    "packages/server/src/session/session-api.ts": {
+      "sha256": "c7c50ec8a69f24ff6b1ca3485b6078b2ed21e92a816e9284924ad7dcf8042978",
+      "baseBlob": "3b674df265f22cf056e6568575931e831132385a"
     },
     "packages/server/src/session/session-archive.ts": {
       "sha256": "30a305ac297cef373e9030e460e9329cb16630433cd02304500cbe6af2d99dcb",
@@ -2224,11 +2244,15 @@
       "baseBlob": "7f5d6f16a4f8cf7cb40efb256bcd7667e6a3924f"
     },
     "packages/shared/src/res-workflow.ts": {
-      "sha256": "93ec3df21809784911bff7e0fb322fff769cc15d581cb99a93ddd69568f956c6",
+      "sha256": "6dd4af797e2da058d3b708962bd7e0b3b3a484d2f89c15924f391d79d7c1e1ef",
       "baseBlob": null
     },
     "packages/shared/src/research-budget.ts": {
       "sha256": "374115056d5c5828424984b2ef0f5ab693487982c8dd328851a70d9a5fe3c959",
+      "baseBlob": null
+    },
+    "packages/shared/src/research-session.ts": {
+      "sha256": "c969fb67d0be1bd8c681af1af88a4cc27cb4c1641fb66c7af4305a0d55377ddf",
       "baseBlob": null
     },
     "packages/shared/src/research-workbench.ts": {
@@ -2292,7 +2316,7 @@
       "baseBlob": null
     },
     "packages/shared/src/types.ts": {
-      "sha256": "4d24c25a1081e48a1a3b902dbb036524814f23488b546b78afa9e6469d499cd4",
+      "sha256": "38f96f8061164bc186e55f3b423e4cbacb7593156ee7f6b93ea1fe98d31a5673",
       "baseBlob": "11233f1ef6f0b304cdb85640a3e0e12420b1abe2"
     },
     "packages/shared/src/ws-message-tiers.ts": {

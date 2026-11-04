@@ -12,6 +12,10 @@ const controlSurfaceClass =
   "min-h-9 rounded-md border border-[var(--border-secondary)] bg-[var(--bg-secondary)] text-[var(--text-primary)]";
 const controlClass = `${controlSurfaceClass} px-2 text-sm`;
 const detailControlClass = `${controlSurfaceClass} min-w-0 px-1.5 text-xs sm:px-2 sm:text-sm`;
+// Entry names stay left-aligned; the amount column is pinned right with
+// tabular figures so rows of costs line up vertically.
+const entryAmountClass =
+  "shrink-0 text-right font-mono text-sm tabular-nums";
 
 /** Historical reports have their own requests; selecting a month never changes live prices. */
 export function BillingStatsSection() {
@@ -395,7 +399,7 @@ export function BillingStatsSection() {
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <div className="font-mono text-sm">
+                      <div className={entryAmountClass}>
                         {rowCost(entry.billing)}
                       </div>
                       <button
@@ -433,11 +437,11 @@ export function BillingStatsSection() {
                           {directoryName(session.cwd)}
                         </div>
                       </div>
-                      <span className="shrink-0 font-mono text-sm">
+                      <span className={entryAmountClass}>
                         {rowCost(session.billing)}
                       </span>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-[var(--text-tertiary)]">
+                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums text-[var(--text-tertiary)]">
                       <span>
                         {t(
                           "billing.turnCount",
@@ -488,11 +492,11 @@ export function BillingStatsSection() {
                           )}
                         </div>
                       </div>
-                      <span className="shrink-0 font-mono text-sm">
+                      <span className={entryAmountClass}>
                         {money(model.cost, model.unpricedCalls === 0, 4)}
                       </span>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-[var(--text-tertiary)]">
+                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums text-[var(--text-tertiary)]">
                       <span>
                         {t("billing.input", undefined, "Input")}:{" "}
                         {count(model.inputTokens)}

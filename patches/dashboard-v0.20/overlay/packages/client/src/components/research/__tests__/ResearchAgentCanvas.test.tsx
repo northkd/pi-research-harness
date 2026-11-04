@@ -7,7 +7,7 @@ function makeClusters(count = 16) {
   return Array.from({length: count}, (_, i) => {
     const parent: ResearchExecution = {id:`p-${i}`,kind:'pi-session',status:'idle',source:'observation',evidence:[],prompt:`会话 ${i} 的任务`};
     const children = Array.from({length: 8}, (_, j): ResearchExecution => ({id:`c-${i}-${j}`,kind:'native-subagent',parentExecutionId:parent.id,role:`role-${j}`,status:j===0?'running':'completed',source:'observation',evidence:[]}));
-    return {sessionExec:parent,title:`研究会话 ${i}`,roleObj:{name:`session-${i}`,skills:[]},isCaptain:i===0,childSubs:children,childRoleGroups:children.map(c=>({roleName:c.role!,roleObj:{name:c.role!,skills:[]},executions:[c],latest:c}))};
+    return {sessionExec:parent,title:`研究会话 ${i}`,workflowDuty:parent.prompt,roleObj:{name:`session-${i}`,skills:[]},isCaptain:i===0,childSubs:children,childRoleGroups:children.map(c=>({roleName:c.role!,roleObj:{name:c.role!,skills:[]},executions:[c],latest:c}))};
   });
 }
 const label = (name: string) => name;
@@ -29,6 +29,24 @@ describe('research collaboration canvas', () => {
     expect(screen.queryByRole('button',{name:/查看 role-3 详情/})).toBeNull();
     fireEvent.click(screen.getByRole('button',{name:'返回全部会话'}));
     expect(screen.getAllByTestId('canvas-session-node')).toHaveLength(16);
+  });
+  it('keeps recorded dispatch edges without exposing internal ids, evidence or debug explanations', () => {
+    const clusters=makeClusters(2),onAgent=vi.fn();
+    const relations = [
+      {id:'dispatch-debug-id',fromExecutionId:'p-0',toExecutionId:'p-1',kind:'dispatch' as const,evidence:{source:'native-status' as const,eventId:'event-debug-id'}},
+      {id:'missing-endpoint',fromExecutionId:'p-0',toExecutionId:'missing-session',kind:'dispatch' as const,evidence:{source:'native-status' as const,eventId:'missing-event'}},
+    ];
+    const view=render(<ResearchAgentCanvas clusters={clusters} relations={relations} stale={false} onAgent={onAgent} statusLabel={label} roleLabel={label} />);
+    expect(screen.getAllByTestId('canvas-relation-edge')).toHaveLength(1);
+    expect(screen.queryByTestId('canvas-relation-evidence')).toBeNull();
+    expect(view.container.textContent).not.toMatch(/p-0|p-1|dispatch-debug-id|event-debug-id|native-status|实际派发|虚线仅表示|紫色边仅来自/);
+    expect(Array.from(view.container.querySelectorAll('[title]')).map(node=>node.getAttribute('title')).join(' ')).not.toMatch(/p-0|p-1|native-status|event-debug-id/);
+    expect(screen.getByText('研究会话 0')).toBeTruthy();
+    expect(screen.getByText('研究会话 1')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:/聚焦研究会话 0/}));
+    expect(view.container.textContent).not.toMatch(/实线表示已记录|p-0|p-1|native-status/);
+    fireEvent.click(screen.getByRole('button',{name:'会话详情与纠偏'}));
+    expect(onAgent).toHaveBeenCalledWith(clusters[0].roleObj,clusters[0].sessionExec);
   });
   it('filters many sessions using their title or recorded task', () => {
     render(<ResearchAgentCanvas clusters={makeClusters(16)} stale={false} onAgent={vi.fn()} statusLabel={label} roleLabel={label} />);

@@ -47,7 +47,7 @@ function harness(t, opts = {}) {
     },
   });
   const pi = { events, on(n, fn) { hooks.set(n, fn); }, registerTool(v) { tool = v; }, registerCommand(_n, v) { command = v; }, sendMessage(m, options) { assert.equal(options.triggerTurn, false); messages.push(m); } };
-  createMainlineAdapter(pi, { Store: FixtureStore, env: {}, reconcileIntervalMs: 60000 });
+  createMainlineAdapter(pi, { Store: FixtureStore, env: {}, autoApprove: opts.autoApprove, reconcileIntervalMs: 60000 });
   const fire = (n, e = {}) => hooks.get(n)?.(e, ctx);
   fire('session_start');
   const act = p => tool.execute('integration-tool', p, undefined, () => {}, ctx);
@@ -90,7 +90,7 @@ test('real core + real public RPC validation: actual event -> async review -> ra
 });
 
 test('correction allows only declared repair paths; pause/core replacement requires user, original verdict retained', async t => {
-  const h = harness(t); await h.configure(); await flush(); await h.complete(OFF);
+  const h = harness(t, { autoApprove: false }); await h.configure(); await flush(); await h.complete(OFF);
   assert.equal(h.get().blocked, true); const original = h.get().lastVerdict;
   h.setConsent(false);
   await assert.rejects(h.act({ action: 'pause' }), /Human approval/);
@@ -195,7 +195,7 @@ test('RPC infrastructure rejection is preserved privately, fails closed and is n
 });
 
 test('bounded capture UI gate retains scoped restrictions and explicit material review, no global freeze', async t => {
-  const h = harness(t, { git: true }); await h.configure(); await flush(); await h.complete(OFF);
+  const h = harness(t, { git: true, autoApprove: false }); await h.configure(); await flush(); await h.complete(OFF);
   const request = { action: 'capture', capturePaths: ['plan.md'], outputDir: 'research/tasks/capture-test/' };
   h.setConsent(false);
   await assert.rejects(h.act(request), /declined/);
@@ -221,7 +221,7 @@ test('bounded capture UI gate retains scoped restrictions and explicit material 
 });
 
 test('real adapter suppresses status reads, denied tool results and declarations across completion wakes', async t => {
-  const h = harness(t); await h.configure(); await flush(); await h.complete(OFF);
+  const h = harness(t, { autoApprove: false }); await h.configure(); await flush(); await h.complete(OFF);
   const material = h.get().materialRevision;
   h.setConsent(false);
   for (const prompt of ['Subagent updates above.', 'Background task failed: **research-mainline-supervisor**', 'why did it fail?']) {
@@ -263,7 +263,7 @@ test('B5: ordinary child steering is material; exact supervisor self-control rem
 });
 
 test('P1 batch checks all children before confirmation; hard boundaries win', async t => {
-  const h = harness(t); await h.configure(); await flush(); await h.complete(OFF);
+  const h = harness(t, { autoApprove: false }); await h.configure(); await flush(); await h.complete(OFF);
   let asked = 0; h.setConfirm(async () => { asked++; return true; });
   const denied = await h.fire('tool_call', { toolName: 'parallel', toolCallId: 'batch', input: { tool_uses: [
     { recipient_name: 'functions.bash', parameters: { command: 'opaque local command' } },
@@ -279,7 +279,7 @@ test('P1 batch checks all children before confirmation; hard boundaries win', as
 });
 test('P1 permission confirmation rechecks branch, core and visible files changed during UI', async t => {
   for (const changed of ['restriction', 'core', 'file']) {
-    const h = harness(t); await h.configure(); await flush();
+    const h = harness(t, { autoApprove: false }); await h.configure(); await flush();
     let release; h.setConfirm(() => new Promise(resolve => { release = resolve; }));
     const pending = h.fire('tool_call', { toolName: 'bash', toolCallId: 'during-ui', input: { command: 'python3 plan.md', timeout: 121 } });
     if (changed === 'restriction') await h.complete(OFF);

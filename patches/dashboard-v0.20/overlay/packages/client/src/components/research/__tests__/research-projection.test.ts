@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  configuredRolesForStage, parseResearchSnapshot, projectResearch,
-  type ResearchEvent, type ResearchFileSet,
+  configuredRolesForStage, parseResearchSnapshot, projectExecutionOrigin,
+  projectResearch, projectResearchSessionRelations,
+  type ResearchEvent, type ResearchExecution, type ResearchFileSet,
 } from "../research-projection.js";
 
 const state = { charter: { objective: "科研目标", successCriteria: ["可复现"] , revision: 1 }, claims: [], phase: 2 };
@@ -42,6 +43,58 @@ describe("research evidence projection", () => {
     expect(result.stage).toBe("3-review");
     expect([...result.enteredStages]).toEqual(["3-review"]);
     expect(result.runs).toEqual([]);
+    // A current stage with no execution stays idle: the panel must not render it as 待触发.
+    expect(result.executions).toEqual([]);
+  });
+
+  it("shows a runless observation after frozenAt while a current run exists", () => {
+    const frozen = { ...state, charter: { ...state.charter, frozenAt: "2026-10-22T00:00:00Z" } };
+    const events = [
+      registered("r", "l1"),
+      event("stage-enter", { stage: "1-idea", source: "workflow" }, "2026-10-22T01:00:00Z"),
+      event("stage-enter", { stage: "3-review", source: "conversation", evidence: ["prompt:回到评审"] }, "2026-10-23T01:00:00Z"),
+    ];
+    const result = projectResearch(parseResearchSnapshot({ ...files(events), "state.json": JSON.stringify(frozen) }));
+    expect(result.currentRun?.runId).toBe("r");
+    expect(result.stage).toBe("3-review");
+    expect(result.executions).toEqual([]);
+    expect(events[2].detail?.runId).toBeUndefined();
+  });
+
+  it("lets the later appended runless observation win without a synthetic run identity", () => {
+    const first = event("stage-enter", { stage: "1-idea", source: "conversation" }, "2026-10-23T01:00:00Z");
+    const second = event("stage-enter", { stage: "2-experiment", source: "tool-observed" }, "2026-10-23T01:00:00Z");
+    const result = projectResearch(parseResearchSnapshot(files([first, second])));
+    expect(result.stage).toBe("2-experiment");
+    expect([...result.enteredStages]).toEqual(["1-idea", "2-experiment"]);
+    expect(result.currentRun).toBeNull();
+  });
+
+  it("orders runless observations by real observation time, not append order", () => {
+    const later = event("stage-enter", { stage: "2-experiment", source: "tool-observed", observedAt: "2026-10-23T12:00:00Z" }, "2026-10-24T00:00:00Z");
+    const earlier = event("stage-enter", { stage: "1-idea", source: "conversation", observedAt: "2026-10-23T10:00:00Z" }, "2026-10-25T00:00:00Z");
+    const result = projectResearch(parseResearchSnapshot(files([later, earlier])));
+    expect(result.stage).toBe("2-experiment");
+    expect([...result.enteredStages]).toEqual(["1-idea", "2-experiment"]);
+  });
+
+  it("uses source selection/observation times when ordering against a workflow stage event", () => {
+    for (const [timeKey, source] of [["selectedAt", "manual"], ["observedAt", "tool-observed"]]) {
+      const result = projectResearch(parseResearchSnapshot(files([
+        registered("r"),
+        event("stage-enter", { stage: "1-idea", source, [timeKey]: "2026-10-23T12:00:00Z" }, "2026-10-23T20:00:00Z"),
+        event("stage-enter", { runId: "r", stage: "3-review", sourceSeq: 2, sourceAt: "2026-10-23T13:00:00Z" }, "2026-10-23T14:00:00Z"),
+      ])));
+      expect(result.stage).toBe("3-review");
+    }
+  });
+
+  it("rejects stage observations written against an older charter revision", () => {
+    const result = projectResearch(parseResearchSnapshot(files([
+      event("stage-enter", { stage: "3-review", charterRevision: 0, source: "conversation" }),
+    ])));
+    expect(result.stage).toBeNull();
+    expect(result.enteredStages.size).toBe(0);
   });
 
   it("orders launches by their original invocation, not RPC reply arrival", () => {
@@ -111,4 +164,49 @@ it("reads configured roles and skills from the run's configuration snapshot", ()
   expect(roles.map(r => r.name)).toEqual(["research-explorer", "research-critic"]);
   expect(roles[0].skills).toEqual(["real-skill"]);
   expect(roles[0].model).toBeUndefined();
+});
+
+const provenance = {
+  schema: "pi-research-session.v1", parentSessionId: "lead-session", creatorSessionId: "lead-session",
+  creatorAgent: "research_session", role: "literature", task: "Find evidence", stage: "1-idea",
+  charterHash: "sha256:" + "a".repeat(64), adoptionId: "adopt-" + "b".repeat(24),
+  workflowCwd: "/workspace", spawnToken: "spawn-token-1", createdAt: "2026-11-04T00:00:00.000Z",
+  origin: "research_session", relation: "dispatch",
+} as const;
+const execution = (id: string, sessionId: string, extra: Partial<ResearchExecution> = {}): ResearchExecution => ({
+  id, sessionId, kind: "pi-session", status: "running", source: "observation", evidence: [], ...extra,
+});
+
+describe("three origins and real dispatch edges", () => {
+  it("labels lead-created, workflow-created and user-created sessions distinctly", () => {
+    const lead = projectExecutionOrigin(
+      execution("session-child", "child"),
+      { id: "child", researchSession: provenance, firstMessage: "raw prompt text" },
+      "lead-session",
+    );
+    expect(lead).toMatchObject({
+      kind: "lead-agent-created", role: "literature",
+      creatorSessionId: "lead-session", creatorLabel: "主agent",
+    });
+    const workflow = projectExecutionOrigin(execution("session-stage", "stage"), { id: "stage", via: "spawn" }, "lead-session");
+    expect(workflow).toMatchObject({ kind: "workflow-created", creatorSessionId: "lead-session", creatorLabel: "工作流" });
+    const user = projectExecutionOrigin(execution("session-user", "user"), { id: "user" });
+    expect(user).toMatchObject({ kind: "user-created", creatorLabel: "用户" });
+  });
+
+  it("maps provenance session ids to actual workbench execution ids and omits missing endpoints", () => {
+    const executions = [execution("session-lead-session", "lead-session"), execution("session-child", "child")];
+    expect(projectResearchSessionRelations(executions, [{ id: "child", researchSession: provenance }])).toEqual([{
+      id: "research-session:spawn-token-1",
+      fromExecutionId: "session-lead-session",
+      toExecutionId: "session-child",
+      kind: "dispatch",
+      evidence: { source: "explicit-record", eventId: "spawn-token-1" },
+    }]);
+    expect(projectResearchSessionRelations([executions[0]!], [{ id: "child", researchSession: provenance }])).toEqual([]);
+    expect(projectResearchSessionRelations(executions, [
+      { id: "child", researchSession: provenance },
+      { id: "child", researchSession: provenance },
+    ])).toHaveLength(1);
+  });
 });

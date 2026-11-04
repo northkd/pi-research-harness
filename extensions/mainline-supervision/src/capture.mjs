@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const PACKAGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Root Pi package discovery replaces the author's standalone install-local wrapper.
-const HOST_FILES = ['src/core.mjs', 'src/index.ts', 'src/capture.mjs', 'src/policy.mjs', 'package.json'];
+const HOST_FILES = ['src/core.mjs', 'src/index.ts', 'src/auto-approve.mjs', 'src/capture.mjs', 'src/policy.mjs', 'package.json'];
 const MAX_TOTAL = 512 * 1024;
 const CHUNK = 6 * 1024;
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');

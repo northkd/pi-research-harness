@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readSessionMeta, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
 import { createResWorkflowParticipants } from "../res-workflow/participants.js";
+import { LOCAL_OPERATOR } from "../identity/session-access.js";
 import type { ResWorkflowAccess } from "../res-workflow/adoption-service.js";
 import { createMemorySessionManager } from "../session/memory-session-manager.js";
 import { createSessionArchive } from "../session/session-archive.js";
@@ -103,6 +104,22 @@ describe("res-workflow metadata-only participation", () => {
     expect(joined.resWorkflow.via).toBe("spawn");
     expect(readSessionMeta(f.sessionFile)?.pluginRefs?.["res-workflow"]).toEqual({ resWorkflow: joined.resWorkflow });
     expect(JSON.stringify(readSessionMeta(f.sessionFile))).not.toMatch(/resWorkflowBinding|ownerKey|expiresAt/);
+  });
+
+  it.each(["host", "operator", "named"])("local operator preserves the actual parent owner in the %s realm", async realm => {
+    const f = setup();
+    const childOwner = realm === "named" ? owner : undefined;
+    const ownerKey = JSON.stringify(realm === "host" ? ["host", "inert-operator"] : realm === "operator" ? [LOCAL_OPERATOR.iss, LOCAL_OPERATOR.sub] : [owner.iss, owner.sub]);
+    f.access.ownerKey = JSON.stringify([LOCAL_OPERATOR.iss, LOCAL_OPERATOR.sub]);
+    f.access.canReadHistory = async () => true;
+    f.sessionManager.update(f.sessionId, { principalOwner: childOwner });
+    writeSessionMeta(f.sessionFile, { cwd: f.cwd, principalOwner: childOwner });
+    const ref = await f.participants.prepareSpawn(f.cwd, { principal: LOCAL_OPERATOR, write: true }, { ownerKey });
+    expect(ref.resWorkflowBinding.identity.principal).toBe(LOCAL_OPERATOR);
+    const joined = await f.participants.registerSpawn(f.sessionId, { cwd: f.cwd, sessionFile: f.sessionFile }, ref);
+    expect(joined.resWorkflow.via).toBe("spawn");
+    expect(f.sessionManager.get(f.sessionId)?.principalOwner).toEqual(childOwner);
+    expect(readSessionMeta(f.sessionFile)?.principalOwner).toEqual(childOwner);
   });
 
   it("can associate a verified fresh register before Pi creates its first transcript, without creating a fake chat", async () => {
