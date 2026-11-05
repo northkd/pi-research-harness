@@ -29,6 +29,9 @@ Pi, Feynman, pi-subagents, ARIS and other named tools are independent projects.
 Their names identify integrations, not endorsements. Third-party packages are
 installed separately under their original licenses.
 
-README screenshots show the actual deployed dashboard with private content
-redacted. Any generated conceptual artwork is explicitly labelled and is not
-product UI or scientific evidence.
+Current README diagrams are drawn reproducibly from the repository source code.
+They describe implemented relationships and configured or optional boundaries;
+they are not proof that a scientific task or external service has run.
+Current README screenshots show the actual built Dashboard with explicitly
+labelled synthetic demonstration data. Historical redacted screenshots retain
+their individual provenance in docs/images/README.md.
