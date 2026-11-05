@@ -20,7 +20,7 @@
 ## 初次安装的前置条件
 
 - 准备 Bash、Git、Python 3、Node.js 22.19+ 和 npm；构建 Dashboard 还需 pnpm，准备脚本提示版本为 11.15.1。
-- 克隆/检出分支必须包含所介绍的 UI 提交；仅克隆尚未合并这些改动的 `main`，无法得到同一界面。
+- 当前安装请检出 `main`，其中已包含此次 UI 改版与文档更新；原核查源码基线仍为 `b79930a`。
 - 选择新的空 agent 目录。需要 Dashboard 时初装带 `--with-dashboard`；需要捆绑技能发现时带 `--with-bundled-skills`。
 - `--with-dashboard-plugins` 可替代 `--with-dashboard`，额外注册四个可选 bridge；不表示其外部服务已配置或自动化已获授权。
 - 若自定义 agent 或 Dashboard 源码位置，在生成配置、构建和启动时使用一致的绝对路径。构建目标目录须不存在。

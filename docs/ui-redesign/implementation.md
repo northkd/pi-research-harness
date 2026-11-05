@@ -109,20 +109,21 @@
 
 浏览器报告完整保留负向 API 返回。只有原生插件状态确认 browser 为 disabled 时，其准确的未注册路由 404 才属于预期；Vault/Flows 仅对本次已验证为 ended 的合成会话，按精确响应 error 分类。其他 4xx/5xx 仍失败。Monaco 在切回预览并 dispose 编辑器时可能上报准确的 `Canceled` 取消事件；验证器只按名称、消息、Monaco cancel/dispose 栈和该检查阶段识别它，并保存完整记录。它不会全局吞掉应用错误。
 
-## 在本机准备这个分支
+## 在本机准备当前 main
 
 Git 检出和正在运行的 Dashboard 是不同目录。下面只准备新运行树；准备脚本拒绝覆盖已有目标，不会启动或重启服务。
 
 ```bash
-git fetch origin feat/research-workspace-ui-20261105
-git switch --track origin/feat/research-workspace-ui-20261105
+git fetch origin main
+git switch main
+git pull --ff-only origin main
 
 PI_RESEARCH_DASHBOARD_SOURCE="$PWD/.runtime/dashboard-workspace-ui" \
 NODE_OPTIONS=--max-old-space-size=4096 \
 bash scripts/prepare-dashboard.sh
 ```
 
-若本地已存在同名分支，直接 `git switch feat/research-workspace-ui-20261105`。运行树目标须不存在。Node >= 22.19，pnpm 依照原发布文档准备；本次实际环境为 Node 24.22.1、pnpm 11.25.0、Chromium 134。
+本次 UI 改版已合并到 `main`，上面的命令使用当前主分支。运行树目标须不存在。Node >= 22.19，pnpm 依照原发布文档准备；本次实际环境为 Node 24.22.1、pnpm 11.25.0、Chromium 134。
 
 准备好 Playwright 浏览器后可重放 UI 检查；完整参数、隔离方式和输出说明见 [scripts/ui-preview/README.md](../../scripts/ui-preview/README.md)。
 

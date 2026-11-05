@@ -10,7 +10,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![Node](https://img.shields.io/badge/Node-22.19%2B-green)
 
-> **当前为 0.20.0 开发源码。** 本 README 对应包含 2026-11-05 工作区 UI 改版的代码，功能核对基线为 `b79930a`。当前文档分支为 `docs/readme-actual-workflow-20261105`，包含 `feat/research-workspace-ui-20261105` 的 UI 改动；合并前请按下方命令检出对应分支。完整自动研究、Science 和部分后端集成仍有明确的配置要求与已知缺口，见[可用范围](#可用范围与已知问题)。
+> **当前为 0.20.0 开发源码。** 当前 `main` 已包含 2026-11-05 的工作区 UI 改版与文档更新，功能核对基线为 `b79930a`。请按下方命令检出 `main`。完整自动研究、Science 和部分后端集成仍有明确的配置要求与已知缺口，见[可用范围](#可用范围与已知问题)。
 
 ![项目实际运行结构：操作入口、Pi 执行、研究记录、观测回流与独立 Science 查看通道](docs/images/project-illustration.png)
 
@@ -237,13 +237,13 @@ Science 从目录工作台进入，不依赖先创建 Pi 会话。Science 主视
 | Dashboard | 上游 `v0.10.0`，固定提交 `65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0` + 610 个文件的源码覆盖层 |
 | 扩展依赖 | 13 个固定版本 npm 包；见 [锁文件清单](config/locks/extensions/package.json) |
 
-基础安装和维护细节见 [0.20 开发与部署](docs/RELEASE-0.20.md)；本分支检出、认证入口和当前缺口以本 README 的说明为准。下面是创建**全新配置**的顺序；已有配置请合并所需路径，不要重复执行安装器覆盖。
+基础安装和维护细节见 [0.20 开发与部署](docs/RELEASE-0.20.md)；当前源码检出、认证入口和当前缺口以本 README 的说明为准。下面是创建**全新配置**的顺序；已有配置请合并所需路径，不要重复执行安装器覆盖。
 
 ### 1. 克隆并检查源码
 
 ```bash
-# 此文档分支包含已完成的工作区 UI 改版。
-git clone --branch docs/readme-actual-workflow-20261105 \
+# main 已包含已完成的工作区 UI 改版与最新文档。
+git clone --branch main \
   https://github.com/northkd/pi-research-harness.git
 cd pi-research-harness
 
