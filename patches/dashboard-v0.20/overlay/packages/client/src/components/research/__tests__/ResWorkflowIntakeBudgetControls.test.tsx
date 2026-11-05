@@ -14,7 +14,7 @@ function job(authorized = false): Adoption {
   const grant = { analysisMode: "full-history-agent-v2", grantHash: "grant-one", materialPlanId: "plan-one", materialPlanHash: "hash-one", model: MODEL, historySelection: [], baseRequests: 2, retryReserve: 1, maxRequests: 3, policy };
   return { id: "adopt-one", cwd: CWD, status: authorized ? "analyzing" : "awaiting-model", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), partial: false, progress: { files: 0, sessions: 0, bytes: 0 }, sources: [], skipped: [], charterHash: "none", model: MODEL, historySelection: [],
     agentJob: { mode: "full-history-agent-v2", phase: authorized ? "reviewing" : "awaiting-authorization", authorized, ...(authorized ? { authorizedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600000).toISOString() } : {}), workerActive: authorized, resumeRequired: false, grant,
-      plan: { planId: "plan-one", planHash: "hash-one", model: MODEL, batchCount: 1, mergeCallCount: 1, histories: [], eligibleMessages: 0, eligibleBytes: 0, blockers: [] },
+      plan: { planId: "plan-one", planHash: "hash-one", model: MODEL, contextWindow: 32000, maxTokens: 8192, maxRequests: 2, batchCount: 1, mergeCallCount: 1, histories: [], eligibleMessages: 0, eligibleBytes: 0, blockers: [] },
       coverage: { selectedHistories: 0, completedHistories: 0, eligibleMessages: 0, completedMessages: 0, eligibleBytes: 0, completedBytes: 0, completedBatches: 0, totalBatches: 0 },
       budget: { baseRequests: 2, retryReserve: 1, maxRequests: 3, effectiveMaxRequests: 3, revision: 0, editable: authorized, policy: "original-bounded", usedRequests: authorized ? 2 : 0, baseUsed: authorized ? 1 : 0, recoveryUsed: authorized ? 1 : 0, remainingRequests: authorized ? 1 : 3, inFlightRequests: authorized ? 1 : 0, unknownRequests: authorized ? 1 : 0 }, completedNodes: 0, reusedCheckpoints: 0 },
   } as Adoption;
@@ -40,7 +40,9 @@ async function draw(next: Adoption = latest) {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Await the lazy module before asserting synchronous controls in this unit harness.
+  await import("../ResWorkflowIntakeBudgetControls.js");
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   latest = job(); calls = []; accepted = []; apiBase = ""; setGlobalApiBase("");
   reply = async (body, url) => {
@@ -99,7 +101,7 @@ describe("intake budget editing", () => {
     await click("res-workflow-intake-budget-unlimited");
     reply = async body => {
       const next = structuredClone(latest); const budget = next.agentJob!.budget;
-      budget.effectiveMaxRequests = body.maxRequests; budget.revision++; budget.policy = body.maxRequests === null ? "unlimited" : "total-requests";
+      budget.effectiveMaxRequests = body.maxRequests; budget.revision = (budget.revision ?? 0) + 1; budget.policy = body.maxRequests === null ? "unlimited" : "total-requests";
       if (body.maxRequests === null) budget.unlimited = true; else delete budget.unlimited;
       next.agentJob!.workerActive = false; next.agentJob!.resumeRequired = true; return response(next);
     };

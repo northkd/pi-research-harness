@@ -43,6 +43,12 @@ export interface PendingScroll {
 
 /** Virtual tab path for the research workbench (never a real file). */
 export const RESEARCH_TAB_PATH = "research:";
+export type ResearchSurface = "workbench" | "agents";
+
+function loadResearchSurface(scope: string): ResearchSurface {
+  try { return localStorage.getItem(`pi-dashboard:research-surface:${scope}`) === "agents" ? "agents" : "workbench"; }
+  catch { return "workbench"; }
+}
 
 /**
  * Research-loop files watched while the workbench tab is open. They ride the
@@ -100,7 +106,11 @@ export interface SplitWorkspaceContextValue {
   /** Open a file's diff as a `diff:<relPath>` viewer tab (coexists with its monaco tab). */
   openDiffTab: (relPath: string) => void;
   /** Open (or focus) the research workbench for this pane's cwd as a normal tab. */
-  openResearch: () => void;
+  openResearch: (surface?: ResearchSurface) => void;
+  researchSurface?: ResearchSurface;
+  /** Open the existing file pane without closing research, Science or terminal tabs. */
+  openFiles?: () => void;
+  filesRevealSignal?: number;
   /** Focus a host-validated Science workspace/task; never creates a Pi session or analysis. */
   openScience: (target?: ScienceViewTarget) => boolean;
   /** Open the split and reveal the Changes section in the pane rail. */
@@ -196,6 +206,8 @@ interface ProviderProps {
    * `false` (the folder pane: no digests, no baselines, no banner).
    */
   changeDetection?: boolean;
+  /** Keep real open files watched while the workspace retains hidden authoring buffers. */
+  retainAuthoring?: boolean;
   /** WS connection generation; a bump re-declares the watch + runs a catch-up. */
   connectionGeneration?: number;
   /** Declare open files to the server watch (from `App`'s `send`). Signature
@@ -232,6 +244,7 @@ export function SplitWorkspaceProvider({
   onFilenameSearch,
   changedFiles: candidates = null,
   changeDetection: changeDetectionRequested = false,
+  retainAuthoring = false,
   connectionGeneration = 0,
   onWatchFiles,
   onClearChanged,
@@ -253,6 +266,17 @@ export function SplitWorkspaceProvider({
   const changeDetection = changeDetectionRequested && cwd !== "";
   const [split, updateSplit] = useSplitState(sessionId, defaultMode);
   const [paneState, dispatch] = useEditorPaneState(sessionId);
+  const scope = `${sessionId}\0${cwd}`;
+  const [surfaceState, setSurfaceState] = useState(() => ({ scope, value: loadResearchSurface(scope) }));
+  const researchSurface = surfaceState.scope === scope ? surfaceState.value : loadResearchSurface(scope);
+  const lastFile = useRef(new Map<string, string>());
+  const currentFile = paneState.openFiles[paneState.activeIndex];
+  useEffect(() => {
+    if (currentFile && currentFile.path !== RESEARCH_TAB_PATH && currentFile.viewer !== "science") {
+      lastFile.current.set(scope, currentFile.path);
+    }
+  }, [scope, currentFile]);
+  const [filesRevealSignal, setFilesRevealSignal] = useState(0);
   const ensurePaneOpen = useCallback(() => updateSplit({ mode: "split" }), [updateSplit]);
   const terminal = useTerminalPaneTabs({
     cwd,
@@ -370,11 +394,25 @@ export function SplitWorkspaceProvider({
     [dispatch, ensureRevealed],
   );
 
-  const openResearch = useCallback(() => {
+  const openResearch = useCallback((surface: ResearchSurface = "workbench") => {
     if (!cwd) return;
+    setSurfaceState({ scope, value: surface });
+    try { localStorage.setItem(`pi-dashboard:research-surface:${scope}`, surface); } catch { /* private/quota mode */ }
     dispatch({ type: "openFile", path: RESEARCH_TAB_PATH, viewer: "research" });
     ensureRevealed();
-  }, [cwd, dispatch, ensureRevealed]);
+  }, [cwd, scope, dispatch, ensureRevealed]);
+
+  const openFiles = useCallback(() => {
+    if (!cwd) return;
+    const remembered = lastFile.current.get(scope);
+    const candidates = paneState.openFiles.map((file, index) => ({ file, index }))
+      .filter(({ file }) => file.path !== RESEARCH_TAB_PATH && file.viewer !== "science");
+    const target = candidates.find(({ file }) => file.path === remembered) ?? candidates[0];
+    dispatch(target ? { type: "setActive", index: target.index } : { type: "browseFiles" });
+    saveTreeVisible(sessionId, true);
+    setFilesRevealSignal(n => n + 1);
+    ensureRevealed();
+  }, [cwd, scope, sessionId, paneState.openFiles, dispatch, ensureRevealed]);
 
   const openScience = useCallback((target: ScienceViewTarget = { kind: "workspace" }) => {
     if (!cwd || !isScienceViewTarget(target)) return false;
@@ -391,10 +429,11 @@ export function SplitWorkspaceProvider({
     // an in-pane reveal effect alone would miss the first open). An
     // already-mounted pane is handled by its changesRevealSignal effect. See
     // change: detect-tool-created-files.
+    openFiles();
     saveTreeVisible(sessionId, true);
     ensureRevealed();
     setChangesRevealSignal((n) => n + 1);
-  }, [sessionId, ensureRevealed]);
+  }, [sessionId, openFiles, ensureRevealed]);
 
   const setMode = useCallback((mode: SplitMode) => updateSplit({ mode }), [updateSplit]);
   const consumePendingScroll = useCallback(() => setPendingScroll(null), []);
@@ -480,11 +519,14 @@ export function SplitWorkspaceProvider({
   // biome-ignore lint/correctness/useExhaustiveDependencies: watchNonce is a deliberate re-fire trigger
   useEffect(() => {
     if (!sessionId || !cwd) return;
-    const paths = split.mode !== "closed" ? openPathsKey.split("\u0000").filter(Boolean) : [];
+    // A retained buffer keeps its original baseline while the chat is shown.
+    // Keep its watch alive so changes made during that time remain detectable.
+    // Legacy stand-alone panes still release all watches on close.
+    const paths = split.mode !== "closed" || retainAuthoring ? openPathsKey.split("\u0000").filter(Boolean) : [];
     const watchPaths =
       split.mode !== "closed" && researchWatchKey ? [...new Set([...paths, ...RESEARCH_WATCH_PATHS])] : paths;
     watchRef.current?.(sessionId, cwd, watchPaths);
-  }, [sessionId, cwd, openPathsKey, split.mode, researchWatchKey, watchNonce]);
+  }, [sessionId, cwd, openPathsKey, split.mode, researchWatchKey, watchNonce, retainAuthoring]);
   // (b) Clear this session's watchers on session switch / unmount only.
   useEffect(() => {
     if (!sessionId || !cwd) return;
@@ -507,6 +549,9 @@ export function SplitWorkspaceProvider({
       openPluginTab,
       openDiffTab,
       openResearch,
+      researchSurface,
+      openFiles,
+      filesRevealSignal,
       openScience,
       openChanges,
       changesRevealSignal,
@@ -526,7 +571,7 @@ export function SplitWorkspaceProvider({
       terminal,
       terminalActivated,
     }),
-    [sessionId, cwd, split, updateSplit, setMode, paneState, dispatch, ensureRevealed, openInSplit, openLiveTarget, openUrlTarget, openPluginTab, openDiffTab, openResearch, openScience, openChanges, changesRevealSignal, pendingScroll, consumePendingScroll, fileResults, filenameSearch, changedFiles, clearChanged, changeDetection, captureBaseline, trackedFileWrite, setBaseline, resyncWatch, researchChangeSignal, connectionGeneration, terminal, terminalActivated],
+    [sessionId, cwd, split, updateSplit, setMode, paneState, dispatch, ensureRevealed, openInSplit, openLiveTarget, openUrlTarget, openPluginTab, openDiffTab, openResearch, researchSurface, openFiles, filesRevealSignal, openScience, openChanges, changesRevealSignal, pendingScroll, consumePendingScroll, fileResults, filenameSearch, changedFiles, clearChanged, changeDetection, captureBaseline, trackedFileWrite, setBaseline, resyncWatch, researchChangeSignal, connectionGeneration, terminal, terminalActivated],
   );
 
   return (

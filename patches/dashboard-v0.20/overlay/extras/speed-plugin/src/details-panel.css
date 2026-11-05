@@ -1,0 +1,99 @@
+.research-usage-panel {
+  --usage-panel-edge: 12px;
+  --usage-panel-top: 64px;
+  position: fixed;
+  top: var(--usage-panel-top);
+  right: var(--usage-panel-edge);
+  max-width: calc(100vw - 2 * var(--usage-panel-edge));
+  max-height: calc(100dvh - var(--usage-panel-top) - var(--usage-panel-edge));
+  min-width: 0;
+  border: 1px solid var(--border-strong, var(--border-secondary));
+  border-radius: 12px;
+  background: var(--bg-primary);
+  box-shadow: -12px 16px 48px #00000024;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.research-usage-panel[data-maximized="true"] {
+  top: var(--usage-panel-edge);
+  width: calc(100vw - 2 * var(--usage-panel-edge));
+  height: calc(100dvh - 2 * var(--usage-panel-edge));
+  max-height: calc(100dvh - 2 * var(--usage-panel-edge));
+}
+
+.research-usage-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 20px 16px;
+}
+
+.research-usage-eyebrow {
+  margin: 0 0 4px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.research-usage-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.research-usage-subtitle {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.research-usage-icon-button {
+  display: flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.research-usage-icon-button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.research-usage-panel button:focus-visible,
+.research-usage-resize:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.research-usage-tabs { margin: 0 20px 16px; }
+.research-usage-tabs > button { min-height: 36px; }
+.research-usage-content { padding: 0 20px 16px; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.research-usage-footer { flex-shrink: 0; border-top: 1px solid var(--border-primary); padding: 10px 20px 14px; color: var(--text-tertiary); font-size: 11px; }
+
+/* Compact records remain complete while larger text and flat surfaces reduce nested-card noise. */
+.research-usage-content [data-testid$="-panel"] > div { box-shadow: none; }
+.research-usage-content [data-testid$="-history-row"] { border-color: transparent; border-bottom-color: var(--border-primary); border-radius: 0; background: transparent; min-height: 40px; }
+.research-usage-content [data-testid$="-history-row"]:hover { background: var(--bg-hover); }
+.research-usage-content [data-testid="history-model"] { font-size: 12px; }
+.research-usage-content [data-testid="billing-total"] { color: var(--text-primary); font-size: 28px; font-variant-numeric: tabular-nums; }
+.research-usage-content button { min-height: 28px; }
+
+.research-usage-resize { position: absolute; display: flex; align-items: center; justify-content: center; user-select: none; z-index: 1; }
+.research-usage-resize span { border-radius: 4px; background: var(--border-secondary); }
+.research-usage-resize:hover span,
+.research-usage-resize:focus-visible span { background: var(--accent-primary); }
+.research-usage-resize-width { top: 12px; bottom: 16px; left: -5px; width: 10px; cursor: ew-resize; }
+.research-usage-resize-width span { width: 3px; height: 40px; }
+.research-usage-resize-height { bottom: -5px; right: 16px; left: 16px; height: 10px; cursor: ns-resize; }
+.research-usage-resize-height span { width: 40px; height: 3px; }
+.research-usage-resize-corner { left: -4px; bottom: -4px; width: 20px; height: 20px; cursor: nesw-resize; }
+.research-usage-resize-corner span { width: 9px; height: 9px; border-left: 2px solid var(--text-tertiary); border-bottom: 2px solid var(--text-tertiary); border-radius: 0 0 0 3px; background: transparent; }
+
+@media (max-width: 640px) {
+  .research-usage-panel { --usage-panel-edge: 8px; --usage-panel-top: 8px; }
+  .research-usage-header { padding: 16px 14px 12px; gap: 8px; }
+  .research-usage-tabs { margin: 0 14px 12px; }
+  .research-usage-content { padding: 0 14px 12px; }
+  .research-usage-footer { padding-right: 14px; padding-left: 14px; }
+  .research-usage-title { font-size: 16px; }
+  .research-usage-icon-button { width: 40px; height: 40px; }
+}

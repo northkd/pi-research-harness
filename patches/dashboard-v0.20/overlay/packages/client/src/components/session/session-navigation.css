@@ -1,0 +1,270 @@
+/* Scoped navigation presentation; all theme choices continue to use the
+   existing semantic tokens. No rule changes plugin visibility preferences. */
+.session-nav-shell {
+  min-width: 0;
+  background: var(--bg-secondary);
+}
+
+.session-nav-shell [data-testid="header-app-bar"] {
+  min-height: 48px;
+  gap: 8px;
+}
+
+.session-nav-brand {
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+.session-nav-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 6px;
+}
+
+.session-nav-connection-row,
+.session-nav-density-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-nav-connection-row:empty {
+  display: none;
+}
+
+.session-nav-density-row {
+  justify-content: space-between;
+}
+
+.session-nav-density {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-tertiary);
+}
+
+.session-nav-density button {
+  min-height: 26px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.session-nav-density button[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: var(--bg-primary);
+  box-shadow: 0 1px 2px var(--shadow-card);
+}
+
+.session-nav-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.session-nav-folder-search,
+.session-nav-session-search {
+  width: 100%;
+  grid-column: 1 / -1;
+  min-height: 32px;
+}
+
+.session-nav-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 2px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  text-align: left;
+  font-size: 12px;
+}
+
+.session-nav-disclosure:hover,
+.session-nav-card-details-toggle:hover {
+  color: var(--accent-text);
+  background: var(--bg-hover);
+}
+
+.session-nav-project-tools-body[hidden],
+.session-nav-card-details[hidden],
+.session-nav-utilities [hidden] {
+  display: none;
+}
+
+.session-nav-project-tools-body {
+  padding: 0 2px 8px;
+}
+
+.session-nav-shell[data-density="compact"] .session-nav-groups {
+  gap: 8px;
+  padding-right: 8px;
+}
+
+.session-nav-folder[data-density="compact"] .session-nav-folder-frame {
+  padding-top: 0;
+}
+
+.session-nav-folder[data-density="compact"] .session-nav-folder-tab {
+  display: none;
+}
+
+.session-nav-folder[data-density="compact"] .session-nav-folder-header,
+.session-nav-folder[data-density="compact"] .session-nav-folder-body {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 8px;
+}
+
+.session-nav-folder[data-density="compact"] .session-nav-folder-header {
+  padding-top: 4px;
+}
+
+.session-nav-folder[data-density="compact"] .session-nav-folder-parent {
+  display: none;
+}
+
+.session-nav-folder[data-density="compact"] .session-nav-folder-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.session-nav-folder[data-density="compact"] .session-nav-folder-billing {
+  justify-content: flex-start;
+}
+
+.session-nav-card {
+  min-width: 0;
+  min-height: 52px;
+  padding: 8px 30px 8px 7px;
+  border-color: transparent;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.session-nav-card:hover {
+  background: var(--bg-hover);
+}
+
+.session-nav-card.session-nav-card-selected {
+  border-color: var(--tint-blue-border);
+  background: var(--tint-blue-bg);
+  box-shadow: inset 2px 0 0 var(--accent-solid);
+}
+
+.session-nav-card:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.session-nav-card-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.session-nav-card .card-edge-trigger {
+  right: 3px;
+  top: 8px;
+  transform: none;
+}
+
+.session-nav-card .card-edge-trigger > button {
+  width: 24px;
+  height: 30px;
+  border-color: transparent;
+  background: transparent;
+  border-radius: 6px;
+}
+
+.session-nav-card-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-height: 22px;
+  padding: 0 2px;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.session-nav-card-identities:not(:empty) {
+  margin-top: 3px;
+}
+
+.session-nav-card .session-nav-card-details:not([hidden]) {
+  padding-top: 6px;
+}
+
+.session-nav-card .session-nav-badges > div {
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.session-nav-card .session-nav-badges > div > span:first-child {
+  display: none;
+}
+
+.session-nav-card [data-testid="process-safety-chip"] {
+  margin-top: 5px;
+  min-height: 28px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.session-nav-running-controls:empty {
+  display: none;
+}
+
+.research-navigation-rail {
+  min-width: 0;
+}
+
+.research-navigation-seam {
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-primary);
+}
+
+.research-navigation-seam:hover,
+.research-navigation-seam:focus-visible {
+  background: var(--tint-blue-bg);
+}
+
+@media (pointer: coarse) {
+  .session-nav-icon-button,
+  .session-nav-density button,
+  .session-nav-disclosure,
+  .session-nav-card-details-toggle,
+  .session-nav-card .card-edge-trigger > button,
+  .session-nav-card [data-testid="process-safety-chip"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .session-nav-card {
+    padding-right: 50px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-nav-card {
+    transition: none;
+  }
+}

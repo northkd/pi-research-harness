@@ -45,7 +45,7 @@ export function researchStatusLabel(status: string): string {
 
 export function executionRecordStatus(row: ResearchExecution, stale = false): string {
   if (row.source === "observation" && stale) return "观测已过期";
-  const source = row.source === "workflow-record" ? "工作流记录" : row.kind === "pi-session" ? "主会话" : "子任务";
+  const source = row.source === "workflow-record" ? "工作流记录" : row.kind === "pi-session" ? "独立会话" : "原生子任务";
   return `${source} · ${researchStatusLabel(row.status)}`;
 }
 
@@ -110,6 +110,9 @@ interface UserCorrection {
   timestamp: string;
   status: "sending" | "delivered" | "failed";
   error?: string;
+  targetSessionId: string;
+  promptId?: string;
+  contended?: boolean;
 }
 
 export function ResearchAgentDetail({
@@ -124,6 +127,7 @@ export function ResearchAgentDetail({
   onClose,
   onOpenArtifact,
   onSelectExecution,
+  visible = true,
 }: {
   role: ConfiguredRole;
   instances: ResearchAgentInstance[];
@@ -136,6 +140,7 @@ export function ResearchAgentDetail({
   onClose: () => void;
   onOpenArtifact?: (path: string) => void;
   onSelectExecution?: (role: ConfiguredRole, execution: ResearchExecution) => void;
+  visible?: boolean;
 }) {
   const apiBase = useApiBase();
   const [, navigate] = useLocation();
@@ -154,27 +159,30 @@ export function ResearchAgentDetail({
   });
 
   const [selectedInstance, setSelectedInstance] = useState<string | null>(
-    initialInstance ?? (sortedInstances[0] ? instanceKey(sortedInstances[0]) : null)
+    initialInstance ?? (sortedInstances.length === 1 ? instanceKey(sortedInstances[0]) : null)
   );
-  const activeInstance = sortedInstances.find(inst => instanceKey(inst) === selectedInstance) ?? sortedInstances[0];
-  const subagents = useSessionSubagents(activeInstance?.run.parentSessionId);
+  const activeInstance = sortedInstances.find(inst => instanceKey(inst) === selectedInstance);
+  const subagents = useSessionSubagents(activeInstance?.run.parentSessionId ?? "");
   const hasResolvedChildConversation = Boolean(
     activeInstance?.step.childRunId &&
     activeInstance?.run.parentSessionId &&
     subagents.has(activeInstance.step.childRunId)
   );
-  const [selectedExecution, setSelectedExecution] = useState(initialExecution ?? (sortedExecutions[0]?.id || null));
-  const execution = sortedExecutions.find(row => row.id === selectedExecution) ?? sortedExecutions[0];
+  const [selectedExecution, setSelectedExecution] = useState(initialExecution ?? (sortedExecutions.length === 1 ? sortedExecutions[0].id : null));
+  const execution = sortedExecutions.find(row => row.id === selectedExecution);
 
   // User real-time corrections state
   const [corrections, setCorrections] = useState<UserCorrection[]>([]);
   const [inputText, setInputText] = useState("");
   const [isSending, setIsSending] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const followsOutput = useRef(true);
+  const [showAllChildren, setShowAllChildren] = useState(false);
+  const [metadataOpen, setMetadataOpen] = useState(true);
 
   // Auto-scroll chat when new message or correction arrives
   useEffect(() => {
-    if (chatScrollRef.current) {
+    if (chatScrollRef.current && followsOutput.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [corrections, execution?.output]);
@@ -187,11 +195,12 @@ export function ResearchAgentDetail({
   const universe = allExecutions ?? executions;
   // A lead is identified only by an explicitly named role, not inferred from history.
   const isCaptain = execution?.kind === "pi-session" && role.name === "主控 Agent 会话";
-  const isLive = execution ? ["running", "streaming", "started"].includes(execution.status) : false;
+  const isStale = execution?.source === "observation" && observationsStale;
+  const isLive = execution && !isStale ? ["running", "streaming", "started"].includes(execution.status) : false;
 
   // 开始与结束时间计算
   const startTime = execution?.startedAt ?? activeInstance?.step.startedAt;
-  const endTime = isLive ? null : (execution?.endedAt ?? activeInstance?.step.endedAt ?? execution?.lastActivityAt);
+  const endTime = execution?.endedAt ?? activeInstance?.step.endedAt;
   const durationText = formatDuration(startTime, endTime);
 
   const displayTitle =
@@ -206,14 +215,11 @@ export function ResearchAgentDetail({
       : undefined;
   const dispatchedChildSubagents =
     execution?.kind === "pi-session"
-      ? universe.filter(ex => ex.parentExecutionId === execution.id)
+      ? universe.filter(ex => ex.kind === "native-subagent" && ex.parentExecutionId === execution.id)
       : [];
 
   // Actual used skills
-  const actualSkills = Array.from(new Set([
-    ...(role.skills ?? []),
-    ...(execution?.currentTool ? [execution.currentTool] : []),
-  ]));
+  const actualSkills = execution?.currentTool ? [execution.currentTool] : [];
 
   // Project charter
   const charter = getResearchProjectCharter(role.name, isCaptain, execution?.kind, execution, cwd);
@@ -228,7 +234,7 @@ export function ResearchAgentDetail({
   // Send real-time correction prompt
   const handleSendCorrection = async (overrideText?: string) => {
     const textToSend = (overrideText ?? inputText).trim();
-    if (!textToSend || isSending) return;
+    if (!textToSend || isSending || !execution?.sessionId) return;
 
     const targetSessionId = execution?.sessionId;
     const correctionId = `corr-${Date.now()}`;
@@ -237,6 +243,7 @@ export function ResearchAgentDetail({
       text: textToSend,
       timestamp: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       status: "sending",
+      targetSessionId,
     };
 
     setCorrections((prev) => [...prev, newCorr]);
@@ -244,24 +251,16 @@ export function ResearchAgentDetail({
     setIsSending(true);
 
     try {
-      if (targetSessionId) {
-        // Direct session prompt injection
-        const res = await fetch(`${apiBase}/api/session/${targetSessionId}/prompt`, {
+        const res = await fetch(`${apiBase}/api/session/${encodeURIComponent(targetSessionId)}/prompt`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: textToSend }),
         });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || `HTTP ${res.status}`);
-        }
-      } else {
-        // Record observation correction locally
-        await new Promise((r) => setTimeout(r, 400));
-      }
-
+        const receipt = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(receipt?.error || `HTTP ${res.status}`);
+        if (receipt?.success !== true || receipt?.transmitted !== true) throw new Error("服务未返回可验证的提交回执，请核对目标会话；不会自动重试。");
       setCorrections((prev) =>
-        prev.map((c) => (c.id === correctionId ? { ...c, status: "delivered" } : c))
+        prev.map((c) => (c.id === correctionId ? { ...c, status: "delivered", promptId: typeof receipt.promptId === "string" ? receipt.promptId : undefined, contended: receipt.bridgeState === "contended" } : c))
       );
     } catch (err: any) {
       setCorrections((prev) =>
@@ -275,7 +274,7 @@ export function ResearchAgentDetail({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSendCorrection();
     }
@@ -283,15 +282,15 @@ export function ResearchAgentDetail({
 
   return (
     <Dialog
-      open
+      open={visible}
       onClose={onClose}
       title=""
       size="full"
       flush
+      ariaLabel={`${displayTitle} 执行详情`}
       testId="research-agent-detail"
-      className="p-0 overflow-hidden w-[95vw] max-w-7xl rounded-2xl border border-[var(--border-primary)] shadow-2xl bg-[var(--bg-primary)]"
     >
-      <div className="flex h-[90vh] flex-col bg-[var(--bg-primary)] text-[var(--text-primary)]">
+      <div className="research-agent-detail flex h-[90vh] min-h-0 flex-col bg-[var(--bg-primary)] text-[var(--text-primary)]">
         {/* =========================================================================
             HEADER: 高质感顶栏，展示 Agent 身份、角色、模型、阶段与关闭按钮
             ========================================================================= */}
@@ -329,7 +328,7 @@ export function ResearchAgentDetail({
                       <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--accent-green)]" />
                     </span>
                   )}
-                  {execution ? researchStatusLabel(execution.status) : "待命中"}
+                  {execution ? executionRecordStatus(execution, observationsStale) : activeInstance ? researchStatusLabel(activeInstance.step.status) : "暂无已选执行记录"}
                 </span>
 
                 {/* Subagent vs Multi-Agent Collaboration relationship */}
@@ -343,17 +342,17 @@ export function ResearchAgentDetail({
                   }`}
                 >
                   {isCaptain
-                    ? "👑 全局指挥主控 · 统筹全流程推演"
+                    ? "已登记主控角色 · 独立会话"
                     : execution?.kind === "native-subagent"
-                    ? "⚡ Subagent 派发微任务 · 父会话单向派发"
-                    : "🤖 Multi-Agent 协同会话 · 与主控双向状态同步"}
+                    ? "原生 Subagent · 父会话派发任务"
+                    : execution?.kind === "pi-session" ? "Multi-Agent · 独立上下文会话" : "工作流记录 / 角色配置"}
                 </span>
               </div>
 
               <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-[var(--text-secondary)]">
-                <span>模型：<strong className="font-mono text-[var(--text-primary)] font-semibold">{execution?.observedModel ?? role.model ?? "未观测模型"}</strong></span>
+                <span>观测模型：<strong className="font-mono text-[var(--text-primary)] font-semibold">{execution?.observedModel ?? activeInstance?.step.observedModel ?? "未观测模型"}</strong></span>
                 <span>•</span>
-                <span>阶段：<strong className="text-[var(--text-primary)] font-semibold">{execution?.stage ?? "当前活跃阶段"}</strong></span>
+                <span>阶段：<strong className="text-[var(--text-primary)] font-semibold">{execution?.stage ?? activeInstance?.step.stage ?? "未登记"}</strong></span>
                 <span>•</span>
                 <span className="inline-flex items-center gap-1 font-mono">
                   <Icon path={mdiClockOutline} size={0.5} className="text-[var(--accent-primary)]" />
@@ -383,6 +382,7 @@ export function ResearchAgentDetail({
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            <button type="button" className="win11-btn px-2.5 py-1.5 text-xs" aria-expanded={metadataOpen} onClick={() => setMetadataOpen(value => !value)}>{metadataOpen ? "收起详情" : "执行详情"}</button>
             <button
               type="button"
               onClick={onClose}
@@ -402,7 +402,7 @@ export function ResearchAgentDetail({
           {/* -----------------------------------------------------------------------
               LEFT COLUMN: 智能体在当前项目中的专项职责、父子协同关系、完整执行参数、工具与成果
               ----------------------------------------------------------------------- */}
-          <aside className="w-full md:w-80 lg:w-[340px] shrink-0 bg-[var(--bg-secondary)] overflow-y-auto p-4 space-y-4">
+          <aside hidden={!metadataOpen} className="research-agent-metadata w-full md:w-80 lg:w-[340px] shrink-0 bg-[var(--bg-secondary)] overflow-y-auto p-4 space-y-4">
             {/* Section 1: 本研究专项工作职责 */}
             <div className="win11-card p-4 space-y-3">
               <div className="flex items-center justify-between border-b border-[var(--border-primary)] pb-2.5">
@@ -477,10 +477,10 @@ export function ResearchAgentDetail({
                 {dispatchedChildSubagents.length > 0 && (
                   <div className="space-y-1.5">
                     <div className="text-[11px] text-[var(--text-secondary)]">
-                      本 Multi-Agent 会话单向派发的专职 Subagent 子任务：
+                      已记录的原生 Subagent 子任务 · {dispatchedChildSubagents.length} 项
                     </div>
                     <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                      {dispatchedChildSubagents.slice(0, 12).map((sub, idx) => {
+                      {(showAllChildren ? dispatchedChildSubagents : dispatchedChildSubagents.slice(0, 12)).map((sub, idx) => {
                         const subRoleName = executionRoleName(sub);
                         return (
                           <button
@@ -496,7 +496,7 @@ export function ResearchAgentDetail({
                                 ⚡ #{idx + 1} · {getSubagentRoleDisplayTitle(subRoleName)}
                               </span>
                               <span className="shrink-0 font-mono text-[10px] text-[var(--accent-text)]">
-                                {researchStatusLabel(sub.status)}
+                                {executionRecordStatus(sub, observationsStale)}
                               </span>
                             </div>
                             {sub.prompt && (
@@ -508,6 +508,7 @@ export function ResearchAgentDetail({
                         );
                       })}
                     </div>
+                    {dispatchedChildSubagents.length > 12 && <button type="button" className="research-show-more" onClick={() => setShowAllChildren(value => !value)}>{showAllChildren ? "仅显示最近 12 项" : `查看全部 ${dispatchedChildSubagents.length} 项子任务`}</button>}
                   </div>
                 )}
               </div>
@@ -531,21 +532,21 @@ export function ResearchAgentDetail({
                 <div className="win11-card-subtle p-2.5">
                   <div className="text-[10.5px] text-[var(--text-tertiary)] font-medium">会话通道 (Session)</div>
                   <div className="mt-1 font-mono text-[11px] font-medium text-[var(--text-primary)] truncate" title={execution?.sessionId}>
-                    {execution?.sessionId ? execution.sessionId.slice(0, 14) : "主控进程内"}
+                    {execution?.sessionId ? execution.sessionId : "未记录可投递的会话"}
                   </div>
                 </div>
 
                 <div className="win11-card-subtle p-2.5">
                   <div className="text-[10.5px] text-[var(--text-tertiary)] font-medium">当前阶段</div>
                   <div className="mt-1 font-semibold text-[var(--text-primary)]">
-                    {execution?.stage || "科研活跃阶段"}
+                    {execution?.stage || activeInstance?.step.stage || "阶段未登记"}
                   </div>
                 </div>
 
                 <div className="win11-card-subtle p-2.5">
                   <div className="text-[10.5px] text-[var(--text-tertiary)] font-medium">协作形态</div>
                   <div className="mt-1 font-semibold text-[var(--accent-text)]">
-                    {isCaptain ? "主控指挥" : execution?.kind === "native-subagent" ? "Subagent" : "Multi-Agent"}
+                    {isCaptain ? "已登记主控角色" : execution?.kind === "native-subagent" ? "原生 Subagent" : execution?.kind === "pi-session" ? "独立协同会话" : "工作流记录"}
                   </div>
                 </div>
 
@@ -592,7 +593,7 @@ export function ResearchAgentDetail({
               <div className="space-y-1.5 pt-1">
                 <span className="text-[11px] font-semibold text-[var(--text-tertiary)] flex items-center gap-1">
                   <Icon path={mdiLightningBolt} size={0.5} className="text-[var(--accent-orange)]" />
-                  <span>本任务调用的技能与工具:</span>
+                  <span>当前工具观测{isStale ? "（已过期）" : ""}：</span>
                 </span>
                 <div className="flex flex-wrap gap-1.5">
                   {actualSkills.length > 0 ? (
@@ -602,9 +603,10 @@ export function ResearchAgentDetail({
                       </span>
                     ))
                   ) : (
-                    <span className="text-xs text-[var(--text-tertiary)]">无独立工具调用</span>
+                    <span className="text-xs text-[var(--text-tertiary)]">暂无工具调用观测</span>
                   )}
                 </div>
+                <p className="text-[11px] text-[var(--text-tertiary)]">配置技能：{role.skills.length ? role.skills.join("、") : "未配置"}；配置不代表已调用。</p>
               </div>
             </div>
 
@@ -621,6 +623,7 @@ export function ResearchAgentDetail({
                   <button
                     key={art.path}
                     type="button"
+                    aria-label={art.path}
                     onClick={() => {
                       onOpenArtifact?.(art.path);
                       onClose();
@@ -635,6 +638,8 @@ export function ResearchAgentDetail({
                   </button>
                 ))}
               </div>
+
+              {execution?.lastActivityAt && <p className="text-[11px] text-[var(--text-tertiary)]">最后活动：{formatTimestamp(execution.lastActivityAt)}（不作为结束时间）</p>}
             </div>
 
             {/* Legacy tests compatibility fallback */}
@@ -643,6 +648,7 @@ export function ResearchAgentDetail({
                 暂无可验证运行记录
               </div>
             )}
+            {sortedExecutions.length > 1 && <div className="space-y-2"><label className="text-xs text-[var(--text-tertiary)]" htmlFor="research-observed-execution">观测执行实例</label><select id="research-observed-execution" value={selectedExecution ?? ""} onChange={event => setSelectedExecution(event.target.value || null)} className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs"><option value="">选择要查看的执行</option>{sortedExecutions.map(row => <option key={row.id} value={row.id}>{formatTimestamp(row.startedAt ?? row.lastActivityAt)} · {researchStatusLabel(row.status)}</option>)}</select></div>}
             {instances.length > 0 && (
               <div className="space-y-2 pt-2 border-t border-[var(--border-primary)]">
                 <div className="text-xs font-semibold text-[var(--text-tertiary)]">历史实例列表:</div>
@@ -671,7 +677,7 @@ export function ResearchAgentDetail({
                 <div className="font-semibold text-[var(--text-primary)]">实例详情: {activeInstance.step.key}</div>
                 <div>状态: {researchStatusLabel(activeInstance.step.status)}</div>
                 {activeInstance.step.businessStatus === "blocked" && <div className="text-[var(--severity-warning-fg)]">阻塞（不代表科学验收）</div>}
-                <div>尚未观测</div>
+                <div>{activeInstance.step.observedModel ?? "尚未观测"}</div>
                 <div>{activeInstance.step.summary}</div>
                 {activeInstance.step.childRunId ? (
                   hasResolvedChildConversation ? (
@@ -690,19 +696,6 @@ export function ResearchAgentDetail({
                     <div className="text-[11px] text-[var(--text-secondary)]">暂无可验证的完整对话关联</div>
                   )
                 ) : null}
-                {activeInstance.step.evidence?.map((ev) => (
-                  <button
-                    key={ev}
-                    type="button"
-                    onClick={() => {
-                      onOpenArtifact?.(ev);
-                      onClose();
-                    }}
-                    className="block text-xs font-mono text-[var(--accent-text)] underline hover:opacity-80"
-                  >
-                    {ev}
-                  </button>
-                ))}
               </div>
             )}
           </aside>
@@ -715,6 +708,7 @@ export function ResearchAgentDetail({
             <div
               ref={chatScrollRef}
               data-testid="research-agent-dialogue-stream"
+              onScroll={event => { const node = event.currentTarget; followsOutput.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64; }}
               className="flex-1 min-h-0 overflow-y-auto px-6 py-6 md:px-10 space-y-6 select-text scroll-smooth"
             >
               {/* Turn 1: User / System Input Prompt */}
@@ -728,7 +722,7 @@ export function ResearchAgentDetail({
                 </div>
                 
                 <div className="win11-card w-full max-w-4xl border-l-4 border-l-[var(--accent-primary)] p-5 text-[14px] leading-relaxed text-[var(--text-primary)] break-words whitespace-pre-wrap font-sans min-w-0 max-w-full overflow-hidden [overflow-wrap:anywhere]">
-                  {promptText || "（初始直接调起会话，未指定独立 Prompt）"}
+                  {promptText || "暂无已记录的任务输入。"}
                 </div>
               </div>
 
@@ -737,7 +731,7 @@ export function ResearchAgentDetail({
                 <div className="flex items-center justify-center my-3">
                   <div className="tint-action-blue inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs shadow-xs">
                     <Icon path={mdiLightningBolt} size={0.6} />
-                    <span>实际执行工具/技能：</span>
+                    <span>工具观测{isStale ? "（已过期）" : ""}：</span>
                     <div className="flex flex-wrap gap-1.5 font-mono font-semibold text-[var(--text-primary)]">
                       {actualSkills.map((sk) => (
                         <span key={sk} className="rounded bg-[var(--bg-tertiary)] px-2 py-0.5 border border-[var(--border-primary)] text-[11.5px]">
@@ -767,7 +761,7 @@ export function ResearchAgentDetail({
                   <div className="mb-2 ml-1 flex items-center justify-between text-xs text-[var(--text-secondary)]">
                     <span className="font-bold text-[var(--text-primary)] flex items-center gap-2">
                       <span className="text-sm">{roleLabel(role.name)}</span>
-                      <span className="text-xs font-normal text-[var(--text-tertiary)]">推演成果与回复</span>
+                      <span className="text-xs font-normal text-[var(--text-tertiary)]">已记录输出</span>
                     </span>
                     {outputText && <CopyButton text={outputText} />}
                   </div>
@@ -795,11 +789,7 @@ export function ResearchAgentDetail({
                       </div>
                     ) : (
                       <div className="flex items-center gap-3 py-6 text-[var(--text-secondary)] text-sm">
-                        <span className="relative flex h-3 w-3">
-                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                          <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500" />
-                        </span>
-                        <span>智能体正在持续推演分析，生成阶段性学术产物…</span>
+                        <span>{isStale ? "观测已过期，尚无可展示的输出。" : isLive ? "执行中，尚未观测到输出。" : "暂无已记录输出。"}</span>
                       </div>
                     )}
                   </div>
@@ -816,14 +806,17 @@ export function ResearchAgentDetail({
                     </span>
                     <span>•</span>
                     <time className="text-[11px] text-[var(--text-tertiary)]">{corr.timestamp}</time>
+                    <span title={corr.targetSessionId}>目标会话：{corr.targetSessionId.slice(0, 16)}</span>
                     {corr.status === "delivered" && (
                       <span className="flex items-center gap-1 text-emerald-400 font-medium text-[11px]">
                         <Icon path={mdiCheckCircleOutline} size={0.5} />
-                        <span>已下达 Agent</span>
+                        <span title={corr.promptId}>已提交到目标会话（尚未确认接收）</span>
                       </span>
                     )}
                     {corr.status === "sending" && <span className="text-amber-400 text-[11px]">正在下达…</span>}
                     {corr.status === "failed" && <span className="text-rose-400 text-[11px]">发送失败: {corr.error}</span>}
+                    {corr.status === "failed" && <button type="button" className="text-[var(--accent-text)]" onClick={() => setInputText(corr.text)}>重新编辑</button>}
+                    {corr.contended && <span className="text-[var(--severity-warning-fg)]">桥接存在会话竞争，请核对实际接收情况后再决定是否重发。</span>}
                   </div>
                   <div className="w-full max-w-4xl rounded-2xl rounded-tr-sm bg-emerald-500/10 border border-emerald-500/30 border-l-4 border-l-emerald-500 text-[var(--text-primary)] p-4 text-[13.5px] leading-relaxed shadow-sm break-words whitespace-pre-wrap font-sans">
                     {corr.text}
@@ -839,42 +832,44 @@ export function ResearchAgentDetail({
               {/* Quick Intervention Shortcuts */}
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-semibold text-[var(--text-secondary)] flex items-center gap-1">
-                  <span>快捷纠偏:</span>
+                  <span>纠偏模板（填入后发送）:</span>
                 </span>
                 <button
                   type="button"
-                  onClick={() => handleSendCorrection("请严格聚焦本阶段核心目标，精简推演过程并给出关键推导证据。")}
+                  onClick={() => setInputText("请聚焦已记录的阶段目标，说明当前进展、关键证据及尚未解决的问题。")}
                   className="rounded-full border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1 text-[11.5px] text-[var(--text-secondary)] hover:border-emerald-500 hover:text-emerald-400 transition-colors shadow-sm"
                 >
                   🎯 聚焦阶段目标
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSendCorrection("请重点核验 AIMD 1200K 动力学平衡态及 DFT 弛豫收敛情况，剔除异常点。")}
+                  onClick={() => setInputText("请按本项目已声明的实验条件复核参数、收敛情况和异常点；缺少条件或证据时先列出待确认项，不自行补设数值。")}
                   className="rounded-full border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1 text-[11.5px] text-[var(--text-secondary)] hover:border-emerald-500 hover:text-emerald-400 transition-colors shadow-sm"
                 >
-                  🧪 校验 AIMD 平衡态
+                  🧪 核对实验条件
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSendCorrection("请重新复核已有引文和数据来源，标记未核验项并避免主观推断。")}
+                  onClick={() => setInputText("请重新复核已有引文和数据来源，标记未核验项并避免主观推断。")}
                   className="rounded-full border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1 text-[11.5px] text-[var(--text-secondary)] hover:border-emerald-500 hover:text-emerald-400 transition-colors shadow-sm"
                 >
                   🔍 严谨复核数据
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSendCorrection("当前思路似乎遇到阻碍，请停下当前分支并给出另一个可行的替代方案。")}
+                  onClick={() => setInputText("请评估当前思路的阻碍，提出一个替代方案，并说明切换所需的条件与影响，等待确认后再执行。")}
                   className="rounded-full border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1 text-[11.5px] text-[var(--text-secondary)] hover:border-emerald-500 hover:text-emerald-400 transition-colors shadow-sm"
                 >
-                  🛑 切换解题思路
+                  提议替代思路
                 </button>
               </div>
+              <p className="text-[11px] text-[var(--text-secondary)]" data-testid="research-correction-target">{execution?.sessionId ? `发送到会话 ${execution.sessionId}。这是文字指令，不会直接停止运行中的任务。` : "此记录没有可投递的 sessionId。可以编辑或复制草稿，请到实际会话发送；此处不能投递。"}</p>
 
               {/* Interactive Textarea & Send Button */}
               <div className="win11-card flex items-end gap-3 p-3 focus-within:border-[var(--accent-primary)] transition-all">
                 <textarea
                   value={inputText}
+                  aria-label="纠偏指令草稿"
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="输入对该 Agent 的实时纠偏指令 (按 Enter 发送，Shift+Enter 换行)..."
@@ -883,7 +878,7 @@ export function ResearchAgentDetail({
                 />
                 <button
                   type="button"
-                  disabled={!inputText.trim() || isSending}
+                  disabled={!execution?.sessionId || !inputText.trim() || isSending}
                   onClick={() => handleSendCorrection()}
                   className="win11-btn-accent h-9 px-4 text-xs disabled:cursor-not-allowed disabled:opacity-40"
                 >

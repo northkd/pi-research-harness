@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../../lib/api/res-workflow-api.js";
 import { ResWorkflowAdoption } from "../ResWorkflowAdoption.js";
 
-vi.mock("../../../lib/api/res-workflow-api.js", () => ({
+vi.mock("../../../lib/api/res-workflow-api.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../../lib/api/res-workflow-api.js")>(),
   getResWorkflowModels: vi.fn(), getResWorkflowHistoryCandidates: vi.fn(), joinResWorkflowSession: vi.fn(), createResWorkflowAdoption: vi.fn(), analyzeResWorkflowAdoption: vi.fn(), confirmResWorkflowAdoption: vi.fn(), cancelResWorkflowAdoption: vi.fn(),
+  createResWorkflowAgent: vi.fn(), prepareResWorkflowHistoryReview: vi.fn(), analyzeResWorkflowHistoryReview: vi.fn(),
 }));
 vi.mock("../../settings/ModelSelector.js", () => ({ ModelSelector: ({ onSelect, disabled }: { onSelect: (label: string) => void; disabled?: boolean }) => <button disabled={disabled} onClick={() => onSelect("proxy/anthropic/nested-model")}>pick exact model</button> }));
 const CWD = "/isolated/project";
@@ -21,6 +23,12 @@ beforeEach(() => {
   vi.mocked(api.getResWorkflowModels).mockResolvedValue([{ provider: "proxy", id: "anthropic/nested-model", name: "Selected model" }]);
   vi.mocked(api.getResWorkflowHistoryCandidates).mockResolvedValue({ candidates: HISTORY, partial: false, skipped: [] });
   vi.mocked(api.createResWorkflowAdoption).mockResolvedValue(job());
+  vi.mocked(api.createResWorkflowAgent).mockImplementation(async body => job({
+    id: "intake-one", model: body.model, historySelection: body.historySelection,
+    agentJob: { mode: "full-history-agent-v2", phase: "preparing", authorized: false, workerActive: true, resumeRequired: false,
+      coverage: { selectedHistories: body.historySelection.length, completedHistories: 0, eligibleMessages: 0, completedMessages: 0, eligibleBytes: 0, completedBytes: 0, completedBatches: 0, totalBatches: 0 },
+      budget: { baseRequests: 0, retryReserve: 0, maxRequests: 0, usedRequests: 0, baseUsed: 0, recoveryUsed: 0, remainingRequests: 0, inFlightRequests: 0, unknownRequests: 0 }, completedNodes: 0, reusedCheckpoints: 0 },
+  }));
   vi.mocked(api.joinResWorkflowSession).mockResolvedValue({ sessionId: "research-session", resWorkflow: { canonicalCwd: CWD, joinedAt: "2026-10-23T00:02:00Z", via: "manual" } });
 });
 afterEach(cleanup);
@@ -70,7 +78,7 @@ describe("res-workflow inline explicit adoption", () => {
     expect(api.createResWorkflowAdoption).not.toHaveBeenCalled();
   });
 
-  it("sends only selected opaque histories with the exact physical model and separate material consent", async () => {
+  it("prepares only selected opaque histories with the exact physical model before paid authorization", async () => {
     render(<ResWorkflowAdoption {...props()} />);
     await sources();
     fireEvent.click(screen.getByTestId(`res-workflow-history-${HISTORY[0].id}`));
@@ -79,15 +87,17 @@ describe("res-workflow inline explicit adoption", () => {
     expect(start.disabled).toBe(true);
     fireEvent.click(screen.getByText("pick exact model"));
     expect(screen.getByTestId("res-workflow-recipient").textContent).toContain("proxy/anthropic/nested-model");
-    expect(start.disabled).toBe(true);
-    expect((screen.getByTestId("res-workflow-consent") as HTMLInputElement).checked).toBe(false);
-    fireEvent.click(screen.getByTestId("res-workflow-consent"));
+    expect(start.disabled).toBe(false);
+    expect(screen.queryByTestId("res-workflow-consent")).toBeNull();
     fireEvent.click(start);
-    await waitFor(() => expect(api.createResWorkflowAdoption).toHaveBeenCalledTimes(1));
-    const body = vi.mocked(api.createResWorkflowAdoption).mock.calls[0][0];
-    expect(body).toMatchObject({ cwd: CWD, historySelection: [HISTORY[0].id], model: { provider: "proxy", id: "anthropic/nested-model" }, consent: { scope: "research-files-and-normal-messages", includeUnpublished: true } });
+    await waitFor(() => expect(api.createResWorkflowAgent).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(api.createResWorkflowAgent).mock.calls[0][0];
+    expect(body).toMatchObject({ cwd: CWD, historySelection: [HISTORY[0].id], model: { provider: "proxy", id: "anthropic/nested-model" } });
+    expect(body).not.toHaveProperty("consent");
     expect(body.requestId).toBeTruthy();
     expect(JSON.stringify(body)).not.toContain(HISTORY[1].id);
+    expect(api.createResWorkflowAdoption).not.toHaveBeenCalled();
+    expect(api.analyzeResWorkflowAdoption).not.toHaveBeenCalled();
   });
 
   it("allows an explicit files-only connection with an empty history selection", async () => {
@@ -146,8 +156,10 @@ describe("res-workflow inline explicit adoption", () => {
     await waitFor(() => expect((screen.getByTestId("res-workflow-sources-next") as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByTestId(`res-workflow-history-${HISTORY[0].id}`));
     await models();
-    expect((screen.getByTestId("res-workflow-consent") as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByTestId("res-workflow-consent")).toBeNull();
     expect((screen.getByTestId("res-workflow-start") as HTMLButtonElement).disabled).toBe(true);
+    expect(api.createResWorkflowAgent).not.toHaveBeenCalled();
+    expect(api.analyzeResWorkflowAdoption).not.toHaveBeenCalled();
   });
 
   it("opens an adopted directory without repeating inventory, candidates or model selection", () => {
@@ -180,19 +192,28 @@ describe("res-workflow inline explicit adoption", () => {
     expect(api.analyzeResWorkflowAdoption).not.toHaveBeenCalled();
   });
 
-  it("authorizes an awaiting-model task against its frozen selection without loading new candidates", async () => {
-    const frozen = job({ status: "awaiting-model", historySelection: [HISTORY[0].id], selectedHistories: [HISTORY[0]] });
-    vi.mocked(api.analyzeResWorkflowAdoption).mockResolvedValue({ ...frozen, status: "analyzing" });
+  it("prepares and separately authorizes an existing task against its frozen history selection", async () => {
+    const model = { provider: "proxy", id: "anthropic/nested-model" };
+    const frozen = job({ status: "awaiting-model", model, historySelection: [HISTORY[0].id], selectedHistories: [HISTORY[0]] });
+    const prepared = job({ ...frozen, updatedAt: "2026-10-23T00:00:01.000Z", historyReview: { status: "prepared", canConfirm: false,
+      plan: { planId: "fixed-plan", planHash: "fixed-hash", model, contextWindow: 32000, maxTokens: 4096, maxRequests: 2, batchCount: 1, mergeCallCount: 1, eligibleMessages: 1, eligibleBytes: 100, histories: [{ id: HISTORY[0].id, sessionId: HISTORY[0].sessionId, eligibleMessages: 1, eligibleBytes: 100, chunkCount: 1 }], blockers: [] },
+      coverage: { selectedHistories: 1, completedHistories: 0, eligibleMessages: 1, completedMessages: 0, eligibleBytes: 100, completedBytes: 0, completedBatches: 0, totalBatches: 1 },
+    } });
+    vi.mocked(api.prepareResWorkflowHistoryReview).mockResolvedValue(prepared);
+    vi.mocked(api.analyzeResWorkflowHistoryReview).mockResolvedValue({ ...prepared, updatedAt: "2026-10-23T00:00:02.000Z", status: "analyzing", historyReview: { ...prepared.historyReview!, status: "running" } });
     render(<ResWorkflowAdoption {...props()} adoption={frozen} />);
-    fireEvent.click(screen.getByTestId("res-workflow-retry"));
-    await waitFor(() => expect((screen.getByText("pick exact model") as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByText("pick exact model"));
-    fireEvent.click(screen.getByTestId("res-workflow-consent"));
-    fireEvent.click(screen.getByTestId("res-workflow-start"));
-    await waitFor(() => expect(api.analyzeResWorkflowAdoption).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByTestId("res-workflow-history-prepare") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId("res-workflow-history-prepare"));
+    await waitFor(() => expect(screen.getByTestId("res-workflow-history-consent")).toBeTruthy());
+    expect(api.analyzeResWorkflowHistoryReview).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("res-workflow-history-consent"));
+    fireEvent.click(screen.getByTestId("res-workflow-history-analyze"));
+    await waitFor(() => expect(api.analyzeResWorkflowHistoryReview).toHaveBeenCalledTimes(1));
     expect(api.getResWorkflowHistoryCandidates).not.toHaveBeenCalled();
     expect(api.createResWorkflowAdoption).not.toHaveBeenCalled();
-    expect(vi.mocked(api.analyzeResWorkflowAdoption).mock.calls[0][1]).not.toHaveProperty("historySelection");
+    expect(api.analyzeResWorkflowAdoption).not.toHaveBeenCalled();
+    expect(vi.mocked(api.analyzeResWorkflowHistoryReview).mock.calls[0][1]).toMatchObject({ model, consent: { analysisMode: "full-history-review-v1", planId: "fixed-plan", planHash: "fixed-hash", maxRequests: 2 } });
+    expect(vi.mocked(api.analyzeResWorkflowHistoryReview).mock.calls[0][1]).not.toHaveProperty("historySelection");
   });
 
   it("confirms source-linked proposals using the proposal hash without replacing an existing charter", async () => {

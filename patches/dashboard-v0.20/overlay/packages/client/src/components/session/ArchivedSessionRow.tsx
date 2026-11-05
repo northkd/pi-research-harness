@@ -18,6 +18,7 @@ import { isResWorkflowServiceSession } from "@blackbelt-technology/pi-dashboard-
 import { t as i18nT, useI18n } from "../../lib/i18n/i18n.js";
 import { deleteArchivedSession } from "../../lib/api/archived-sessions-api.js";
 import { ResWorkflowJoinButton, ResWorkflowMemberBadge, ResWorkflowMembershipError, useResWorkflowMembership } from "../research/ResWorkflowMembership.js";
+import "./session-navigation.css";
 
 interface Props {
   item: ArchivedSessionSummary;
@@ -47,7 +48,7 @@ export function ArchivedSessionRow({ item, onRestore, onDeleted, onOpen, connect
       <div
         // Read-only open on row click; action buttons stopPropagation.
         onClick={() => onOpen(item.id)}
-        className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 rounded-xl border border-dashed border-[var(--border-secondary)] bg-[var(--bg-tertiary)] opacity-[0.62] hover:opacity-100 hover:border-solid cursor-pointer select-none transition-opacity"
+        className="session-nav-archived-row flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
         data-testid="archived-session-row"
         data-archived-id={item.id}
         title={displayName}
@@ -57,11 +58,16 @@ export function ArchivedSessionRow({ item, onRestore, onDeleted, onOpen, connect
         >
           {t("session.archived", undefined, "archived")}
         </span>
-        <span className="text-xs text-[var(--text-secondary)] truncate flex-1">{displayName}</span>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onOpen(item.id); }}
+          className="focus-ring text-left text-xs text-[var(--text-secondary)] truncate flex-1 min-w-0 rounded"
+          title={displayName}
+        >{displayName}</button>
         <span className="text-[10px] text-[var(--text-faint)] flex-shrink-0">{formatEnded(item.endedAt)}</span>
         <button
           onClick={(e) => { e.stopPropagation(); onRestore(item.id); }}
-          className="text-[var(--text-tertiary)] hover:text-[var(--accent-green)] p-0.5 flex-shrink-0"
+          className="session-nav-icon-button focus-ring text-[var(--text-tertiary)] hover:text-[var(--accent-text)] p-0.5 flex-shrink-0"
           title={t("session.restoreSession", undefined, "Restore session")}
           aria-label={t("session.restoreSession", undefined, "Restore session")}
           data-testid="session-unarchive-btn"
@@ -71,7 +77,7 @@ export function ArchivedSessionRow({ item, onRestore, onDeleted, onOpen, connect
         <button
           onClick={(e) => { e.stopPropagation(); setConfirmOpen(true); }}
           disabled={deleting}
-          className="text-[var(--text-tertiary)] hover:text-[var(--accent-red)] p-0.5 flex-shrink-0 disabled:cursor-default"
+          className="session-nav-icon-button focus-ring text-[var(--text-tertiary)] hover:text-[var(--severity-error-fg)] p-0.5 flex-shrink-0 disabled:cursor-default"
           title={t("session.deleteArchivedTitle", undefined, "Delete archived session?")}
           aria-label={t("session.deleteArchivedTitle", undefined, "Delete archived session?")}
           data-testid="archived-delete-btn"

@@ -100,6 +100,8 @@ import { branchCache, GroupGitInfo, SessionCard } from "./SessionCard.js";
 import { SortablePinnedGroup, useFolderDragHandle } from "./SortablePinnedGroup.js";
 import { SortableSessionCard } from "./SortableSessionCard.js";
 import { SpawnErrorBanner } from "./SpawnErrorBanner.js";
+import { readSessionNavigationPreferences, writeSessionNavigationPreferences } from "./session-navigation-preferences.js";
+import "./session-navigation.css";
 
 /** Community invite surfaced in the app header. */
 const DISCORD_INVITE_URL = "https://discord.gg/DrNebZ3pF5";
@@ -409,6 +411,17 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
   const yoloAppBar = useYoloAppBar();
   const { messages, showToast, dismissToast } = useToast();
   const installPrompt = useInstallPrompt();
+  const [navigationPrefs, setNavigationPrefs] = useState(readSessionNavigationPreferences);
+  useEffect(() => { writeSessionNavigationPreferences(navigationPrefs); }, [navigationPrefs]);
+  const compactNavigation = navigationPrefs.density === "compact";
+  const setProjectToolsOpen = useCallback((cwd: string, open: boolean) => {
+    setNavigationPrefs((prev) => ({
+      ...prev,
+      expandedProjectTools: open
+        ? prev.expandedProjectTools.includes(cwd) ? prev.expandedProjectTools : [...prev.expandedProjectTools, cwd]
+        : prev.expandedProjectTools.filter((path) => path !== cwd),
+    }));
+  }, []);
 
   // Scroll-to-selected-card wiring.
   // See change: auto-scroll-selected-session-card.
@@ -1592,6 +1605,9 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
         if (ws?.collapsed) onSetWorkspaceCollapsed?.(wsId, false);
       }
       if (isGroupKeyCollapsed(cwd)) setFolderCollapsed(cwd, false);
+      // A remediation deep link must reveal the new presentation disclosure
+      // as well as the existing server-owned folder/workspace ancestors.
+      setProjectToolsOpen(cwd, true);
 
       // The section mounts only after the (possibly async) expand commits —
       // retry briefly instead of a single frame that races the echo.
@@ -1610,7 +1626,7 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
       };
       window.setTimeout(tryFocus, 0);
     },
-    [folderWorkspaceMap, workspaces, onSetWorkspaceCollapsed, isGroupKeyCollapsed, setFolderCollapsed],
+    [folderWorkspaceMap, workspaces, onSetWorkspaceCollapsed, isGroupKeyCollapsed, setFolderCollapsed, setProjectToolsOpen],
   );
 
   // Settings → OpenSpec Workflow Profile is the remediation surface for
@@ -2000,6 +2016,7 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
         <SortableSessionCard key={session.id} id={session.id}>
           <SessionCard
             session={session}
+            density={navigationPrefs.density}
             connectionGeneration={connectionGeneration}
             selectedId={selectedId}
             onSelect={onSelect}
@@ -2077,6 +2094,7 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
           )}
         </SortableSessionCard>
     );
+    const projectToolsOpen = navigationPrefs.expandedProjectTools.includes(group.cwd);
     const showFolderGit = folderBlockVisible(group.cwd, "folder-git");
     const showFolderBanner = folderBlockVisible(group.cwd, "folder-banner");
     const showFolderOpenspec = folderBlockVisible(group.cwd, "folder-openspec");
@@ -2094,16 +2112,16 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
     );
 
     return (
-      <div key={group.cwd} className="space-y-1">
+      <div key={group.cwd} className="session-nav-folder space-y-1" data-density={navigationPrefs.density}>
         {/* Folder-tab nub — a small tab peeking above the card's top-left
             corner so the directory card reads as a folder. Sits behind the
             bordered card (which paints on top, hiding the nub's lower edge)
             and is non-interactive. The pt-[9px] on the wrapper reserves the
             space the nub occupies above the card. See change: folder-card-tab-nub. */}
-        <div className="relative pt-[9px]">
+        <div className="session-nav-folder-frame relative pt-[9px]">
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute top-0 left-3.5 w-[78px] h-3 bg-[var(--bg-primary)] border border-[var(--border-subtle)] border-b-0 rounded-t-lg"
+          className="session-nav-folder-tab pointer-events-none absolute top-0 left-3.5 w-[78px] h-3 bg-[var(--bg-primary)] border border-[var(--border-subtle)] border-b-0 rounded-t-lg"
           style={folderTint}
         />
         <div
@@ -2111,8 +2129,8 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
           // positioned popover inside this card and would be clipped to the
           // card bounds. Nothing inside needs clipping (the tab nub is a
           // sibling, not a child).
-          className={`relative bg-[var(--bg-primary)] border border-[var(--border-subtle)] p-1.5 ${isCollapsed ? "rounded-[14px] shadow-[inset_0_1px_0_var(--elevation-rim),0_2px_4px_var(--shadow-card)]" : "pb-0 rounded-t-[14px] border-b-0 shadow-[inset_0_1px_0_var(--elevation-rim)]"}`}
-          style={folderTint}
+          className={`session-nav-folder-header relative bg-[var(--bg-primary)] border border-[var(--border-subtle)] p-1.5 ${isCollapsed ? "rounded-[14px] shadow-[inset_0_1px_0_var(--elevation-rim),0_2px_4px_var(--shadow-card)]" : "pb-0 rounded-t-[14px] border-b-0 shadow-[inset_0_1px_0_var(--elevation-rim)]"}`}
+          style={compactNavigation ? undefined : folderTint}
         >
         <div className="relative z-[1]">
         <div className="flex gap-1.5 px-1 py-1 min-h-[44px] md:min-h-0 rounded">
@@ -2176,16 +2194,17 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
               }}
               className="focus-ring rounded text-xs font-medium text-[var(--text-secondary)] min-w-0 overflow-hidden flex items-center gap-1"
               data-testid={`folder-header-name-${group.cwd}`}
+              title={group.cwd}
             >
               <Icon path={isCollapsed ? mdiFolder : mdiFolderOpen} size={0.5} className="shrink-0" />
               <span
-                className="truncate flex-[0_1_auto] min-w-0"
+                className="session-nav-folder-parent truncate flex-[0_1_auto] min-w-0"
                 data-testid={`folder-header-parent-${group.cwd}`}
               >
                 {parentPath}
               </span>
               <span
-                className="font-bold text-base truncate flex-[0_1_auto] min-w-[6ch] group-hover:underline"
+                className="session-nav-folder-name font-bold text-base truncate flex-[0_1_auto] min-w-[6ch] group-hover:underline"
                 data-testid={`folder-header-leaf-${group.cwd}`}
               >
                 {lastSegment}
@@ -2251,7 +2270,7 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
             </span>
           </div>
           {!isCollapsed && !isStub && (
-            <div className="mt-1 flex flex-wrap items-center justify-end gap-2">
+            <div className="session-nav-folder-billing mt-1 flex flex-wrap items-center justify-end gap-2">
               <span className="text-[11px] tabular-nums text-[var(--text-secondary)]" data-testid={`folder-billing-${group.cwd}`}>
                 {t("billing.loadedSessionSubtotal", undefined, "Loaded sessions this month")} <FolderBillingCost sessions={billingGroups.byPath.get(pathKey(group.cwd, billingGroups.platform)) ?? group.sessions} />
               </span>
@@ -2333,7 +2352,28 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
               collapses to 1-col at mobile width. A section that renders null
               (plugin disabled / not yet loaded) simply leaves no cell.
               See change: redesign-directory-card. */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-2 gap-y-3 mt-3 empty:hidden">
+          <div className="session-nav-project-tools mt-2">
+          <button
+            type="button"
+            onClick={() => setProjectToolsOpen(group.cwd, !projectToolsOpen)}
+            aria-expanded={projectToolsOpen}
+            aria-controls={`project-tools-${encodeFolderPath(group.cwd)}`}
+            data-testid={`folder-project-tools-toggle-${group.cwd}`}
+            className="session-nav-disclosure focus-ring"
+          >
+            <Icon path={projectToolsOpen ? mdiChevronDown : mdiChevronRight} size={0.55} />
+            <Icon path={mdiPuzzleOutline} size={0.55} />
+            <span>{t("sessionList.projectTools", undefined, "Project tools")}</span>
+          </button>
+          {/* Keep plugin claims mounted when folded: their subscriptions,
+              dialogs, refresh runners and local drafts remain authoritative. */}
+          <div
+            id={`project-tools-${encodeFolderPath(group.cwd)}`}
+            hidden={!projectToolsOpen}
+            data-testid={`folder-project-tools-${group.cwd}`}
+            className="session-nav-project-tools-body"
+          >
+          <div className="grid grid-cols-1 gap-x-2 gap-y-3 mt-3 empty:hidden">
             <SidebarFolderSectionSlot folder={{ cwd: group.cwd }} isPluginVisible={pillVisible} />
             {onOpenResearch && <SlotPill glyph={mdiFlaskOutline} accent="indigo" label="res-workflow" preserveLabelCase
               activateTestId={`folder-res-workflow-${group.cwd}`} onActivate={() => onOpenResearch(group.cwd)}>
@@ -2356,6 +2396,8 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
                 }
               />
             )}
+          </div>
+          </div>
           </div>
           </>)}
           </>)}{/* end FolderInitScope render-prop */}
@@ -2425,8 +2467,8 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
         )}
         {!isCollapsed && !isStub && (
         <div
-          className="relative bg-[var(--bg-primary)] border border-[var(--border-subtle)] border-t-0 rounded-b-[14px] px-1.5 pb-1.5 shadow-[0_2px_4px_var(--shadow-card)]"
-          style={folderTint}
+          className="session-nav-folder-body relative bg-[var(--bg-primary)] border border-[var(--border-subtle)] border-t-0 rounded-b-[14px] px-1.5 pb-1.5 shadow-[0_2px_4px_var(--shadow-card)]"
+          style={compactNavigation ? undefined : folderTint}
           data-testid={`folder-body-${group.cwd}`}
         >
             {showFolderCreate && (<>
@@ -2847,7 +2889,7 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
 
   return (
     <SessionMenuScopeContext.Provider value={menuScopeValue}>
-    <div className="w-full border-r border-[var(--border-primary)] flex flex-col min-h-0 h-full">
+    <div className="session-nav-shell w-full border-r border-[var(--border-primary)] flex flex-col min-h-0 h-full" data-density={navigationPrefs.density}>
       <div className="border-b border-[var(--border-primary)]">
         <div
           {...yoloAppBar}
@@ -2856,50 +2898,52 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
         >
           {/* Focus-revealed link to Access while YOLO is live; out of flow. See change: fix-yolo-indicator-overflow. */}
           <YoloBarLink />
-          <div className="flex gap-1.5 items-center">
-            <button onClick={() => navigate("/")} className="flex items-center leading-none text-blue-500 hover:text-blue-400 transition-colors" title={t("common.home", undefined, "Home")}>
-              <PiLogo size={24} />
+          <div className="flex min-w-0 gap-1.5 items-center">
+            <button onClick={() => navigate("/")} className="session-nav-brand focus-ring flex min-w-0 items-center gap-2 leading-none text-[var(--accent-text)] transition-colors" title={t("common.home", undefined, "Home")}>
+              <PiLogo size={22} />
+              <span className="truncate text-sm font-semibold text-[var(--text-primary)]">Pi Research</span>
             </button>
-            <ThemePicker />
-            <ThemeToggle />
           </div>
           <div className="flex gap-1 items-center">
-            <InstallButton canInstall={installPrompt.canInstall} isInstalled={installPrompt.isInstalled} prompt={installPrompt.prompt} />
-            <TunnelButton showToast={showToast} />
-            {/* Open-questions pill + panel; absent at 0, AFTER the YOLO slot. See change: add-pending-question-stack. */}
-            <QuestionStack sessions={sessions} onOpenSession={openQuestionSession} />
-            <FocusToggle />
-            {headerExtra}
-            {/* Community entry point. MDI 7 dropped brand icons, so the Discord
-                glyph is an inline path constant. See change: add-discord-link. */}
-            <a
-              href={DISCORD_INVITE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-              title={t("sessionList.discord", undefined, "Join our Discord")}
-              aria-label={t("sessionList.discord", undefined, "Join our Discord")}
-              data-testid="discord-btn"
-            >
-              <Icon path={mdiDiscordPath} size={0.6} />
-            </a>
             <button
               onClick={() => navigate("/settings")}
-              className="text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+              className="session-nav-icon-button focus-ring text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
               title={t("sessionList.settings", undefined, "Settings")}
+              aria-label={t("sessionList.settings", undefined, "Settings")}
               data-testid="settings-btn"
             >
               <Icon path={mdiCog} size={0.6} />
             </button>
           </div>
         </div>
-        <div className="flex items-center justify-between px-3 py-1.5 gap-2" data-testid="header-filter-bar">
+        <div className="session-nav-connection-row px-3 pb-2" data-testid="navigation-connection-row">
+          {headerExtra}
+          {/* Attention stays visible even when the utility controls are folded. */}
+          <QuestionStack sessions={sessions} onOpenSession={openQuestionSession} />
+        </div>
+        <div className="session-nav-density-row px-3 pb-2">
+          <span className="text-xs font-medium text-[var(--text-secondary)]">{t("common.sessions", undefined, "Sessions")}</span>
+          <div className="session-nav-density" role="group" aria-label={t("sessionList.navigationDensity", undefined, "Session list density")}>
+            {(["compact", "comfortable"] as const).map((density) => (
+              <button
+                key={density}
+                type="button"
+                aria-pressed={navigationPrefs.density === density}
+                onClick={() => setNavigationPrefs((prev) => ({ ...prev, density }))}
+                className="focus-ring"
+              >
+                {density === "compact" ? t("sessionList.compactDensity", undefined, "Compact") : t("sessionList.comfortableDensity", undefined, "Comfortable")}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="session-nav-filters px-3 pb-2" data-testid="header-filter-bar">
           <input
             type="search"
             value={workspaceFilter}
             onChange={(e) => setWorkspaceFilter(e.target.value)}
             placeholder={t("sessionList.folderPlaceholder", undefined, "Folder...")}
-            className="focus-ring min-w-0 flex-1 px-2 py-1 text-xs rounded bg-[var(--bg-primary)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+            className="session-nav-folder-search focus-ring min-w-0 px-2 py-1.5 text-xs rounded-md bg-[var(--bg-primary)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
             data-testid="workspace-filter-input"
             aria-label={t("sessionList.filterFolders", undefined, "Filter folders by path")}
           />
@@ -2908,7 +2952,7 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
             value={sessionSearch}
             onChange={(e) => setSessionSearch(e.target.value)}
             placeholder={t("sessionList.sessionPlaceholder", undefined, "Session...")}
-            className="focus-ring min-w-0 flex-1 px-2 py-1 text-xs rounded bg-[var(--bg-primary)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+            className="session-nav-session-search focus-ring min-w-0 px-2 py-1.5 text-xs rounded-md bg-[var(--bg-primary)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
             data-testid="session-search-input"
             aria-label={t("sessionList.searchSessions", undefined, "Search sessions across folders")}
           />
@@ -3061,7 +3105,7 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
             (`.card-glow-mask-outer`, 14px past the edge), which the
             overflow-y-auto scroller would otherwise clip on the right.
             See change: fix-selected-card-light-wash. */}
-        <ul className="flex flex-col gap-2 p-2 pr-4">
+        <ul className="session-nav-groups flex flex-col gap-2 p-2 pr-4">
           {/* Elevated dashboard-scope add buttons: rendered as the FIRST list
               item, above workspace tiers and pinned folder groups.
               See change: elevate-dashboard-add-buttons. */}
@@ -3287,6 +3331,39 @@ export function SessionList({ sessions, selectedId, onSelect: onSelectProp, reve
       )}
       <Toast messages={messages} onDismiss={dismissToast} />
 
+      </div>
+      <div className="session-nav-utilities border-t border-[var(--border-primary)] px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setNavigationPrefs((prev) => ({ ...prev, utilitiesOpen: !prev.utilitiesOpen }))}
+          aria-expanded={navigationPrefs.utilitiesOpen}
+          aria-controls="session-navigation-utilities"
+          className="session-nav-disclosure focus-ring"
+          data-testid="navigation-utilities-toggle"
+        >
+          <Icon path={navigationPrefs.utilitiesOpen ? mdiChevronDown : mdiChevronRight} size={0.55} />
+          <span>{t("sessionList.interfaceAndConnection", undefined, "Interface & connection tools")}</span>
+        </button>
+        <div id="session-navigation-utilities" hidden={!navigationPrefs.utilitiesOpen}>
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            <ThemePicker />
+            <ThemeToggle />
+            <InstallButton canInstall={installPrompt.canInstall} isInstalled={installPrompt.isInstalled} prompt={installPrompt.prompt} />
+            <TunnelButton showToast={showToast} />
+            <FocusToggle />
+            <a
+              href={DISCORD_INVITE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="session-nav-icon-button focus-ring text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+              title={t("sessionList.discord", undefined, "Join our Discord")}
+              aria-label={t("sessionList.discord", undefined, "Join our Discord")}
+              data-testid="discord-btn"
+            >
+              <Icon path={mdiDiscordPath} size={0.6} />
+            </a>
+          </div>
+        </div>
       </div>
       {/* D22 user line, pinned to the bottom of the session stream. Renders
           nothing unless identity is enforced and a principal resolved. */}

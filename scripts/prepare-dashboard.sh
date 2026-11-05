@@ -8,6 +8,7 @@ TAG=v0.10.0
 if [[ "${1:-}" == "--dry-run" ]]; then
   printf 'Would clone Dashboard %s at %s and apply the verified 0.20 source overlay.\n' "$TAG" "$PIN"
   printf 'Would run pnpm install --frozen-lockfile and build; destination: %s\n' "$DEST"
+  printf 'Would register the bundled speed-monitor under resources/plugins without changing user settings.\n'
   printf 'No automatic server start, reload or restart.\n'
   exit 0
 fi
@@ -21,6 +22,7 @@ git -C "$DEST" sparse-checkout set packages scripts patches public
 actual="$(git -C "$DEST" rev-parse HEAD)"
 [[ "$actual" == "$PIN" ]] || { printf 'Unexpected upstream tag commit: %s\n' "$actual" >&2; exit 1; }
 node "$ROOT/scripts/apply-dashboard-v020.mjs" "$DEST"
+node "$ROOT/scripts/register-dashboard-extras.mjs" "$DEST"
 (cd "$DEST" && pnpm install --frozen-lockfile && pnpm run build)
 node "$ROOT/scripts/install-demo-entry.mjs" "$DEST/packages/client/dist"
 node "$ROOT/scripts/apply-dashboard-v020.mjs" "$DEST" --verify

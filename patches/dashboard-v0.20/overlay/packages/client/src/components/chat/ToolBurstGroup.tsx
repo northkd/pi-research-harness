@@ -23,13 +23,15 @@
  * open state; the live header + animation key off `isRunning`, not `expanded`.
  * On mobile viewports a running group never auto-expands (caps DOM growth in
  * the non-virtualized streaming tail); a tap still opens it.
+ * Errors and ask_user rows remain mounted and visible when the ordinary
+ * records fold; expanding the group never duplicates these attention rows.
  * See change: harden-ios-safari-memory-and-ws-diagnostics.
  *
  * See change: enhance-tool-call-grouping (was: group-tool-call-bursts).
  */
 
 import { toolCallPrefKey } from "@blackbelt-technology/pi-dashboard-shared/display-prefs.js";
-import { mdiCheck, mdiChevronDown, mdiChevronRight, mdiConsoleLine, mdiLoading, mdiMinusCircleOutline } from "@mdi/js";
+import { mdiAlertCircleOutline, mdiCheck, mdiChevronDown, mdiChevronRight, mdiConsoleLine, mdiLoading, mdiMinusCircleOutline } from "@mdi/js";
 import { Icon } from "@mdi/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useDisplayPrefs } from "../../hooks/useDisplayPrefs.js";
@@ -48,6 +50,8 @@ import { CustomEntryRow } from "./CustomEntryRow.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
 import { ToolCallStep } from "./ToolCallStep.js";
 import { type StopController, ToolStopControl, useToolStopState } from "./ToolStopControl.js";
+import { isAttentionTool } from "./tool-attention.js";
+import "./execution-records.css";
 
 interface Props {
   burst: ToolBurstGroupData;
@@ -107,6 +111,7 @@ function GroupFrame({
   meta,
   motionClass,
   expanded,
+  hasAttention,
   onToggle,
   isRunning,
   stopSlot,
@@ -118,6 +123,7 @@ function GroupFrame({
   meta: ReactNode;
   motionClass: string;
   expanded: boolean;
+  hasAttention: boolean;
   onToggle: () => void;
   isRunning: boolean;
   stopSlot?: ReactNode;
@@ -133,7 +139,7 @@ function GroupFrame({
   return (
     <div
       ref={isRunning ? fxRef : undefined}
-      className={`${isMobile ? "mx-2" : "mx-4"} border-l-2 border-[var(--border-secondary)] pl-3${entering ? ` ${CHAT_ENTER_CLASS}` : ""}`}
+      className={`research-execution-group ${isMobile ? "mx-2" : "mx-4"} border-l-2 border-[var(--border-secondary)] pl-3${entering ? ` ${CHAT_ENTER_CLASS}` : ""}`}
       data-testid="tool-burst-group"
       data-running={isRunning ? "true" : "false"}
     >
@@ -141,6 +147,7 @@ function GroupFrame({
       <button
         type="button"
         onClick={onToggle}
+        aria-expanded={expanded}
         className={`flex-1 min-w-0 flex items-center gap-1.5 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] text-left rounded ${motionClass} ${isMobile ? "min-h-[44px] py-2" : ""}`}
         data-testid="tool-burst-header"
       >
@@ -153,8 +160,8 @@ function GroupFrame({
       </button>
       {stopSlot}
       </div>
-      {expanded && (
-        <div className="mt-1 space-y-0.5" data-testid="tool-burst-body">
+      {(expanded || hasAttention) && (
+        <div className="mt-1 space-y-0.5" data-testid="tool-burst-body" data-attention-only={!expanded ? "true" : undefined}>
           {children}
         </div>
       )}
@@ -172,7 +179,9 @@ export function ToolBurstGroup({ burst, toolContext, onAbort, onForceKill }: Pro
     const key = toolCallPrefKey(name ?? "");
     return key === null || prefs.toolCalls[key];
   };
-  const visibleMembers = underlyingCalls(burst.items).filter((m) => isVisible(m.toolName));
+  const visibleMembers = underlyingCalls(burst.items).filter((m) => isAttentionTool(m) || isVisible(m.toolName));
+  const hasAttention = visibleMembers.some(isAttentionTool);
+  const hasFailed = visibleMembers.some((m) => m.toolStatus === "error");
 
   // Live-arrival entry (latched per instance): the group enters only when ALL its
   // visible members are new. Lines present in that first commit ride the group's
@@ -194,7 +203,7 @@ export function ToolBurstGroup({ burst, toolContext, onAbort, onForceKill }: Pro
   const stopController = useToolStopState({ active: isRunning, runKey: runningId, onAbort, onForceKill });
 
   // Completion cue (live-follow only): replaces the flash below in that case.
-  const completionCue = useCompletionCue(isRunning ? "running" : "complete");
+  const completionCue = useCompletionCue(isRunning ? "running" : hasFailed ? "error" : "complete");
   const completionCueRef = useRef(false);
   completionCueRef.current = completionCue;
   // One-shot completion flash on the running→done flip.
@@ -202,7 +211,7 @@ export function ToolBurstGroup({ burst, toolContext, onAbort, onForceKill }: Pro
   const [flash, setFlash] = useState(false);
   useEffect(() => {
     if (prevRunning.current && !isRunning) {
-      if (!completionCueRef.current) setFlash(true);
+      if (!completionCueRef.current && !hasFailed) setFlash(true);
       const t = setTimeout(() => setFlash(false), 200);
       prevRunning.current = isRunning;
       return () => clearTimeout(t);
@@ -211,7 +220,7 @@ export function ToolBurstGroup({ burst, toolContext, onAbort, onForceKill }: Pro
     // flash so a done→running→done cycle can't bleed the cue into the next flip.
     if (isRunning) setFlash(false);
     prevRunning.current = isRunning;
-  }, [isRunning]);
+  }, [isRunning, hasFailed]);
 
   // Third vanish path (design D8): the per-tool gate emptied the container, but
   // a VISIBLE absorbed custom row is content worth rendering on its own. Render
@@ -265,13 +274,15 @@ export function ToolBurstGroup({ burst, toolContext, onAbort, onForceKill }: Pro
    * See change: fix-lazy-history-backfill-ux (D5).
    */
   const hasElided = visibleMembers.some((m) => m.toolStatus === "elided");
-  const settledAccent = hasElided ? "text-[var(--text-muted)]" : "text-green-400";
+  const settledAccent = failedCount > 0 ? "text-[var(--severity-error-fg)]" : hasElided ? "text-[var(--text-muted)]" : "text-green-400";
   const glyphIcon = (
       <Icon
         path={
           isRunning
             ? mdiLoading
-            : hasElided
+            : failedCount > 0
+              ? mdiAlertCircleOutline
+              : hasElided
               ? mdiMinusCircleOutline
               : single
                 ? getToolIcon(soleMember.toolName ?? "unknown")
@@ -285,7 +296,7 @@ export function ToolBurstGroup({ burst, toolContext, onAbort, onForceKill }: Pro
   const leftGlyph = (
     <span
       className={`inline-flex ${isRunning ? "text-yellow-400 tool-group-spin-pulse" : settledAccent} ${flash ? "tool-group-flash" : ""}`}
-      data-testid={!isRunning && hasElided ? "tool-burst-elided-glyph" : undefined}
+      data-testid={!isRunning && failedCount > 0 ? "tool-burst-error-glyph" : !isRunning && hasElided ? "tool-burst-elided-glyph" : undefined}
     >
       {completionCue && !isRunning && !hasElided ? (
         <span key="cue" data-testid="tool-completion-cue" className={`inline-flex ${CHAT_CUE_CLASS}`}>
@@ -317,12 +328,16 @@ export function ToolBurstGroup({ burst, toolContext, onAbort, onForceKill }: Pro
       meta={meta}
       motionClass={motionClass}
       expanded={expanded}
+      hasAttention={hasAttention}
       onToggle={() => setOverride(!expanded)}
       isRunning={isRunning}
       entering={entering}
       stopSlot={<ToolStopControl controller={stopController} testIdPrefix="tool-burst" labeled />}
     >
-      {burst.items.map((it) => (
+      {burst.items.map((it) => {
+        const attention = isGroup(it) ? it.messages.some(isAttentionTool) : isAttentionTool(it as ChatMessage);
+        if (!expanded && !attention) return null;
+        return (
         <BurstBodyItem
           key={isGroup(it) ? it.messages[0]?.id : (it as ChatMessage).id}
           item={it}
@@ -335,8 +350,10 @@ export function ToolBurstGroup({ burst, toolContext, onAbort, onForceKill }: Pro
           isVisible={isVisible}
           stopController={stopController}
           initialMemberIds={initialMemberIds}
+          attentionOnly={!expanded}
         />
-      ))}
+        );
+      })}
     </GroupFrame>
   );
 }
@@ -349,6 +366,7 @@ function BurstBodyItem({
   isVisible,
   stopController,
   initialMemberIds,
+  attentionOnly = false,
 }: {
   item: ChatItem;
   toolContext: ToolContext;
@@ -357,10 +375,11 @@ function BurstBodyItem({
   stopController?: StopController | null;
   /** Members present when the enclosing group entered; their lines ride the group's entry. */
   initialMemberIds?: ReadonlySet<string> | null;
+  attentionOnly?: boolean;
 }) {
   const prefs = useDisplayPrefs();
   if (isGroup(item)) {
-    return <CollapsedToolGroup group={item} toolContext={toolContext} />;
+    return <CollapsedToolGroup group={item} toolContext={toolContext} attentionOnly={attentionOnly} />;
   }
   const msg = item as ChatMessage;
   // Absorbed reasoning renders through the real ThinkingBlock (labeled,
@@ -395,7 +414,7 @@ function BurstBodyItem({
     return <CustomEntryRow key={msg.id} msg={msg} sessionId={toolContext.sessionId} />;
   }
   if (msg.role !== "toolResult") return null; // skip empty/separator rows
-  if (!isVisible(msg.toolName)) return null;
+  if (!isAttentionTool(msg) && !isVisible(msg.toolName)) return null;
   return (
     <ToolCallStep
       toolName={msg.toolName ?? "unknown"}
@@ -410,7 +429,8 @@ function BurstBodyItem({
       startedAt={msg.startedAt}
       duration={msg.duration}
       toolDetails={msg.toolDetails}
-      showResultBody={prefs.toolResults || msg.toolName === "ask_user"}
+      showResultBody={prefs.toolResults || isAttentionTool(msg)}
+      revealError
       stopController={msg.toolStatus === "running" ? stopController : undefined}
       enterSuppressed={initialMemberIds?.has(msg.toolCallId ?? msg.id) ?? false}
     />

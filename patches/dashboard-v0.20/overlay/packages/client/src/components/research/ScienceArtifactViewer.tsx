@@ -6,6 +6,7 @@ import { useApiBase } from "../../lib/api/api-context.js";
 import { fetchJsonResponse } from "../../lib/api/fetch-json.js";
 import { useI18n } from "../../lib/i18n/i18n.js";
 import { ImagePreview } from "../preview/ImagePreview.js";
+import "./ScienceSurfaces.css";
 
 const PdfPreview = lazy(() => import("../preview/PdfPreview.js"));
 interface ArtifactState { scope: symbol; artifact: ScienceArtifact; url: string; text: string | null }
@@ -107,17 +108,22 @@ export function ScienceArtifactViewer({ cwd, path }: { cwd: string; path: string
 
   const status = describeArtifact(valid, failed === scope, current !== null, t);
   const target = { kind: "file" as const, cwd, path: current?.artifact.name ?? "" };
-  return <section data-testid="science-artifact-viewer" className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]">
-    <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-primary)] px-3 py-2">
-      <h2 className="min-w-0 flex-1 break-words text-sm font-semibold">{current?.artifact.name ?? t("science.artifact.title", undefined, "Science artifact")}</h2>
-      {current && <a className="focus-ring tap-target rounded-[var(--radius-control)] border border-[var(--border-primary)] px-3 py-1.5 text-xs" href={current.url} download={current.artifact.name}>{t("science.artifact.download", undefined, "Download")}</a>}
-      <button type="button" className="focus-ring tap-target rounded-[var(--radius-control)] border border-[var(--border-primary)] px-3 py-1.5 text-xs disabled:opacity-50" disabled={!valid || !current && failed !== scope} onClick={() => setRetry(value => value + 1)}>{t("science.artifact.reload", undefined, "Reload artifact")}</button>
+  return <section data-testid="science-artifact-viewer" className="science-surface flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <header className="science-surface-header">
+      <div className="min-w-0 flex-1">
+        <h2 className="science-surface-title break-words">{current?.artifact.name ?? t("science.artifact.title", undefined, "Science artifact")}</h2>
+        {current && <p className="science-artifact-meta">{current.artifact.mediaType} · {current.artifact.bytes.toLocaleString()} B</p>}
+      </div>
+      <div className="science-surface-actions">
+      {current && <a className="science-control focus-ring" href={current.url} download={current.artifact.name}>{t("science.artifact.download", undefined, "Download")}</a>}
+      <button type="button" className="science-control focus-ring" disabled={!valid || !current && failed !== scope} onClick={() => setRetry(value => value + 1)}>{t("science.artifact.reload", undefined, "Reload artifact")}</button>
+      </div>
     </header>
-    <p role="status" className="shrink-0 border-b border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]">{status}</p>
-    <div className="min-h-0 min-w-0 flex-1 overflow-auto p-3">
+    <p role="status" className="science-surface-status" data-state={current ? "ready" : failed === scope ? "unavailable" : "loading"}><span className="science-status-dot" aria-hidden="true" />{status}</p>
+    <div className="science-artifact-content min-h-0 min-w-0 flex-1 overflow-auto">
       {current && (current.artifact.mediaType.startsWith("image/") ? <ImagePreview target={target} srcUrl={current.url} />
         : current.artifact.mediaType === "application/pdf" ? <Suspense fallback={<p>{t("science.artifact.loading", undefined, "Reading collected Science artifact…")}</p>}><PdfPreview target={target} srcUrl={current.url} /></Suspense>
-          : <pre data-testid="science-artifact-text" className="whitespace-pre-wrap break-words font-mono text-xs">{current.text}</pre>)}
+          : <pre data-testid="science-artifact-text" className="science-artifact-text whitespace-pre-wrap break-words font-mono">{current.text}</pre>)}
     </div>
   </section>;
 }

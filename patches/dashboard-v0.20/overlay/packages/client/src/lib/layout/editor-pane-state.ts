@@ -82,6 +82,7 @@ export type EditorPaneAction =
   // `term:<id>` tabs in one pass. See change: terminals-in-tabbed-panes.
   | { type: "closeByPath"; path: string }
   | { type: "setActive"; index: number }
+  | { type: "browseFiles" }
   | { type: "toggleTreeRoot"; relPath: string }
   | { type: "reorderTabs"; from: number; to: number }
   // Select (or clear, `mode: undefined`) a plugin file-handler mode on the tab
@@ -243,6 +244,9 @@ export function editorPaneReducer(state: EditorPaneState, action: EditorPaneActi
     case "closeTab":
       return reduceCloseTab(state, action.index, true);
 
+    case "browseFiles":
+      return { ...state, activeIndex: -1 };
+
     case "setActive": {
       if (action.index < 0 || action.index >= state.openFiles.length) return state;
       // Reveal the newly-active tab's row: expand its ancestor dir chain (#5).
@@ -370,10 +374,10 @@ function isValidState(v: unknown): v is EditorPaneState {
     return typeof file.path === "string" && VALID_VIEWERS.has(file.viewer) && unreadOk && autoOk && modeOk;
   });
   if (!filesOk) return false;
-  // activeIndex must address an open tab, or be -1 only when no tabs are open.
+  // -1 is the explicit file-browser view; existing tabs remain open in the background.
   const ai = s.activeIndex as number;
   if (s.openFiles.length === 0) return ai === -1;
-  return ai >= 0 && ai < s.openFiles.length;
+  return ai >= -1 && ai < s.openFiles.length;
 }
 
 /** Read persisted state for a session; empty state on absence/corruption. */

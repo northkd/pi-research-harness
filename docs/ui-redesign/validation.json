@@ -1,0 +1,176 @@
+{
+  "date": "2026-11-05",
+  "branch": "feat/research-workspace-ui-20261105",
+  "baseCommit": "af2810437b39772db62201b9f86346cdb9d62dfc",
+  "upstreamCommit": "65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0",
+  "environment": {
+    "node": "24.22.1",
+    "pnpm": "11.25.0",
+    "chromium": "134.0.6998.35"
+  },
+  "build": {
+    "passed": true,
+    "command": "NODE_OPTIONS=--max-old-space-size=4096 npm run build",
+    "targets": [
+      "client",
+      "team app"
+    ],
+    "warnings": [
+      "Upstream minimatch default export warning",
+      "Bundle chunk size warnings"
+    ],
+    "defaultHeapAttempt": "Default approximately 2GB V8 heap exhausted; 4GB build passed."
+  },
+  "overlay": {
+    "files": 610,
+    "freshUpstreamWorktreeApply": true,
+    "verifyPassed": true,
+    "manifestSha256": "d5b336db31d26b2c4f8f6b0e6dedd125bf64377d290d543008364791ae12cf31",
+    "upstreamBlobGuardsPreserved": true
+  },
+  "unitTestGroups": [
+    {
+      "name": "sidebar and chat",
+      "files": 33,
+      "passed": 665,
+      "failed": 0
+    },
+    {
+      "name": "research",
+      "files": 20,
+      "passed": 181,
+      "failed": 0
+    },
+    {
+      "name": "speed plugin",
+      "files": 7,
+      "passed": 92,
+      "failed": 0
+    },
+    {
+      "name": "Science and billing",
+      "files": 4,
+      "passed": 50,
+      "failed": 0
+    },
+    {
+      "name": "editor lifecycle",
+      "files": 6,
+      "passed": 93,
+      "failed": 0
+    },
+    {
+      "name": "line navigation supplement",
+      "files": 2,
+      "passed": 27,
+      "failed": 0
+    },
+    {
+      "name": "terminal lifecycle",
+      "files": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "existing shell and routing",
+      "files": 5,
+      "passed": 108,
+      "failed": 0
+    },
+    {
+      "name": "legacy ResearchPanel",
+      "files": 1,
+      "passed": 7,
+      "failed": 0
+    },
+    {
+      "name": "folder editor return and shared navigation",
+      "files": 3,
+      "passed": 42,
+      "failed": 0
+    },
+    {
+      "name": "theme manifest, effective CSS and contrast",
+      "files": 3,
+      "passed": 1139,
+      "failed": 0
+    }
+  ],
+  "unitTestNote": "Groups overlap. Do not sum as a count of unique tests. Existing regressions and new behavior tests are included.",
+  "harnessTests": {
+    "passed": 233,
+    "failed": 0,
+    "skipped": 0,
+    "command": "PI_RESEARCH_DASHBOARD_SOURCE=<runtime> npm test"
+  },
+  "supervisionOfflineTests": {
+    "passed": 63,
+    "failed": 0,
+    "skipped": 0
+  },
+  "headlessBrowser": {
+    "passed": 25,
+    "failed": 0,
+    "unexpectedPageErrors": 0,
+    "classifiedMonacoCancellations": 1,
+    "syntheticData": true,
+    "realServer": true,
+    "nativeAuthentication": true,
+    "clientBuild": {
+      "pluginRegistryHash": "c6c963c24cc16a95927d9b14646df18d3eaba40e30e42738545d2857b6e00a2e",
+      "status": "matched"
+    },
+    "report": "browser-report.json",
+    "serverStopped": true
+  },
+  "syntheticApiSmoke": {
+    "syntheticReadSmoke": "passed",
+    "endedSessions": 3,
+    "speedApi": 200,
+    "billingApi": 200,
+    "fixturePricing": "unpriced",
+    "recordedMoney": "none"
+  },
+  "typecheck": {
+    "command": "NODE_OPTIONS=--max-old-space-size=4096 npm run lint",
+    "passed": false,
+    "frontendDiagnostics": 0,
+    "totalDiagnostics": 65,
+    "diagnosticsByUnchangedServerFile": {
+      "packages/server/src/res-workflow/adoption-service.ts": 1,
+      "packages/server/src/res-workflow/analysis-agent.ts": 27,
+      "packages/server/src/res-workflow/full-history-material.ts": 16,
+      "packages/server/src/res-workflow/full-history-review.ts": 14,
+      "packages/server/src/res-workflow/local-history-stream.ts": 3,
+      "packages/server/src/routes/res-workflow-research-session-routes.ts": 4
+    },
+    "evidence": "evidence/typescript-diagnostics.txt",
+    "allReportedFilesByteIdenticalToBase": true
+  },
+  "routeIsolation": {
+    "command": "PI_RESEARCH_DASHBOARD_SOURCE=<runtime> bash scripts/test-dashboard-v020.sh",
+    "passed": 0,
+    "failed": 2,
+    "pureBaseReplayPassed": 0,
+    "pureBaseReplayFailed": 2,
+    "introducedByUi": false,
+    "assertionsPreserved": true,
+    "currentEvidence": "evidence/route-isolation-current.txt",
+    "baseEvidence": "evidence/route-isolation-baseline.txt",
+    "notes": [
+      "Existing workbench-sync proxy admission/identity gap",
+      "Existing wrapper environment-variable and backend resolver contract mismatch"
+    ]
+  },
+  "checks": {
+    "syntax": "passed",
+    "release": "passed",
+    "diff": "passed"
+  },
+  "externalNotExercised": [
+    "Paid model calls",
+    "Live Pi bridge execution and remote process termination",
+    "Real Science host/worker end-to-end",
+    "Real browser takeover and every plugin workflow"
+  ]
+}

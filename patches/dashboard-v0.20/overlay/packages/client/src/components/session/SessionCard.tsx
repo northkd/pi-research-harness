@@ -7,7 +7,7 @@ import {
   HOST_PRESSURE_DEGRADED_MS,
   HOST_PRESSURE_UNRESPONSIVE_MS,
 } from "@blackbelt-technology/pi-dashboard-shared/host-pressure.js";
-import { mdiAlertOutline, mdiArchiveOutline, mdiArrowRightCircleOutline, mdiClose, mdiCommentQuestion, mdiConsoleLine, mdiFlash, mdiLoading, mdiPaperclip, mdiPlay, mdiRefresh, mdiRemoteDesktop, mdiSourceBranch } from "@mdi/js";
+import { mdiAlertOutline, mdiArchiveOutline, mdiArrowRightCircleOutline, mdiChevronDown, mdiChevronRight, mdiClose, mdiCommentQuestion, mdiConsoleLine, mdiFlash, mdiLoading, mdiPaperclip, mdiPlay, mdiRefresh, mdiRemoteDesktop, mdiSourceBranch } from "@mdi/js";
 import { Icon } from "@mdi/react";
 import type React from "react";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -88,6 +88,8 @@ import type { ContextUsageInfo } from "./SessionList.js";
 import { SESSION_TEXT_COLUMN_CLASS, SessionStatusChip, TITLE_ROW_GAP_CLASS } from "./SessionStatusChip.js";
 import { SessionSubcard } from "./SessionSubcard.js";
 import { useSessionCardDragHandle } from "./SortableSessionCard.js";
+import type { SessionNavigationDensity } from "./session-navigation-preferences.js";
+import "./session-navigation.css";
 
 /**
  * The card's single activity slot. Precedence:
@@ -767,6 +769,7 @@ export function SessionCard({
   retryAttempt,
   hasNotice,
   connectionGeneration = 0,
+  density = "comfortable",
 }: {
   session: DashboardSession;
   selectedId?: string;
@@ -905,12 +908,16 @@ export function SessionCard({
   historyPhase?: HistoryLoadPhase;
   historyStartedAt?: number;
   connectionGeneration?: number;
+  /** Presentation only: the complete card remains available behind Details. */
+  density?: SessionNavigationDensity;
 }) {
   // dnd-kit drag handle props (attributes + listeners) supplied by
   // SortableSessionCard via context. When non-null, the desktop card's left
   // gutter (status dot + source icon column) becomes the drag zone.
   const dragHandleProps = useSessionCardDragHandle();
   const isSelected = selectedId === session.id;
+  const compact = density === "compact";
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const canRename = session.status !== "ended" && !!onRename;
   const isAlive = session.status !== "ended";
@@ -997,7 +1004,7 @@ export function SessionCard({
   const cardFxRef = useFxVisibility<HTMLLIElement>();
   // The history ring's loading arc spins too; observe the card so
   // `.fx-offscreen` pauses it offscreen. See change: show-session-history-load-state.
-  const hasAnimatedFx = isSelected || !!stripeFxClass || historyPhase === "loading";
+  const hasAnimatedFx = (!compact && (isSelected || !!stripeFxClass)) || historyPhase === "loading";
   // OpenSpec workflow config gates which action buttons render in the
   // OPENSPEC subcard. See change: redesign-session-card-and-composer
   // (config-driven-workflow).
@@ -1031,7 +1038,8 @@ export function SessionCard({
   );
   const menuScope = useSessionMenuScope();
   const menuKey = sessionScopeKey(session.id);
-  const menuOpen = !isMobile && menuScope.state.menuFor === menuKey;
+  const supportsCardMenu = !isMobile || compact;
+  const menuOpen = supportsCardMenu && menuScope.state.menuFor === menuKey;
   const setMenuOpen = useCallback(
     (open: boolean, req?: { source: "trigger" | "hover" | "contextmenu" | "keyboard"; point?: { x: number; y: number }; opener?: HTMLElement | null }) => {
       if (!open) {
@@ -1083,7 +1091,7 @@ export function SessionCard({
   // Detached per-card container for the `session-card-action-bar` slot output
   // (D7): the claims stay mounted for the card's lifetime through the portal
   // below; the menu attaches this element into its PLUGINS group while open.
-  const pluginContainer = useMemo(() => (isMobile ? null : document.createElement("div")), [isMobile]);
+  const pluginContainer = useMemo(() => (supportsCardMenu ? document.createElement("div") : null), [supportsCardMenu]);
   const wrapPlugin = useCallback(
     (pluginId: string, node: React.ReactNode) => (
       <div data-plugin-group="" role="group" aria-label={pluginNames?.[pluginId] ?? pluginId} className="empty:hidden">
@@ -1194,11 +1202,12 @@ export function SessionCard({
   }
 
   // Simplified mobile card
-  if (isMobile) {
+  if (isMobile && !compact) {
     return (
       <li
         ref={hasAnimatedFx ? cardFxRef : undefined}
         data-session-id={session.id}
+        data-density={density}
         onClick={() => onSelect(session.id)}
         className={`relative isolate px-4 py-3 cursor-pointer rounded-xl shadow-[inset_0_1px_0_var(--elevation-rim),0_4px_8px_var(--shadow-card)] border hover:shadow-[inset_0_1px_0_var(--elevation-rim),0_6px_12px_var(--shadow-card)] transition-all duration-200 ${
           isSelected ? "border-[var(--tint-blue-border)] bg-[var(--tint-blue-bg)] ring-1 ring-[var(--tint-blue-border)]" : "border-[var(--border-subtle)] bg-[var(--bg-primary)]"
@@ -1348,40 +1357,50 @@ export function SessionCard({
       data-session-card=""
       onClick={() => onSelect(session.id)}
       onContextMenu={onCardContextMenu}
-      onKeyDown={onCardKeyDown}
+      tabIndex={compact ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (compact && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onSelect(session.id);
+          return;
+        }
+        onCardKeyDown(e);
+      }}
       /* `group/card` drives the hover-revealed drag bead. The `before:` tick is
          the 9px connector from the folder's directory rail (drawn by
          SessionList on the list container) into this card.
          See change: session-card-directory-rail. */
-      className={`group/card relative isolate pl-1.5 pr-[18px] py-2 cursor-pointer rounded-xl shadow-[inset_0_1px_0_var(--elevation-rim),0_4px_8px_var(--shadow-card)] border hover:shadow-[inset_0_1px_0_var(--elevation-rim),0_6px_12px_var(--shadow-card)] hover:-translate-y-0.5 transition-all duration-200 before:content-[''] before:absolute before:-left-[11px] before:top-[19px] before:w-[9px] before:h-0.5 before:rounded-full before:bg-[var(--rail-directory)] ${
+      className={compact ? `session-nav-card group/card relative isolate cursor-pointer border rounded-lg ${isSelected ? "session-nav-card-selected" : ""} ${isHidden ? "opacity-40" : ""} ${session.closing ? "opacity-50" : ""}` : `group/card relative isolate pl-1.5 pr-[18px] py-2 cursor-pointer rounded-xl shadow-[inset_0_1px_0_var(--elevation-rim),0_4px_8px_var(--shadow-card)] border hover:shadow-[inset_0_1px_0_var(--elevation-rim),0_6px_12px_var(--shadow-card)] hover:-translate-y-0.5 transition-all duration-200 before:content-[''] before:absolute before:-left-[11px] before:top-[19px] before:w-[9px] before:h-0.5 before:rounded-full before:bg-[var(--rail-directory)] ${
         isSelected
           ? "border-[var(--tint-blue-border)] bg-[var(--bg-primary)] ring-1 ring-[var(--tint-blue-border)] card-selected-ring"
           : "border-[var(--border-subtle)] bg-[var(--bg-primary)]"
       } ${isHidden ? "opacity-40" : ""} ${session.closing ? "opacity-50" : ""} ${pulseClass}`}
       data-testid="session-card-desktop"
+      data-density={density}
+      aria-current={isSelected ? "true" : undefined}
     >
       {/* Static `.card-glow-mask` wrappers carve the card interior out so the
           rotating glow shows only OUTSIDE the edge (no wash over content).
           See change: fix-selected-card-light-wash. */}
-      {isSelected ? (
+      {!compact && isSelected ? (
         <div className="card-glow-mask card-glow-mask-outer" aria-hidden="true">
           <div className="card-glow-fx card-glow-fx-outer" />
         </div>
       ) : null}
-      {isSelected ? (
+      {!compact && isSelected ? (
         <div className="card-glow-mask" aria-hidden="true">
           <div className="card-glow-fx" />
         </div>
       ) : null}
-      {stripeFxClass ? <div className={`card-stripes-fx ${stripeFxClass}`} aria-hidden="true" /> : null}
-      {isSelected ? <div className="card-ring-fx" aria-hidden="true" /> : null}
+      {!compact && stripeFxClass ? <div className={`card-stripes-fx ${stripeFxClass}`} aria-hidden="true" /> : null}
+      {!compact && isSelected ? <div className="card-ring-fx" aria-hidden="true" /> : null}
       {/* Drag bead: an opaque 15x26 pill parked in the directory-rail band to
           the LEFT of the card, revealed on card hover. Opaque `--bg-primary`
           + border MASKS the 2px rail behind it, so the grip dots never mush
           into the line. Replaces the deleted 20px status gutter as the drag
           zone — keeps `drag-handle-session` for session-drag-reorder tests.
           See change: session-card-directory-rail. */}
-      {dragHandleProps && (
+      {dragHandleProps && !isMobile && (
         <span
           {...dragHandleProps}
           // `card-drag-bead` re-asserts position:absolute AFTER
@@ -1408,7 +1427,7 @@ export function SessionCard({
           carrier now that the gutter capsule is gone. */}
       <div className={`flex items-center ${TITLE_ROW_GAP_CLASS}`} data-testid="session-card-title-row">
         <SessionStatusChip
-          variant="desktop"
+          variant={isMobile ? "mobile" : "desktop"}
           sessionId={session.id}
           baseTitle={`${sourceLabels[session.source] ?? session.source} — ${session.status}`}
           colorClass={iconStatusColor}
@@ -1429,7 +1448,8 @@ export function SessionCard({
           />
         ) : (
           <span
-            className={`text-sm font-semibold truncate flex-1 ${canRename ? "cursor-text" : ""}`}
+            className={`${compact ? "session-nav-card-title text-[13px] font-medium" : "text-sm font-semibold truncate"} flex-1 min-w-0 ${canRename ? "cursor-text" : ""}`}
+            title={getSessionDisplayName(session)}
             onDoubleClick={(e) => {
               if (canRename) {
                 e.stopPropagation();
@@ -1457,7 +1477,7 @@ export function SessionCard({
             hide/unhide pair: shown on ended and idle-alive cards, NEVER while
             running (streaming or a tool in flight). Ended → immediate;
             idle-alive → confirm (archiving ends the pi process). */}
-        {canArchive && (
+        {!compact && canArchive && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1471,7 +1491,7 @@ export function SessionCard({
             <Icon path={mdiArchiveOutline} size={0.45} />
           </button>
         )}
-        {isAlive && onShutdown && (
+        {!compact && isAlive && onShutdown && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1498,18 +1518,65 @@ export function SessionCard({
       {(() => {
         const activityNode = activityContent(session, retryAttempt, hasWidgetBarPrompt);
         const pressure = hostPressureLevel(session, hostNow);
-        if (activityNode == null && pressure == null) return null;
+        if (!compact && activityNode == null && pressure == null) return null;
         return (
           // Status row: the activity container is the shrink victim so a long
           // `currentTool` ellipsizes instead of pushing the pressure pill out.
           <div className={`${SESSION_TEXT_COLUMN_CLASS} flex items-center mt-0.5 text-[11px] gap-2`} data-testid="session-card-status-row">
             <div className="flex-auto min-w-0 flex items-center gap-2" data-testid="session-card-meta">
-              {activityNode}
+              {compact && hasError && !isRetrying && !session.awaitingFileAccess && session.currentTool !== "ask_user"
+                ? <span className="text-[var(--severity-error-fg)]">{i18nT("common.error", undefined, "Error")}</span>
+                : activityNode ?? (compact && session.status === "ended" ? <span className="text-[var(--text-tertiary)]">{i18nT("status.ended", undefined, "Ended")}</span> : null)}
             </div>
             <HostPressureIndicator session={session} now={hostNow} />
+            {compact && (
+              <button
+                type="button"
+                className="session-nav-card-details-toggle focus-ring"
+                aria-expanded={detailsExpanded}
+                aria-controls={`session-card-details-${session.id} session-card-extensions-${session.id}`}
+                data-testid={`session-card-details-toggle-${session.id}`}
+                onClick={(e) => { e.stopPropagation(); setDetailsExpanded((open) => !open); }}
+              >
+                {i18nT("sessionList.sessionDetails", undefined, "Details")}
+                <Icon path={detailsExpanded ? mdiChevronDown : mdiChevronRight} size={0.5} />
+              </button>
+            )}
           </div>
         );
       })()}
+
+      {compact && (
+        <div className={`${SESSION_TEXT_COLUMN_CLASS} session-nav-card-identities flex flex-wrap items-center gap-1 empty:hidden`}>
+          <MovedBadge session={session} />
+          <OriginDeviceChip session={session} />
+          <DriverChip session={session} />
+          <ResWorkflowMemberBadge membership={researchMembership.membership} />
+          {showGit && session.gitWorktree && <WorktreePill session={session} />}
+          {((session.pendingQueues?.steering.length ?? 0) + (session.pendingQueues?.followUp.length ?? 0)) > 0 && (
+            <span className="text-[11px] text-[var(--accent-text)]" data-testid="queue-count-badge">
+              {i18nT("session.queuedMessages", { count: (session.pendingQueues?.steering.length ?? 0) + (session.pendingQueues?.followUp.length ?? 0) }, "{count} queued messages")}
+            </span>
+          )}
+        </div>
+      )}
+      {researchMembership.error && <div className={SESSION_TEXT_COLUMN_CLASS}><ResWorkflowMembershipError error={researchMembership.error} /></div>}
+      {session.piBelowFloor ? <div className="mt-1 px-1"><PiBelowFloorWarning session={session} /></div> : null}
+      {compact && !detailsExpanded && showOpenspec && (openspecReadiness?.state === "BROKEN" || openspecReadiness?.state === "STALE") && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setDetailsExpanded(true); }}
+          className="focus-ring mt-1 inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-[var(--severity-warning-fg)] bg-[var(--severity-warning-bg)]"
+          data-testid="session-openspec-attention"
+        >
+          <Icon path={mdiAlertOutline} size={0.5} />
+          OpenSpec · {i18nT("common.needsAttention", undefined, "Needs attention")}
+        </button>
+      )}
+
+      {/* Collapse the presentation, never the plugin lifetime or its data.
+          Two detail regions leave status badges and process safety visible. */}
+      <div id={`session-card-details-${session.id}`} data-testid={`session-card-details-${session.id}`} hidden={compact && !detailsExpanded} className="session-nav-card-details">
 
       {/* Git row: gate = the old GitInfo line's gate + the `git` section toggle. */}
       {showGit && (showGitInfo || !!session.gitWorktree) && !!session.gitBranch && <GitInfo session={session} />}
@@ -1524,10 +1591,10 @@ export function SessionCard({
                 {modelLabel}{session.thinkingLevel ? ` (${session.thinkingLevel})` : ""}
               </span>
             )}
-            <MovedBadge session={session} />
-            <OriginDeviceChip session={session} />
-            <DriverChip session={session} />
-            <ResWorkflowMemberBadge membership={researchMembership.membership} />
+            {!compact && <MovedBadge session={session} />}
+            {!compact && <OriginDeviceChip session={session} />}
+            {!compact && <DriverChip session={session} />}
+            {!compact && <ResWorkflowMemberBadge membership={researchMembership.membership} />}
             {(
               <span className="ml-auto flex flex-shrink-0 items-center gap-2 text-[11px]">
                 {prefs.contextUsageBar && (
@@ -1544,8 +1611,6 @@ export function SessionCard({
           </div>
         );
       })()}
-
-      {researchMembership.error && <div className={SESSION_TEXT_COLUMN_CLASS}><ResWorkflowMembershipError error={researchMembership.error} /></div>}
 
       {/* OpenSpec activity badge */}
       {showOpenspecBadge && (session.openspecPhase || session.openspecChange) ? (
@@ -1571,13 +1636,6 @@ export function SessionCard({
       {showTags && (session.tags?.length ?? 0) > 0 ? (
         <div className="mt-1 px-1">
           <TagStrip tags={session.tags ?? []} />
-        </div>
-      ) : null}
-
-      {/* Running pi below the lockstep floor. See change: update-pi-core-1-0-adopt-apis. */}
-      {session.piBelowFloor ? (
-        <div className="mt-1 px-1">
-          <PiBelowFloorWarning session={session} />
         </div>
       ) : null}
 
@@ -1672,8 +1730,20 @@ export function SessionCard({
           <WorktreeCardSectionSlot folder={{ cwd: session.cwd }} />
         </div>
       )}
+      </div>
 
-      {showStatus && <BadgeSubcard session={session} isPluginVisible={badgePluginVisible} />}
+      {showStatus && <div className="session-nav-badges"><BadgeSubcard session={session} isPluginVisible={badgePluginVisible} /></div>}
+
+      {compact && !detailsExpanded && (
+        <div className="session-nav-running-controls">
+          {showProcess && (inflightBashTools?.length ?? 0) > 0 && onAbortTool && (
+            <SessionActivityBar tools={[...(inflightBashTools ?? EMPTY_BASH_TOOLS)]} onAbort={onAbortTool} now={now} compact />
+          )}
+          <ProcessSafetyChip processes={processList} onKill={onKillProcess} onNavigateToSession={onSelect} />
+        </div>
+      )}
+
+      <div id={`session-card-extensions-${session.id}`} hidden={compact && !detailsExpanded} className="session-nav-card-details">
 
       {/* PROCESS subcard — activity bar (in-flight bash toolCalls) +
           background processes drawer. Subcard hides only when BOTH the
@@ -1691,9 +1761,9 @@ export function SessionCard({
           onNavigateToSession={onSelect}
           reserveAtIdle={prefs.reserveProcessLineAtIdle}
         />
-      ) : (
+      ) : !compact || detailsExpanded ? (
         <ProcessSafetyChip processes={processList} onKill={onKillProcess} onNavigateToSession={onSelect} />
-      )}
+      ) : null}
 
       {/* FLOWS subcard — plugin slot only.
           Populated by flows-plugin's SessionFlowActionsClaim via the
@@ -1702,6 +1772,7 @@ export function SessionCard({
 
       {/* MEMORY subcard — plugin slot only */}
       {showMemory && <MemorySubcard session={session} />}
+      </div>
 
       {/* Plugin slot: session-card-action-bar. The claims stay MOUNTED for the
           card's lifetime (their effects, subscriptions and the dialogs they own

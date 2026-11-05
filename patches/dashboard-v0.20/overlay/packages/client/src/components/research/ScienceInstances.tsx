@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useApiBase } from "../../lib/api/api-context.js";
 import { fetchJsonResponse } from "../../lib/api/fetch-json.js";
 import { useI18n } from "../../lib/i18n/i18n.js";
+import "./ScienceSurfaces.css";
 
 interface RecordState {
   scope: symbol;
@@ -15,7 +16,7 @@ interface RecordState {
 }
 interface DetailState { scope: symbol; taskId: string; instance: ScienceInstanceDetail | null; loading: boolean }
 class AccessRefused extends Error {}
-const control = "win11-btn focus-ring px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:opacity-50";
+const control = "science-control focus-ring";
 type Translate = ReturnType<typeof useI18n>["t"];
 const observedTime = (value: number | null, language: string, t: Translate) => value === null ? t("science.records.unknown", undefined, "Unknown") : new Date(value).toLocaleString(language);
 
@@ -38,15 +39,15 @@ function InstanceDetails({ state, language, t, taskId, onOpenArtifact }: { state
   const instance = state?.instance;
   if (!instance) return <p className="text-xs text-[var(--text-secondary)]">{t("science.records.unavailable", undefined, "Science records are unavailable; current state is unknown.")}</p>;
   return <>
-    <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+    <dl className="science-instance-metadata grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
       <dt>{t("science.records.created", undefined, "Recorded")}</dt><dd>{observedTime(instance.createdAt, language, t)}</dd>
       <dt>{t("science.records.models", undefined, "Requested models")}</dt><dd className="break-words">{instance.modelIds.length ? instance.modelIds.join(", ") : t("science.records.unknown", undefined, "Unknown")}</dd>
       <dt>{t("science.records.usage", undefined, "Usage")}</dt><dd>{t("science.records.unknown", undefined, "Unknown")}</dd>
       <dt>{t("science.records.cost", undefined, "Cost")}</dt><dd>{t("science.records.unknown", undefined, "Unknown")}</dd>
     </dl>
-    <h3 className="mt-3 text-xs font-semibold">{t("science.records.artifacts", undefined, "Collected artifacts")}</h3>
+    <h3 className="mt-4 text-sm font-semibold">{t("science.records.artifacts", undefined, "Collected artifacts")}</h3>
     {instance.artifacts.length === 0 ? <p className="mt-1 text-xs text-[var(--text-secondary)]">{t("science.records.noArtifacts", undefined, "No artifacts have been collected.")}</p>
-      : <ul className="mt-2 space-y-2">{instance.artifacts.map(artifact => <li key={artifact.id} className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+      : <ul className="mt-2 space-y-2">{instance.artifacts.map(artifact => <li key={artifact.id} className="science-artifact-row flex min-w-0 flex-wrap items-center gap-3 text-sm">
         <span className="min-w-0 flex-1 break-words">{artifact.name}</span><span className="text-[var(--text-tertiary)]">{artifact.bytes} B</span>
         <button type="button" className={control} disabled={!onOpenArtifact} onClick={() => onOpenArtifact?.(taskId, artifact.id)}>{t("science.records.preview", undefined, "Preview")}</button>
       </li>)}</ul>}
@@ -138,29 +139,29 @@ export function ScienceInstances({ cwd, refreshSignal, connectionGeneration = 0,
   const stale = current?.failed ?? false;
   const statusText = describeRecords(current, t, authRequired);
 
-  return <section data-testid="science-instances" className="win11-card min-w-0 p-4" aria-label={t("science.records.title", undefined, "Science instances")}>
-    <div className="flex flex-wrap items-center gap-2">
-      <h2 className="min-w-0 flex-1 text-sm font-semibold text-[var(--text-primary)]">{t("science.records.title", undefined, "Science instances")}</h2>
+  return <section data-testid="science-instances" className="science-instances min-w-0" aria-label={t("science.records.title", undefined, "Science instances")}>
+    <div className="science-surface-header">
+      <h2 className="science-surface-title min-w-0 flex-1 text-[var(--text-primary)]">{t("science.records.title", undefined, "Science instances")}</h2>
       <button type="button" className={control} disabled={authRequired || (current?.loading ?? true)} onClick={() => setRefresh(value => value + 1)}>{t("science.records.refresh", undefined, "Refresh Science records")}</button>
     </div>
-    <p role="status" className="mt-2 text-xs text-[var(--text-secondary)]">{statusText}</p>
-    <ul className="mt-3 space-y-2.5">
-      {current?.instances.map(row => <li key={row.id} data-testid="science-instance" className="win11-card-subtle min-w-0 p-3.5">
+    <p role="status" className="science-surface-status" data-state={stale ? "unknown" : current?.loading ? "loading" : "observed"}><span className="science-status-dot" aria-hidden="true" />{statusText}</p>
+    <ul className="science-instance-list">
+      {current?.instances.map(row => <li key={row.id} data-testid="science-instance" className="science-instance-row min-w-0">
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="font-semibold">{status(row.status)}</span>
+          <span className="science-instance-status" data-state={row.status}><span className="science-status-dot" aria-hidden="true" />{status(row.status)}</span>
           {(stale || row.stale) && <span className="text-[var(--accent-orange-text)]">{t("science.records.stale", undefined, "Stale")}</span>}
         </div>
-        <p className="mt-1 break-all font-mono text-[11px] text-[var(--text-secondary)]">{row.id}</p>
+        <p className="mt-2 break-all font-mono text-sm text-[var(--text-primary)]">{row.id}</p>
         <p className="mt-1 text-xs text-[var(--text-tertiary)]">{t("science.records.lastObserved", undefined, "Last observed")}: {observedTime(row.lastObservedAt, language, t)}</p>
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           <button type="button" className={control} disabled={!onOpenTask} onClick={() => onOpenTask?.(row.id)}>{t("science.records.openTask", undefined, "Open task")}</button>
           <button type="button" className={control} aria-expanded={taskId === row.id} onClick={() => setSelected(previous => previous?.scope === scope && previous.taskId === row.id ? null : { scope, taskId: row.id })}>{t("science.records.details", undefined, "Details")}</button>
         </div>
-        {taskId === row.id && <div className="mt-3 min-w-0 border-t border-[var(--border-primary)] pt-3">
+        {taskId === row.id && <div className="science-instance-details mt-3 min-w-0">
           <InstanceDetails state={currentDetail} language={language} t={t} taskId={row.id} onOpenArtifact={onOpenArtifact} />
         </div>}
       </li>)}
     </ul>
-    <p className="mt-3 text-[11px] text-[var(--text-tertiary)]">{t("science.records.boundary", undefined, "Execution status does not establish scientific acceptance or permission to publish. Viewing records does not submit or rerun work.")}</p>
+    <p className="science-surface-note">{t("science.records.boundary", undefined, "Execution status does not establish scientific acceptance or permission to publish. Viewing records does not submit or rerun work.")}</p>
   </section>;
 }

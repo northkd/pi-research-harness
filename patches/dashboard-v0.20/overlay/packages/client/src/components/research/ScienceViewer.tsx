@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useApiBase } from "../../lib/api/api-context.js";
 import { fetchJsonResponse } from "../../lib/api/fetch-json.js";
 import { useI18n } from "../../lib/i18n/i18n.js";
+import "./ScienceSurfaces.css";
 
 type ViewStatus = "loading" | "waiting" | "streaming" | "unavailable" | "unknown" | "expired";
 interface ViewState {
@@ -154,21 +155,23 @@ export function ScienceViewer({ cwd, path }: { cwd: string; path: string }) {
   }, [inputOn, hasFrame, connected, scope, socket, send, cwd]);
 
   const statusText = describeView(status, currentState?.reason, valid, t);
-  const control = "focus-ring tap-target rounded-[var(--radius-control)] border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-50";
+  const control = "science-control focus-ring";
 
   return (
-    <section data-testid="science-viewer" className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]" aria-label={t("science.title", undefined, "Science")}>
-      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-primary)] px-3 py-2">
-        <h2 className="min-w-0 flex-1 text-sm font-semibold">{target?.kind === "task" ? t("science.task", undefined, "Science task") : t("science.workspace", undefined, "Science workspace")}</h2>
-        <button type="button" className={control} data-testid="science-view-input-toggle" aria-pressed={inputOn} disabled={!jpeg} onClick={() => setInputOn(value => !value)}>{inputOn ? t("science.inputOn", undefined, "Input: on") : t("science.inputOff", undefined, "Input: off")}</button>
+    <section data-testid="science-viewer" className="science-surface flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]" aria-label={t("science.title", undefined, "Science")}>
+      <header className="science-surface-header">
+        <h2 className="science-surface-title min-w-0 flex-1">{target?.kind === "task" ? t("science.task", undefined, "Science task") : t("science.workspace", undefined, "Science workspace")}</h2>
+        <div className="science-surface-actions">
+        <button type="button" className={`${control} science-input-control`} data-enabled={inputOn} data-testid="science-view-input-toggle" aria-pressed={inputOn} disabled={!jpeg} onClick={() => setInputOn(value => !value)}>{inputOn ? t("science.inputOn", undefined, "Input: on") : t("science.inputOff", undefined, "Input: off")}</button>
         <button type="button" className={control} aria-pressed={fit} onClick={() => setFit(value => !value)}>{fit ? t("science.fit", undefined, "Fit") : t("science.oneToOne", undefined, "1:1")}</button>
         <button type="button" className={control} data-testid="science-view-retry" disabled={!target || !connected || status === "loading"} onClick={() => setRetry(value => value + 1)}>{t("science.reconnect", undefined, "Reconnect view")}</button>
+        </div>
       </header>
-      <p role="status" data-testid="science-view-status" className="shrink-0 border-b border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]">{statusText}</p>
+      <p role="status" data-testid="science-view-status" className="science-surface-status" data-state={status}><span className="science-status-dot" aria-hidden="true" />{statusText}</p>
       <BrowserFrameSurface jpeg={jpeg} canInput={inputOn && !!jpeg} fit={fit} resizeEnabled={inputOn && !!jpeg} onInput={sendInput}
         testIdPrefix="science-view" frameAlt={t("science.frameAlt", undefined, "Live Science frame")} textBridgeLabel={t("science.textBridge", undefined, "Type into Science")}
-        empty={<p className="max-w-sm p-4 text-center text-sm text-[var(--text-secondary)]">{statusText}</p>} />
-      <p className="shrink-0 border-t border-[var(--border-primary)] px-3 py-2 text-[11px] text-[var(--text-tertiary)]">{t("science.closeNote", undefined, "Read-only view. Closing this view does not stop a Science task.")}</p>
+        empty={<p className="science-empty-message">{statusText}</p>} />
+      <p className="science-surface-note">{t("science.closeNote", undefined, "Read-only view. Closing this view does not stop a Science task.")}</p>
     </section>
   );
 }

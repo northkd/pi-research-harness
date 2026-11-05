@@ -35,6 +35,7 @@ import {
 import { executionRecordStatus, researchStatusLabel, roleLabel } from "./ResearchAgentDetail.js";
 import { CollapsibleSection } from "./CollapsibleSection.js";
 import { ResearchAgentCanvas } from "./ResearchAgentCanvas.js";
+import { Dialog } from "@blackbelt-technology/pi-dashboard-client-utils/Dialog";
 import {
   leadArt,
   getMemberArt,
@@ -57,13 +58,13 @@ export function getSubagentRoleDisplayTitle(rawRole: string): string {
     return `主线收敛监督 (${short})`;
   }
   if (r.includes("numeric") || r.includes("calc")) {
-    return `数值模拟与合成核验 (${short})`;
+    return `计算与数值核验 (${short})`;
   }
   if (r.includes("critic") || r.includes("review")) {
     return `苛刻评审与反例核查 (${short})`;
   }
   if (r.includes("theory")) {
-    return `物理机制推导与理论建模 (${short})`;
+    return `理论推导与建模 (${short})`;
   }
   if (r.includes("web-oracle") || r.includes("oracle")) {
     return `外部高阶理论核验 (${short})`;
@@ -78,10 +79,7 @@ export function getSubagentRoleDisplayTitle(rawRole: string): string {
     return `模型交付诊断与路由评估 (${short})`;
   }
   if (r.includes("explorer") || r.includes("explore") || r.includes("idea")) {
-    return `结构拓扑初筛与探索 (${short})`;
-  }
-  if (r.includes("agy")) {
-    return `独立算法与合成检验 (${short})`;
+    return `独立探索 (${short})`;
   }
   return short;
 }
@@ -95,50 +93,35 @@ export function getAgentRelation(
 ): { tag: string; label: string; linkText: string; tintClass: string } {
   if (isCaptain) {
     return {
-      tag: "👑 主agent",
-      label: "工作流主agent · 统筹协同多智能体并接收指示",
-      linkText: "主agent",
-      tintClass: "tint-action-orange",
+      tag: "当前交互入口",
+      label: "当前选中的独立会话；仅改变界面入口，不改变调度职责",
+      linkText: "当前交互入口",
+      tintClass: "tint-action-blue",
     };
   }
   if (kind === "pi-session") {
     return {
-      tag: "🤖 协同agent",
-      label: "协同agent · 与主agent状态同步协同推演",
-      linkText: "协同推演 ⇄",
+      tag: "独立协同会话",
+      label: "拥有独立上下文的 Pi 会话，关系以实际记录为准",
+      linkText: "独立会话",
       tintClass: "tint-action-blue",
     };
   }
+  if (kind === "workflow-step") return { tag: "工作流步骤", label: "正式工作流记录，不代表原生子代理调用", linkText: "工作流记录", tintClass: "tint-action-blue" };
   return {
     tag: "⚡ Subagent 派发微任务",
-    label: "由上级会话单向派发 · 独立沙箱计算后汇交结果",
+    label: "由父会话派发的原生子任务，按记录查看执行与结果",
     linkText: "单向任务派发 →",
     tintClass: "tint-action-purple",
   };
 }
 
-export function getActualSkills(row: ResearchExecution | undefined, role?: ConfiguredRole): string[] {
-  const skills = new Set<string>();
-  if (role?.skills) {
-    for (const s of role.skills) skills.add(s);
-  }
-  if (row?.currentTool && row.currentTool !== "bash") {
-    skills.add(row.currentTool);
-  }
-  const text = `${row?.prompt ?? ""} ${row?.output ?? ""}`;
-  const allKnownSkills = [
-    "idea-discovery", "research-lit", "idea-creator", "novelty-check", "deepxiv", "openalex",
-    "experiment-bridge", "experiment-plan", "run-experiment", "analyze-results", "experiment-queue",
-    "auto-review-loop", "research-review", "kill-argument", "citation-audit", "paper-claim-audit",
-    "paper-writing", "mineru", "playwright"
-  ];
-  for (const skill of allKnownSkills) {
-    if (text.includes(skill)) skills.add(skill);
-  }
-  return Array.from(skills);
+export function getActualSkills(row: ResearchExecution | undefined, _role?: ConfiguredRole): string[] {
+  // Configuration and words in a prompt are not evidence that a tool ran.
+  return row?.currentTool ? [row.currentTool] : [];
 }
 
-const live = (row: ResearchExecution) =>
+const hasRunningStatus = (row: ResearchExecution) =>
   !["completed", "failed", "blocked", "stopped", "cancelled", "paused"].includes(row.workflowStatus ?? "") &&
   ["streaming", "started", "running", "queued", "pending", "stopping"].includes(row.status);
 
@@ -157,11 +140,11 @@ export function formatTime(iso?: string | null): string {
 }
 
 const STAGE_LABELS: Record<StageId, { name: string; desc: string }> = {
-  "1-idea": { name: "1. 探索与构思", desc: "文献调研、独立发散、收窄科研问题" },
+  "1-idea": { name: "1. 调研与发散", desc: "文献调研、独立发散、收窄科研问题" },
   "2-experiment": { name: "2. 实验与验证", desc: "可判定实验、数值模拟与运行输出" },
-  "3-review": { name: "3. 评审与自检", desc: "多模型族交叉对抗评审、反例寻找与收敛" },
-  "4-summary": { name: "4. 主张与闭环", desc: "主张与实验证据逐条比对与边界确认" },
-  "5-writing": { name: "5. 撰写与定稿", desc: "论文撰写、引用真实性审计与产物打包" },
+  "3-review": { name: "3. 对抗评审", desc: "多模型族交叉对抗评审、反例寻找与收敛" },
+  "4-summary": { name: "4. 结论核对", desc: "主张与实验证据逐条比对与边界确认" },
+  "5-writing": { name: "5. 论文与审计", desc: "论文撰写、引用真实性审计与产物打包" },
 };
 
 export function ResearchExecutionPanels({
@@ -173,6 +156,8 @@ export function ResearchExecutionPanels({
   activeSessionId,
   mode = "all",
   cwd,
+  compactStages = false,
+  visible = true,
 }: {
   projection: ResearchProjection;
   stage: StageId | null;
@@ -182,8 +167,11 @@ export function ResearchExecutionPanels({
   activeSessionId?: string;
   mode?: "all" | "workflow" | "teams";
   cwd?: string;
+  compactStages?: boolean;
+  visible?: boolean;
 }) {
   const apiBase = useApiBase();
+  const live = (row: ResearchExecution) => !(stale && row.source === "observation") && hasRunningStatus(row);
   const executions = projection.executions.filter(
     (row) => stage === null || row.stage === stage || (includeUnstaged && !row.stage)
   );
@@ -195,6 +183,7 @@ export function ResearchExecutionPanels({
   const [sessionInfoMap, setSessionInfoMap] = useState<Record<string, ResearchSessionInfoLike>>({});
 
   useEffect(() => {
+    if (!visible) return;
     let isMounted = true;
     const loadSessions = async () => {
       try {
@@ -218,7 +207,7 @@ export function ResearchExecutionPanels({
       isMounted = false;
       clearInterval(interval);
     };
-  }, [apiBase]);
+  }, [apiBase, visible]);
 
   const sessionIdFor = (row: ResearchExecution) => row.sessionId || (row.kind === "pi-session" && row.id.startsWith("session-") ? row.id.slice(8) : row.id);
   const sessionInfoFor = (row: ResearchExecution) => sessionInfoMap[sessionIdFor(row)] || sessionInfoMap[row.id];
@@ -266,51 +255,40 @@ export function ResearchExecutionPanels({
       const clean = info.firstMessage.replace(/[#*`>-]/g, "").replace(/\s+/g, " ").trim();
       return clean.length > 28 ? clean.slice(0, 28) + "…" : clean;
     }
-    return isCaptain ? "主agent" : "协同agent";
+    return isCaptain ? "当前交互会话" : "独立协同会话";
   };
 
   const getSessionWorkflowDuty = (sessionExec: ResearchExecution, isCaptain: boolean) => {
-    if (isCaptain) return "全流程主控协调与用户指示接收，调度多智能体集群";
-    if (sessionExec.stage === "1-idea") return "探索与构思阶段协同：文献溯源、假说发散与论据调研";
-    if (sessionExec.stage === "2-experiment") return "实验与验证阶段协同：数值仿真、脚本执行与数据产出";
-    if (sessionExec.stage === "3-review") return "评审与自检阶段协同：反例核查、交叉评审与收敛判定";
-    if (sessionExec.stage === "4-summary") return "主张与闭环阶段协同：主张清单与实验证据逐条映射校验";
-    if (sessionExec.stage === "5-writing") return "撰写与定稿阶段协同：论文定稿、引文审计与产物交付";
-    return "阶段任务协同推演、代码沙箱执行与结果汇交";
+    return getAgentMission(roleNameOf(sessionExec), isCaptain, sessionExec.kind, sessionExec, cwd);
   };
 
   // Main Agent (Captain) Selection & User Confirmation
   const [mainAgentId, setMainAgentId] = useState<string | null>(null);
   const [pendingMainAgentId, setPendingMainAgentId] = useState<string | null>(null);
+  const [dismissedEntryId, setDismissedEntryId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (activeSessionId && activeSessionId !== mainAgentId && pendingMainAgentId !== activeSessionId) {
+    if (activeSessionId && activeSessionId !== dismissedEntryId && activeSessionId !== mainAgentId && pendingMainAgentId !== activeSessionId) {
       if (!mainAgentId) {
         setPendingMainAgentId(activeSessionId);
       }
     }
-  }, [activeSessionId, mainAgentId, pendingMainAgentId]);
+  }, [activeSessionId, mainAgentId, pendingMainAgentId, dismissedEntryId]);
 
   const captainExecution = useMemo(() => {
     if (mainAgentId) {
-      const found = executions.find((ex) => sessionIdFor(ex) === mainAgentId || ex.id === mainAgentId);
+      const found = executions.find((ex) => ex.kind === "pi-session" && (sessionIdFor(ex) === mainAgentId || ex.id === mainAgentId));
       if (found) return found;
     }
-    const piSessions = executions.filter((ex) => ex.kind === "pi-session");
-    if (piSessions.length > 0) {
-      // 优先选择最新活跃的 pi-session 作为默认主控入口
-      const sorted = [...piSessions].sort((a, b) =>
-        (b.lastActivityAt ?? b.startedAt ?? "").localeCompare(a.lastActivityAt ?? a.startedAt ?? "")
-      );
-      return sorted[0];
-    }
-    return executions[0] || null;
-  }, [executions, mainAgentId]);
+    return executions.find(ex => ex.kind === "pi-session" && sessionIdFor(ex) === activeSessionId) ?? null;
+  }, [executions, mainAgentId, activeSessionId]);
 
   const [topoViewMode, setTopoViewMode] = useState<"topology" | "swimlanes">("topology");
   const [fusionFilter, setFusionFilter] = useState<"all" | "with-subs" | "standalone">("all");
   const [fusionLayout, setFusionLayout] = useState<"canvas" | "list">("canvas");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [showAllSubagents, setShowAllSubagents] = useState(false);
+  const [stageDrafts, setStageDrafts] = useState<Partial<Record<StageId, string>>>({});
 
   // Agent 协作网络折叠/展开覆盖状态：记录用户手动切换（完成/关闭默认收起，激活默认展开）
   const [collapsedOverrides, setCollapsedOverrides] = useState<Record<string, boolean>>({});
@@ -319,8 +297,7 @@ export function ResearchExecutionPanels({
   const isClusterExpanded = (cluster: { sessionExec: ResearchExecution }) => {
     const isLive = live(cluster.sessionExec);
     if (collapsedOverrides[cluster.sessionExec.id] !== undefined) {
-      // 若处于活跃执行中，无论之前是否手动收起，均响应“如果被激活了再自动展开”
-      return isLive || collapsedOverrides[cluster.sessionExec.id];
+      return collapsedOverrides[cluster.sessionExec.id];
     }
     // 默认行为：活跃的自动展开，完成或关闭的自动收起
     return isLive;
@@ -368,7 +345,7 @@ export function ResearchExecutionPanels({
       stageId,
       stageName,
       stageIndex,
-      promptText: getDefaultStagePrompt(stageId, stageName, stageIndex),
+      promptText: stageDrafts[stageId] ?? getDefaultStagePrompt(stageId, stageName, stageIndex),
     });
   };
 
@@ -431,7 +408,7 @@ export function ResearchExecutionPanels({
         active: stageExecs.some((ex) => live(ex)),
       };
     });
-  }, [projection.executions, projection.stage, projection.enteredStages]);
+  }, [projection.executions, projection.stage, projection.enteredStages, stale]);
 
   const roleEntries = useMemo(() => [...roles.values()], [roles]);
 
@@ -464,7 +441,7 @@ export function ResearchExecutionPanels({
 
     const pById = new Map<string, ResearchExecution>(pSessions.map((p) => [p.id, p]));
     const subs = executions
-      .filter((ex) => ex.kind !== "pi-session")
+      .filter((ex) => ex.kind === "native-subagent")
       .sort((a, b) => execTime(b).localeCompare(execTime(a)));
     const subsByParent = new Map<string, ResearchExecution[]>();
 
@@ -528,7 +505,7 @@ export function ResearchExecutionPanels({
 
     const roleSummaries = [...subRoleNames].map((rName) => {
       const roleObj = roles.get(rName) ?? { name: rName, skills: [] };
-      const roleExecs = executions.filter((ex) => roleNameOf(ex) === rName);
+      const roleExecs = subs.filter((ex) => roleNameOf(ex) === rName);
       const latestObserved = latestObservedExecution(roleExecs);
       const primaryExec = latestObserved ?? roleExecs[0];
 
@@ -572,7 +549,7 @@ export function ResearchExecutionPanels({
 
   const visibleClusters = useMemo(() => {
     if (fusionFilter === "with-subs") {
-      return fusedSessionClusters.filter((c) => c.childSubs.length > 0 || c.isCaptain);
+      return fusedSessionClusters.filter((c) => c.childSubs.length > 0);
     }
     if (fusionFilter === "standalone") {
       return fusedSessionClusters.filter((c) => c.childSubs.length === 0);
@@ -581,7 +558,7 @@ export function ResearchExecutionPanels({
   }, [fusedSessionClusters, fusionFilter]);
 
   return (
-    <div className="space-y-4">
+    <div className="research-execution-panels space-y-4">
       {/* =========================================================================
           TAB 2 (or ALL): 工作流进度 · 5大流程进度与独立启动
           ========================================================================= */}
@@ -589,10 +566,10 @@ export function ResearchExecutionPanels({
         <CollapsibleSection
           id="research-run-status"
           testId="research-run-status"
-          title="工作流执行记录 · 5大流程进度与独立启动"
+          title="工作流执行记录"
           isUpdating={isWorkflowActive}
           defaultOpen={true}
-          subtitle="按科研工作流 5 大阶段流水线串联展示；支持各阶段独立创建新会话、梳理研究基础并交互启动"
+          subtitle="查看真实运行、按阶段新建会话；独立启动不会改写正式阶段或科学验收"
         >
           <div className="space-y-4">
             {/* Main Agent Confirmation Prompt Banner (WinUI 3 InfoBar) */}
@@ -609,10 +586,10 @@ export function ResearchExecutionPanels({
                   />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-[var(--text-primary)]">
-                      是否把当前对话 Session 作为工作流主 Agent 入口？
+                      将当前对话设为界面交互入口？
                     </p>
                     <p className="mt-1 font-mono text-[11px] text-[var(--text-secondary)]">
-                      检测到当前活动会话：{pendingMainAgentId}
+                      当前会话：{pendingMainAgentId}。仅更新本界面选择，不任命调度主控。
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <button
@@ -623,11 +600,11 @@ export function ResearchExecutionPanels({
                         }}
                         className="win11-btn-accent px-3.5 py-1.5 text-xs"
                       >
-                        确认设为主 Agent 入口
+                        设为交互入口
                       </button>
                       <button
                         type="button"
-                        onClick={() => setPendingMainAgentId(null)}
+                        onClick={() => { setDismissedEntryId(pendingMainAgentId); setPendingMainAgentId(null); }}
                         className="win11-btn px-3.5 py-1.5 text-xs"
                       >
                         保持现状
@@ -683,7 +660,7 @@ export function ResearchExecutionPanels({
                     {run ? `工作流运行：${run.runId}` : "当前工作流全景进度"}
                   </span>
                   <span className="rounded bg-[var(--bg-tertiary)] border border-[var(--border-primary)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-secondary)]">
-                    {run ? researchStatusLabel(run.status) : "独立执行观测中"}
+                    {run ? researchStatusLabel(run.status) : "暂无正式运行"}
                   </span>
                 </div>
                 <p className="text-[11.5px] text-[var(--text-secondary)]">
@@ -694,13 +671,14 @@ export function ResearchExecutionPanels({
               {captainExecution && (
                 <div className="tint-action-orange inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold">
                   <Icon path={mdiCrown} size={0.6} />
-                  <span>👑 主agent: {getSessionDisplayName(captainExecution, true)}</span>
+                  <span>当前交互入口：{getSessionDisplayName(captainExecution, true)}</span>
                 </div>
               )}
             </div>
 
             {/* 5-Stage Progression Auto-Fit Grid */}
-            <div className="win11-grid-stages">
+            {compactStages && <div className="flex flex-wrap gap-2"><span className="text-xs text-[var(--text-tertiary)] self-center">独立启动：</span>{stageProgression.map((item, index) => <button key={item.id} type="button" className="win11-btn px-3 py-1.5 text-xs" disabled={startingStageId === item.id} onClick={() => handleOpenStagePromptEditor(item.id, item.info.name, index)}>{item.info.name.slice(3)}</button>)}</div>}
+            {!compactStages && <div className="win11-grid-stages">
               {stageProgression.map((item, index) => {
                 const isStarting = startingStageId === item.id;
                 return (
@@ -770,12 +748,12 @@ export function ResearchExecutionPanels({
                   </div>
                 );
               })}
-            </div>
+            </div>}
 
             {/* Prompt Editing Modal for Independent Stage Start */}
             {editingStagePrompt && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-                <div className="win11-card w-full max-w-2xl p-5 space-y-4 shadow-2xl border border-[var(--border-primary)]">
+              <Dialog open={visible} onClose={() => setEditingStagePrompt(null)} size="full" flush ariaLabel="独立启动阶段会话">
+                <div className="win11-card w-full max-h-[88vh] overflow-y-auto p-5 space-y-4 border border-[var(--border-primary)]">
                   <div className="flex items-center justify-between border-b border-[var(--border-primary)] pb-3">
                     <div className="flex items-center gap-2">
                       <Icon path={mdiRocketLaunchOutline} size={0.7} className="text-[var(--accent-primary)]" />
@@ -786,6 +764,7 @@ export function ResearchExecutionPanels({
                     <button
                       type="button"
                       onClick={() => setEditingStagePrompt(null)}
+                      aria-label="关闭阶段启动编辑器"
                       className="rounded p-1 hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]"
                     >
                       ✕
@@ -798,12 +777,13 @@ export function ResearchExecutionPanels({
 
                   <textarea
                     value={editingStagePrompt.promptText}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      setStageDrafts(drafts => ({ ...drafts, [editingStagePrompt.stageId]: e.target.value }));
                       setEditingStagePrompt({
                         ...editingStagePrompt,
                         promptText: e.target.value,
-                      })
-                    }
+                      });
+                    }}
                     rows={12}
                     className="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 font-mono text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
                     placeholder="输入该阶段新智能体的第一条启动 Prompt…"
@@ -847,7 +827,7 @@ export function ResearchExecutionPanels({
                     </div>
                   </div>
                 </div>
-              </div>
+              </Dialog>
             )}
 
             {/* Detailed Executions List */}
@@ -956,17 +936,17 @@ export function ResearchExecutionPanels({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-sm font-semibold text-[var(--text-primary)]">
-                    多智能体任务派发与通信拓扑网 (Multi-Agent ⇄ Subagent 融合视图)
+                    协作网络
                   </h2>
                   <span className="tint-action-blue rounded-full border px-2.5 py-0.5 font-mono text-[10.5px] font-semibold">
                     🤖 {piSessions.length} 个 Multi-Agent 会话
                   </span>
                   <span className="tint-action-purple rounded-full border px-2.5 py-0.5 font-mono text-[10.5px] font-semibold">
-                    ⚡ {subagentRoleSummaries.length} 类专职 Subagent · {subagentExecutions.length} 次派发
+                    {subagentExecutions.length} 项原生 Subagent · {executions.filter(row => row.kind === "workflow-step").length} 条工作流步骤
                   </span>
                 </div>
                 <p className="mt-0.5 text-[11.5px] text-[var(--text-secondary)]">
-                  主控统筹全局 ⇄ Multi-Agent 独立会话分流推演（双向同步） → 下辖专职 Subagent 沙箱微任务（单向派发与结果汇交）
+                  独立会话与父会话派发的子任务分别展示；连线只表示有来源的已记录关系。
                 </p>
               </div>
             </div>
@@ -983,7 +963,7 @@ export function ResearchExecutionPanels({
                 }`}
               >
                 <Icon path={mdiSourceBranch} size={0.55} />
-                <span>主从融合拓扑与职责</span>
+                <span>协作关系</span>
               </button>
               <button
                 type="button"
@@ -995,16 +975,17 @@ export function ResearchExecutionPanels({
                 }`}
               >
                 <Icon path={mdiViewGridOutline} size={0.55} />
-                <span>专职角色矩阵与归属</span>
+                <span>角色矩阵</span>
               </button>
             </div>
           </div>
 
           {topoViewMode === "topology" && (
-            <div className="space-y-4">
+            <div className="research-collaboration-views space-y-4">
               {/* 2. Stage Delivery Progress & Dependency Flow */}
               {agentTeamsTasks.length > 0 && (
-                <div className="win11-card p-4 space-y-3.5">
+                <CollapsibleSection id="research-recorded-task-steps" title={`工作流任务记录 · ${agentTeamsTasks.length} 项`} subtitle="保留每个已登记步骤、分配角色与原始运行状态" defaultOpen={mode === "all"}>
+                <div className="space-y-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <span className="flex items-center gap-2 font-semibold text-[var(--text-primary)]">
                       <Icon path={mdiLayersOutline} size={0.65} className="text-[var(--accent-primary)]" />
@@ -1153,16 +1134,17 @@ export function ResearchExecutionPanels({
                     );
                   })()}
                 </div>
+                </CollapsibleSection>
               )}
 
               {/* 3. 核心融合区：Multi-Agent 协同会话 ⇄ 下辖派发 Subagent 一体化拓扑树 */}
               {fusedSessionClusters.length > 0 && (
-                <div className="win11-card p-4 space-y-4">
+                <div className="research-collaboration-map win11-card p-4 space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-primary)] pb-3">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-                          主控 & Multi-Agent 协同会话 ⇄ 下辖 Subagent 微任务融合拓扑
+                          会话与子代理
                         </h3>
                         <span className="tint-action-purple rounded-full border px-2 py-0.5 text-[10.5px] font-semibold">
                           父子协同树一体展示
@@ -1250,7 +1232,7 @@ export function ResearchExecutionPanels({
 
                   {/* Keep the detailed list available, with the canvas as the compact default. */}
                   {fusionLayout === "canvas" ? (
-                    visibleClusters.length ? <ResearchAgentCanvas clusters={visibleClusters} stale={stale} relations={relations} onAgent={onAgent} statusLabel={researchStatusLabel} roleLabel={getSubagentRoleDisplayTitle} />
+                    visibleClusters.length ? <ResearchAgentCanvas clusters={visibleClusters} stale={stale} relations={relations} onAgent={onAgent} statusLabel={researchStatusLabel} roleLabel={getSubagentRoleDisplayTitle} visible={visible} />
                       : <div className="win11-card-subtle p-4 text-xs text-[var(--text-secondary)]">没有符合筛选条件的会话。</div>
                   ) : (
                   <div className="space-y-3.5">
@@ -1313,7 +1295,7 @@ export function ResearchExecutionPanels({
                                         : "border-purple-500/40 bg-purple-500/10 text-purple-400"
                                     }`}
                                   >
-                                    {cluster.isUserCreated ? "👤 我创建的" : "⚡ 工作流生成"}
+                                    {cluster.originLabel} · 创建者：{cluster.creatorLabel}
                                   </span>
                                   {isLive ? (
                                     <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-600 dark:text-emerald-400 shadow-sm animate-pulse">
@@ -1334,7 +1316,7 @@ export function ResearchExecutionPanels({
                                   )}
                                   <span className="inline-flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] font-mono">
                                     <Icon path={mdiClockOutline} size={0.45} />
-                                    <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {isLive ? "持续执行中" : formatTime(sessionExec.endedAt ?? sessionExec.lastActivityAt)}</span>
+                                    <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {isLive ? "持续执行中" : formatTime(sessionExec.endedAt)}</span>
                                   </span>
                                   {childSubs.length > 0 && (
                                     <span className="tint-action-purple rounded-full border px-2 py-0.5 text-[10px] font-semibold">
@@ -1429,7 +1411,7 @@ export function ResearchExecutionPanels({
                                         : "border-purple-500/40 bg-purple-500/10 text-purple-400"
                                     }`}
                                   >
-                                    {cluster.isUserCreated ? "👤 我创建的" : "⚡ 工作流生成"}
+                                    {cluster.originLabel} · 创建者：{cluster.creatorLabel}
                                   </span>
                                   {childSubs.length > 0 ? (
                                     <span className="tint-action-purple rounded-full border px-2.5 py-0.5 text-[10.5px] font-semibold">
@@ -1468,7 +1450,7 @@ export function ResearchExecutionPanels({
                                 {/* Latest Deliverable / Output Snippet */}
                                 {cleanOutput && (
                                   <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-1.5 text-[11.5px] text-[var(--text-secondary)] truncate">
-                                    <strong className="text-[var(--accent-text)]">最新阶段结论：</strong>
+                                    <strong className="text-[var(--accent-text)]">最新记录输出：</strong>
                                     {cleanOutput.slice(0, 115)}
                                     {cleanOutput.length > 115 ? "…" : ""}
                                   </div>
@@ -1481,7 +1463,7 @@ export function ResearchExecutionPanels({
                                   </span>
                                   <span className="font-mono inline-flex items-center gap-1">
                                     <Icon path={mdiClockOutline} size={0.45} />
-                                    <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {isLive ? "持续执行中" : formatTime(sessionExec.endedAt ?? sessionExec.lastActivityAt)}</span>
+                                    <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {isLive ? "持续执行中" : formatTime(sessionExec.endedAt)}</span>
                                   </span>
                                   {sessionExec.observedModel && (
                                     <span className="rounded bg-[var(--bg-secondary)] border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[var(--text-primary)]">
@@ -1595,7 +1577,7 @@ export function ResearchExecutionPanels({
                                                 </span>
                                               ) : (
                                                 <span className="rounded px-1.5 py-0.5 text-[10px] font-medium border bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[var(--text-secondary)]">
-                                                  {researchStatusLabel(subLatest.status)}
+                                                  {executionRecordStatus(subLatest, stale)}
                                                 </span>
                                               )}
                                             </div>
@@ -1609,7 +1591,7 @@ export function ResearchExecutionPanels({
 
                                           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--border-primary)]/60 text-[10.5px]">
                                             <span className="font-mono text-[var(--text-tertiary)]">
-                                              模型: <strong className="text-[var(--text-primary)]">{subLatest.observedModel ?? "默认配置"}</strong>
+                                              模型: <strong className="text-[var(--text-primary)]">{subLatest.observedModel ?? "未观测模型"}</strong>
                                             </span>
                                             <span className="text-[var(--accent-text)] font-semibold inline-flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
                                               <span>点击平铺展开 {subGroup.executions.length} 轮卡片</span>
@@ -1683,7 +1665,7 @@ export function ResearchExecutionPanels({
                                                     </span>
                                                   ) : (
                                                     <span className="rounded px-1.5 py-0.5 text-[10px] font-medium border bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[var(--text-secondary)]">
-                                                      {researchStatusLabel(exec.status)}
+                                                      {executionRecordStatus(exec, stale)}
                                                     </span>
                                                   )}
                                                 </div>
@@ -1702,7 +1684,7 @@ export function ResearchExecutionPanels({
                                                   </div>
                                                   <div className="flex items-center gap-1 font-mono">
                                                     <Icon path={mdiClockOutline} size={0.4} />
-                                                    <span>开始: {formatTime(exec.startedAt)} · 结束: {isExecLive ? "执行中" : formatTime(exec.endedAt ?? exec.lastActivityAt)}</span>
+                                                    <span>开始: {formatTime(exec.startedAt)} · 结束: {isExecLive ? "执行中" : formatTime(exec.endedAt)}</span>
                                                   </div>
                                                 </div>
                                               </div>
@@ -1740,7 +1722,7 @@ export function ResearchExecutionPanels({
                                             </span>
                                           ) : (
                                             <span className="rounded px-1.5 py-0.5 text-[10px] font-medium border bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[var(--text-secondary)]">
-                                              {researchStatusLabel(subLatest.status)}
+                                              {executionRecordStatus(subLatest, stale)}
                                             </span>
                                           )}
                                         </div>
@@ -1754,7 +1736,7 @@ export function ResearchExecutionPanels({
 
                                       <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[10.5px] text-[var(--text-tertiary)]">
                                         <span className="font-mono truncate">
-                                          模型: <strong className="text-[var(--text-primary)]">{subLatest.observedModel ?? "默认配置"}</strong>
+                                          模型: <strong className="text-[var(--text-primary)]">{subLatest.observedModel ?? "未观测模型"}</strong>
                                         </span>
                                         <span className="text-[var(--accent-text)] font-medium inline-flex items-center gap-0.5">
                                           <span>查看详情</span>
@@ -1776,7 +1758,8 @@ export function ResearchExecutionPanels({
               )}
 
               {/* 4. 专职 Subagent 角色职责与配置总览（同时显示跨会话派发归属，保持全量角色可见与测试兼容） */}
-              <div className="win11-card p-4 space-y-3.5">
+              <CollapsibleSection id="research-role-configuration" title={`角色配置与执行观测 · ${subagentRoleSummaries.length} 类`} defaultOpen={mode === "all"}>
+              <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-primary)] pb-3">
                   <div>
                     <h3 className="text-sm font-semibold text-[var(--text-primary)]">
@@ -1809,6 +1792,9 @@ export function ResearchExecutionPanels({
                           key={role.name}
                           data-testid="research-agent-node"
                           onClick={() => onAgent(role, primaryExec)}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onAgent(role, primaryExec); } }}
                           className="win11-card-interactive cursor-pointer p-4 text-xs flex flex-col justify-between gap-3"
                         >
                           <div className="space-y-2">
@@ -1877,6 +1863,7 @@ export function ResearchExecutionPanels({
 
                           <div className="border-t border-[var(--border-primary)] pt-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]">
                             <div className="flex flex-wrap items-center gap-1.5">
+                              {!!role.skills.length && <span className="text-[var(--text-tertiary)]">配置技能：{role.skills.join("、")}</span>}
                               {role.model && (
                                 <span className="rounded bg-[var(--bg-secondary)] border border-[var(--border-primary)] px-2 py-0.5 font-mono">
                                   配置模型：{role.model}
@@ -1893,7 +1880,7 @@ export function ResearchExecutionPanels({
                                   key={sk}
                                   className="tint-action-green rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium"
                                 >
-                                  {sk}
+                                  工具观测：{sk}
                                 </span>
                               ))}
                             </div>
@@ -1909,6 +1896,7 @@ export function ResearchExecutionPanels({
                   </div>
                 )}
               </div>
+              </CollapsibleSection>
             </div>
           )}
 
@@ -1920,17 +1908,20 @@ export function ResearchExecutionPanels({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
                     <Icon path={mdiAccountGroup} size={0.7} className="text-[var(--accent-blue)]" />
-                    <span>1. 主agent & 协同agent 独立会话矩阵 ({piSessions.length} 个独立研究会话)</span>
+                    <span>1. 独立协同会话 ({piSessions.length} 个独立研究会话)</span>
                   </div>
                   <span className="text-[11px] text-[var(--text-secondary)]">
-                    每个会话拥有独立上下文并与主agent双向状态同步
+                    每个会话拥有独立上下文；来源与协作关系按记录展示
                   </span>
                 </div>
                 <div className="win11-grid-cards">
-                  {fusedSessionClusters.map(({ sessionExec, title, roleObj, isCaptain, isUserCreated, workflowDuty, childSubs }) => (
+                  {fusedSessionClusters.map(({ sessionExec, title, roleObj, isCaptain, isUserCreated, originLabel, creatorLabel, workflowDuty, childSubs }) => (
                     <div
                       key={sessionExec.id}
                       onClick={() => onAgent(roleObj, sessionExec)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onAgent(roleObj, sessionExec); } }}
                       className={`win11-card-subtle cursor-pointer p-3.5 hover:bg-[var(--bg-hover)] transition-all text-xs flex items-start gap-3 ${
                         isCaptain ? "border-l-[3px] border-l-[var(--accent-orange)]" : ""
                       }`}
@@ -1951,7 +1942,7 @@ export function ResearchExecutionPanels({
                                 ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
                                 : "border-purple-500/40 bg-purple-500/10 text-purple-400"
                             }`}>
-                              {isUserCreated ? "👤 我创建的" : "⚡ 工作流生成"}
+                              {originLabel} · 创建者：{creatorLabel}
                             </span>
                             <span className="tint-action-purple rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold">
                               派发 {childSubs.length} 子任务
@@ -1972,14 +1963,14 @@ export function ResearchExecutionPanels({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
                     <Icon path={mdiLightningBolt} size={0.7} className="text-[var(--accent-purple)]" />
-                    <span>2. Subagent 派发微任务全量清单 ({subagentExecutions.length} 次沙箱执行)</span>
+                    <span>2. 原生 Subagent 任务清单 ({subagentExecutions.length} 项执行)</span>
                   </div>
                   <span className="text-[11px] text-[var(--text-secondary)]">
                     标注每次微任务所属的父级 Multi-Agent 会话
                   </span>
                 </div>
                 <div className="win11-grid-cards">
-                  {subagentExecutions.slice(0, 36).map((row) => {
+                  {(showAllSubagents ? subagentExecutions : subagentExecutions.slice(0, 36)).map((row) => {
                     const rName = roleNameOf(row);
                     const parentRow = row.parentExecutionId ? parentById.get(row.parentExecutionId) : undefined;
                     const taskSnippet = (row.prompt ?? row.output ?? "")
@@ -1990,6 +1981,9 @@ export function ResearchExecutionPanels({
                       <div
                         key={row.id}
                         onClick={() => onAgent(roles.get(rName) ?? { name: rName, skills: [] }, row)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onAgent(roles.get(rName) ?? { name: rName, skills: [] }, row); } }}
                         className="win11-card-subtle cursor-pointer p-3.5 hover:bg-[var(--bg-hover)] transition-all text-xs flex items-start gap-3"
                       >
                         <img src={getMemberArt(rName)} alt="" className="h-8 w-8 shrink-0 object-contain" />
@@ -1999,7 +1993,7 @@ export function ResearchExecutionPanels({
                               {getSubagentRoleDisplayTitle(rName)}
                             </span>
                             <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                              {researchStatusLabel(row.status)}
+                              {executionRecordStatus(row, stale)}
                             </span>
                           </div>
                           {parentRow && (
@@ -2017,9 +2011,13 @@ export function ResearchExecutionPanels({
                     );
                   })}
                 </div>
+                {subagentExecutions.length > 36 && <button type="button" className="research-show-more" onClick={() => setShowAllSubagents(value => !value)}>{showAllSubagents ? "仅显示最近 36 项" : `查看全部 ${subagentExecutions.length} 项子任务`}</button>}
               </div>
             </div>
           )}
+          {executions.some(row => row.kind === "workflow-step") && <CollapsibleSection id="research-workflow-step-fallback" title="正式工作流步骤" subtitle="以下是工作流文件记录，未被计为原生 Subagent 执行" defaultOpen={false}>
+            <div className="space-y-2">{executions.filter(row => row.kind === "workflow-step").map(row => <button type="button" key={row.id} data-testid="research-workflow-step-record" onClick={() => onAgent(roles.get(roleNameOf(row)) ?? { name: roleNameOf(row), skills: [] }, row)} className="win11-btn flex w-full justify-between gap-3 px-3 py-2 text-xs"><span>{roleNameOf(row)} · {row.workflowKey}</span>{row.observedModel && <span>记录模型：{row.observedModel}</span>}<span>{executionRecordStatus(row, stale)}</span></button>)}</div>
+          </CollapsibleSection>}
         </section>
       )}
     </div>

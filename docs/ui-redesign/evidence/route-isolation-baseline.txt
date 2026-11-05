@@ -1,0 +1,43 @@
+Baseline replay: upstream 65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0 + Harness overlay/test af2810437b39772db62201b9f86346cdb9d62dfc
+Installed third-party dependencies reused; workspace package links point into the temporary baseline tree.
+✖ workbench proxy enforces workspace access and preserves remote identity (70.077287ms)
+✖ dashboard can find the explicitly configured research-loop backend and refuses invalid paths (4.953402ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 367.583157
+
+✖ failing tests:
+
+test at tests/dashboard-route-isolation.integration.mjs:7:1
+✖ workbench proxy enforces workspace access and preserves remote identity (70.077287ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  undefined !== '0'
+
+      at TestContext.<anonymous> (file://BASELINE_TEMP/harness/tests/dashboard-route-isolation.integration.mjs:14:75)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: '0',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/dashboard-route-isolation.integration.mjs:20:1
+✖ dashboard can find the explicitly configured research-loop backend and refuses invalid paths (4.953402ms)
+  Error: research-backend-unavailable
+      at resolveInstalledResearchLoopRoot (file://BASELINE_TEMP/dashboard-source/packages/server/src/res-workflow/adoption-service.ts:165:9)
+      at async TestContext.<anonymous> (file://BASELINE_TEMP/harness/tests/dashboard-route-isolation.integration.mjs:23:106)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    statusCode: 503,
+    code: 'research-backend-unavailable'
+  }

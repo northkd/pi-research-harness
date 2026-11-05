@@ -5,6 +5,7 @@ import type { ConfiguredRole, ResearchExecution, ResearchExecutionOriginKind } f
 import type { ResearchWorkbenchRelation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
 import { getMemberArt, leadArt } from "./agent-teams-artwork.js";
 import { fitGraph, layoutFocusedSession, layoutOverview, zoomGraphAt, type CanvasNode, type CanvasView } from "./research-agent-canvas-layout.js";
+import { Dialog } from "@blackbelt-technology/pi-dashboard-client-utils/Dialog";
 
 export interface CanvasRoleGroup {
   roleName: string;
@@ -34,6 +35,7 @@ interface Props {
   onAgent: (role: ConfiguredRole, execution?: ResearchExecution) => void;
   statusLabel: (status: string) => string;
   roleLabel: (role: string) => string;
+  visible?: boolean;
 }
 
 const originTint = (origin?: ResearchExecutionOriginKind) =>
@@ -55,12 +57,13 @@ const verticalBranch = (parent: CanvasNode, child: CanvasNode) =>
 const isLive = (status: string) => ["streaming", "started", "running"].includes(status);
 
 /** A read-only map of recorded sessions and their observed child roles. */
-export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, statusLabel, roleLabel }: Props) {
+export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, statusLabel, roleLabel, visible = true }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; startX: number; startY: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [focusedId, setFocusedId] = useState<string | null>(null);
-  const [expandedRoleGroup, setExpandedRoleGroup] = useState<CanvasRoleGroup | null>(null);
+  const [expandedGroupKey, setExpandedGroupKey] = useState<{ sessionId: string; roleName: string } | null>(null);
+  const expandedRoleGroup = expandedGroupKey ? clusters.find(cluster => cluster.sessionExec.id === expandedGroupKey.sessionId)?.childRoleGroups.find(group => group.roleName === expandedGroupKey.roleName) : undefined;
   const [query, setQuery] = useState("");
   const [rolePage, setRolePage] = useState(0);
   const [size, setSize] = useState({ width: 800, height: 520 });
@@ -88,7 +91,8 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
     const element = viewportRef.current;
     if (!element) return;
     const measure = () => {
-      const width = element.clientWidth || 800, height = element.clientHeight || 520;
+      if (!visible || element.clientWidth === 0) return;
+      const width = element.clientWidth, height = element.clientHeight || 520;
       setSize(previous => previous.width === width && previous.height === height ? previous : { width, height });
     };
     measure();
@@ -96,7 +100,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
     observer?.observe(element);
     window.addEventListener("resize", measure);
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
-  }, []);
+  }, [visible]);
 
   // Keep the user's pan/zoom while live status updates arrive; refit only when the topology changes.
   useLayoutEffect(() => {
@@ -155,7 +159,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
 
   const parentNode = (node: CanvasNode, cluster: CanvasSessionCluster, inFocus: boolean) => {
     const row = cluster.sessionExec;
-    const liveNode = isLive(row.status);
+    const liveNode = !(stale && row.source === "observation") && isLive(row.status);
     return (
       <button
         key={node.id} type="button" data-testid="canvas-session-node"
@@ -164,21 +168,21 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
         style={nodeStyle(node)}
         className={`win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
           liveNode
-            ? "ring-2 ring-emerald-500 shadow-[0_0_16px_rgba(16,185,129,0.35)] border-l-emerald-500 bg-gradient-to-br from-emerald-500/10 to-transparent"
+            ? "border-l-[var(--accent-green)]"
             : cluster.isCaptain
             ? "border-l-[var(--accent-orange)]"
             : "border-l-[var(--accent-blue)]"
         }`}
       >
         <span className="flex min-w-0 items-center gap-2">
-          <div className={`relative shrink-0 ${liveNode ? "ring-2 ring-emerald-400 rounded-full animate-pulse" : ""}`}>
+          <div className="relative shrink-0">
             <img src={cluster.isCaptain ? leadArt : getMemberArt(cluster.title, false)} alt="" className="h-8 w-8 shrink-0 object-contain" />
           </div>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[12px] font-bold text-[var(--text-primary)]" title={cluster.title}>{cluster.title}</span>
             <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px]">
               <span className={`font-semibold ${cluster.isCaptain ? "text-[var(--accent-orange)]" : "text-[var(--accent-blue)]"}`}>
-                {cluster.isCaptain ? "👑 主agent" : "🤖 协同agent"}
+                {cluster.isCaptain ? "当前交互入口" : "独立协同会话"}
               </span>
               <span className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${originTint(cluster.origin)}`}>
                 {originGlyph(cluster.origin)}
@@ -193,7 +197,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
         </span>
         <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={[cluster.creatorLabel && `创建者：${cluster.creatorLabel}`, cluster.workflowDuty].filter(Boolean).join(" · ") || cluster.title}>
           {cluster.origin === "lead-agent-created" && cluster.creatorLabel ? `创建者：${cluster.creatorLabel} · ` : ""}
-          {cluster.workflowDuty ?? "科研工作流协同推进"}
+          {cluster.workflowDuty ?? "暂无已记录的任务职责"}
         </span>
         <span className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
           {liveNode ? (
@@ -207,8 +211,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
           ) : (
             <span className="inline-flex min-w-0 items-center gap-1 truncate">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]" />
-              {row.status === "idle" ? "就绪待命" : statusLabel(row.status)}
-              {stale && row.source === "observation" ? " · 观测已过期" : ""}
+              {stale && row.source === "observation" ? "观测已过期" : row.status === "idle" ? "就绪待命" : statusLabel(row.status)}
             </span>
           )}
           <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-2 py-0.5 font-semibold text-[var(--accent-text)]">
@@ -288,8 +291,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
             const current = group.latest;
             const summary = (current.prompt ?? current.summary ?? "").replace(/\s+/g, " ").trim();
             const hasMultiple = group.executions.length > 1;
-            const anyLive = group.executions.some(ex => isLive(ex.status));
-            const roleLive = isLive(current.status) || anyLive;
+            const roleLive = group.executions.some(ex => !(stale && ex.source === "observation") && isLive(ex.status));
 
             return (
               <div key={node.id} style={nodeStyle(node)} className="relative group">
@@ -316,14 +318,14 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                   aria-label={`查看 ${roleLabel(group.roleName)} 详情`}
                   onClick={() => {
                     if (hasMultiple) {
-                      setExpandedRoleGroup(group);
+                      setExpandedGroupKey({ sessionId: focused.sessionExec.id, roleName: group.roleName });
                     } else {
                       onAgent(group.roleObj, current);
                     }
                   }}
                   className={`relative z-10 w-full h-full win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
                     roleLive
-                      ? "border-l-emerald-500 ring-2 ring-emerald-500/80 shadow-[0_0_16px_rgba(16,185,129,0.35)] bg-gradient-to-br from-emerald-500/10 to-transparent"
+                      ? "border-l-[var(--accent-green)]"
                       : hasMultiple
                       ? "border-l-[var(--accent-purple)] hover:border-l-[var(--accent-primary)] hover:shadow-md"
                       : "border-l-[var(--accent-blue)]"
@@ -333,7 +335,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                     <img
                       src={getMemberArt(group.roleName, false)}
                       alt=""
-                      className={`h-7 w-7 shrink-0 object-contain ${roleLive ? "ring-1 ring-emerald-400 rounded-full animate-pulse" : ""}`}
+                      className="h-7 w-7 shrink-0 object-contain"
                     />
                     <span
                       className="min-w-0 flex-1 truncate text-[11px] font-bold text-[var(--text-primary)]"
@@ -369,8 +371,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                       </span>
                     ) : (
                       <span className="truncate text-[10px] text-[var(--text-secondary)]">
-                        {statusLabel(current.status)}
-                        {stale && current.source === "observation" ? " · 观测已过期" : ""}
+                        {stale && current.source === "observation" ? "观测已过期" : statusLabel(current.status)}
                       </span>
                     )}
                     {hasMultiple && (
@@ -393,7 +394,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
         {!focused && (
           <div aria-label="连线图例" className="flex items-center gap-3">
             <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t border-dashed border-[var(--text-tertiary)]" />会话分组</span>
-            {relations.length > 0 && <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t-2 border-dashed border-[var(--accent-purple)]" />任务派发</span>}
+            {relations.length > 0 && <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t-2 border-dashed border-[var(--accent-purple)]" />已记录的派发 / 交接关系</span>}
           </div>
         )}
         {focused && <button type="button" onClick={() => onAgent(focused.roleObj, focused.sessionExec)} className="inline-flex items-center gap-1 font-medium text-[var(--accent-text)] hover:underline"><Icon path={mdiOpenInNew} size={0.5} />会话详情与纠偏</button>}
@@ -401,10 +402,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
 
       {/* 铺开各轮独立执行卡片的轻量级弹层 (Spread Out Execution Cards) */}
       {expandedRoleGroup && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-xs p-4 animate-in fade-in duration-150"
-          onClick={() => setExpandedRoleGroup(null)}
-        >
+        <Dialog open={visible} onClose={() => setExpandedGroupKey(null)} size="full" flush ariaLabel={`${roleLabel(expandedRoleGroup.roleName)} 的执行轮次`}>
           <div
             className="win11-card w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl border border-[var(--border-strong)] bg-[var(--bg-primary)] rounded-2xl"
             onClick={(e) => e.stopPropagation()}
@@ -433,7 +431,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
               </div>
               <button
                 type="button"
-                onClick={() => setExpandedRoleGroup(null)}
+                onClick={() => setExpandedGroupKey(null)}
                 className="win11-btn px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-1 rounded-lg"
               >
                 <Icon path={mdiClose} size={0.7} />
@@ -446,23 +444,23 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
               {expandedRoleGroup.executions.map((ex, roundIdx) => {
                 const roundNumber = expandedRoleGroup.executions.length - roundIdx;
                 const isLatest = roundIdx === 0;
-                const execLive = isLive(ex.status);
+                const execLive = !(stale && ex.source === "observation") && isLive(ex.status);
                 const taskSnippet = (ex.prompt ?? ex.output ?? "")
                   .replace(/^Task:\s*/i, "")
                   .replace(/\s+/g, " ")
                   .trim();
 
                 return (
-                  <div
+                  <button type="button"
                     key={ex.id}
                     onClick={() => {
                       const targetEx = ex;
-                      setExpandedRoleGroup(null);
+                      setExpandedGroupKey(null);
                       onAgent(expandedRoleGroup.roleObj, targetEx);
                     }}
                     className={`win11-card-interactive cursor-pointer flex flex-col justify-between p-4 rounded-xl border text-left transition-all ${
                       execLive
-                        ? "ring-2 ring-emerald-500 border-emerald-500/80 shadow-[0_0_16px_rgba(16,185,129,0.25)] bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent"
+                        ? "border-[var(--accent-green)] bg-[var(--bg-primary)]"
                         : "border-[var(--border-primary)] hover:border-[var(--accent-primary)] hover:shadow-md bg-[var(--bg-primary)]"
                     }`}
                   >
@@ -485,7 +483,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                           </span>
                         ) : (
                           <span className="rounded bg-[var(--bg-secondary)] border border-[var(--border-secondary)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">
-                            {statusLabel(ex.status)}
+                            {stale && ex.source === "observation" ? "观测已过期" : statusLabel(ex.status)}
                           </span>
                         )}
                       </div>
@@ -509,12 +507,12 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                         进入此轮详情 <span>→</span>
                       </span>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </div>
-        </div>
+        </Dialog>
       )}
     </section>
   );

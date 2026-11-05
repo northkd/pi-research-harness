@@ -45,7 +45,6 @@ import { SessionHeader } from "./components/session/SessionHeader.js";
 import { SessionList } from "./components/session/SessionList.js";
 import { SpawnErrorToastHost } from "./components/session/SpawnErrorToastHost.js";
 import { TokenStatsBar } from "./components/session/TokenStatsBar.js";
-import { SpeedIndicator } from "@blackbelt-technology/pi-dashboard-speed-plugin";
 // Settings panel: lazy boundary (own chunk, off the cold-landing entry).
 // See change: shrink-client-entry-lazy-islands.
 import { LazySettingsPanel as SettingsPanel } from "./components/settings/LazySettingsPanel.js";
@@ -2567,6 +2566,7 @@ export default function App() {
     <div className="flex-1 flex flex-col min-w-0 h-full">
       {connectionBanner}
       <SessionHeader
+        hideLayoutSwitch
         session={sessions.get(selectedId)}
         state={selectedState}
         onRename={handleRenameSession}
@@ -2598,75 +2598,6 @@ export default function App() {
         onOpenExtensionModulePicker={() => setExtensionModulePickerOpen(true)}
         onRefresh={() => handleRefreshChat(selectedId)}
       />
-      {/* Mobile info strip */}
-      {isMobile && selectedSession && (
-        <div className="px-4 py-1.5 border-b border-[var(--border-primary)] text-xs text-[var(--text-tertiary)]">
-          <div className="flex items-center gap-2 flex-wrap">
-            {(selectedState.model || selectedSession.model) && (
-              <span>{selectedState.model || selectedSession.model}</span>
-            )}
-            {(selectedState.thinkingLevel || selectedSession.thinkingLevel) && (
-              <span>💭 {selectedState.thinkingLevel || selectedSession.thinkingLevel}</span>
-            )}
-            {composerStatus === "streaming" && selectedState.currentTool && (
-              <span className="text-yellow-400">⚡ {selectedState.currentTool}</span>
-            )}
-            {composerStatus === "streaming" && !selectedState.currentTool && (
-              <span className="text-green-400">{t("status.thinking", undefined, "Thinking...")}</span>
-            )}
-            <span className="flex-1" />
-          </div>
-          {selectedContextUsage && selectedContextUsage.contextWindow > 0 && (
-            <div className="mt-1">
-              <div data-testid="session-context-row" className="flex items-center gap-2 text-[10px]">
-                <SpeedIndicator sessionId={selectedId} sessionStatus={selectedState.status} costOnly align="left" />
-                <span>{selectedContextUsage.tokens != null ? `${Math.round((selectedContextUsage.tokens / 1000))}k` : "—"}</span>
-                <div className="flex-1 h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
-                  {selectedContextUsage.tokens != null && (
-                    <div
-                      className="h-full bg-blue-500 rounded-full"
-                      style={{ width: `${Math.min((selectedContextUsage.tokens / selectedContextUsage.contextWindow) * 100, 100)}%` }}
-                    />
-                  )}
-                </div>
-                <span>{Math.round(selectedContextUsage.contextWindow / 1000)}k</span>
-              </div>
-            </div>
-          )}
-          {(!selectedContextUsage || selectedContextUsage.contextWindow <= 0) && (
-            <div className="flex justify-start">
-              <SpeedIndicator sessionId={selectedId} sessionStatus={selectedState.status} costOnly align="left" />
-            </div>
-          )}
-        </div>
-      )}
-      {!isMobile && (() => {
-        // Effective pref = override ?? global ?? true (default visible while
-        // prefs load). "Token stats bar" gates the butterfly chart + stats;
-        // "Context usage bar" independently gates the progress bar.
-        // See change: configurable-chat-display.
-        const statsOverride = selectedSession?.displayPrefsOverride?.tokenStatsBar;
-        const showStats = statsOverride ?? displayPrefs?.tokenStatsBar ?? true;
-        const ctxOverride = selectedSession?.displayPrefsOverride?.contextUsageBar;
-        const showContextBar = ctxOverride ?? displayPrefs?.contextUsageBar ?? true;
-        if (!showStats && !showContextBar) return null;
-        return (
-          <TokenStatsBar
-            turnStats={selectedState.turnStats}
-            contextUsage={selectedContextUsage}
-            tokensIn={selectedState.tokensIn}
-            tokensOut={selectedState.tokensOut}
-            cacheRead={selectedState.cacheRead}
-            cacheWrite={selectedState.cacheWrite}
-            cost={selectedState.cost}
-            sessionId={selectedId}
-            sessionStatus={selectedState.status}
-            onTurnClick={(turnIndex) => chatViewRef.current?.scrollToTurn(turnIndex)}
-            showStats={showStats}
-            showContextBar={showContextBar}
-          />
-        );
-      })()}
       {/* This chain reads LIVE route matches and is still load-bearing: on
           desktop `/session/:id/diff` and the `/folder/:cwd/pi-resources`
           redirect reach their surface through here, because `ShellContent`
@@ -2724,6 +2655,70 @@ export default function App() {
         <SessionSplitView
           chat={
             <>
+      {/* Mobile info strip */}
+      {isMobile && selectedSession && (
+        <div className="px-4 py-1.5 border-b border-[var(--border-primary)] text-xs text-[var(--text-tertiary)]">
+          <div className="flex items-center gap-2 flex-wrap">
+            {(selectedState.model || selectedSession.model) && (
+              <span>{selectedState.model || selectedSession.model}</span>
+            )}
+            {(selectedState.thinkingLevel || selectedSession.thinkingLevel) && (
+              <span>💭 {selectedState.thinkingLevel || selectedSession.thinkingLevel}</span>
+            )}
+            {composerStatus === "streaming" && selectedState.currentTool && (
+              <span className="text-yellow-400">⚡ {selectedState.currentTool}</span>
+            )}
+            {composerStatus === "streaming" && !selectedState.currentTool && (
+              <span className="text-green-400">{t("status.thinking", undefined, "Thinking...")}</span>
+            )}
+            <span className="flex-1" />
+          </div>
+          {selectedContextUsage && selectedContextUsage.contextWindow > 0 && (
+            <div className="mt-1">
+              <div data-testid="session-context-row" className="flex items-center gap-2 text-[10px]">
+                <span>{selectedContextUsage.tokens != null ? `${Math.round((selectedContextUsage.tokens / 1000))}k` : "—"}</span>
+                <div className="flex-1 h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
+                  {selectedContextUsage.tokens != null && (
+                    <div
+                      className="h-full bg-blue-500 rounded-full"
+                      style={{ width: `${Math.min((selectedContextUsage.tokens / selectedContextUsage.contextWindow) * 100, 100)}%` }}
+                    />
+                  )}
+                </div>
+                <span>{Math.round(selectedContextUsage.contextWindow / 1000)}k</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {!isMobile && (() => {
+        // Effective pref = override ?? global ?? true (default visible while
+        // prefs load). "Token stats bar" gates the butterfly chart + stats;
+        // "Context usage bar" independently gates the progress bar.
+        // See change: configurable-chat-display.
+        const statsOverride = selectedSession?.displayPrefsOverride?.tokenStatsBar;
+        const showStats = statsOverride ?? displayPrefs?.tokenStatsBar ?? true;
+        const ctxOverride = selectedSession?.displayPrefsOverride?.contextUsageBar;
+        const showContextBar = ctxOverride ?? displayPrefs?.contextUsageBar ?? true;
+        if (!showStats && !showContextBar) return null;
+        return (
+          <TokenStatsBar
+            turnStats={selectedState.turnStats}
+            contextUsage={selectedContextUsage}
+            tokensIn={selectedState.tokensIn}
+            tokensOut={selectedState.tokensOut}
+            cacheRead={selectedState.cacheRead}
+            cacheWrite={selectedState.cacheWrite}
+            cost={selectedState.cost}
+            sessionId={selectedId}
+            sessionStatus={selectedState.status}
+            onTurnClick={(turnIndex) => chatViewRef.current?.scrollToTurn(turnIndex)}
+            showStats={showStats}
+            showCost={false}
+            showContextBar={showContextBar}
+          />
+        );
+      })()}
           {/* Plugin slot: content-header-sticky — contributions from
               flows-plugin (FlowDashboardClaim) and future plugins. The
               shell renders zero flow-specific content. See change:
@@ -3338,6 +3333,7 @@ export default function App() {
             onRenameTerminal={handleRenameTerminal}
             onTerminalTitle={handleTerminalTitle}
             changeDetection
+            retainAuthoring
             connectionGeneration={connectionGeneration}
             onClearChanged={(path, gen) => {
               if (!selectedId) return;

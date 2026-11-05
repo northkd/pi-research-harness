@@ -3,11 +3,15 @@ import {
   mdiClose,
   mdiCurrencyCny,
   mdiFlash,
+  mdiFullscreen,
+  mdiFullscreenExit,
   mdiReceiptTextOutline,
   mdiSpeedometer,
 } from "@mdi/js";
 import Icon from "@mdi/react";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import "./details-panel.css";
 import { SessionCost } from "./SessionCost.js";
 import type { ActiveGeneration, BillingSummary, SpeedRecord, SpeedStatsResponse } from "./types.js";
 import { type SpeedMonitorState, useSpeedStats } from "./useSpeedStats.js";
@@ -50,6 +54,11 @@ function savedSize(key: string, fallback: number, minimum: number, available: nu
   } catch { return clampSize(fallback, minimum, available); }
 }
 
+function panelSpace(): { width: number; height: number } {
+  const compact = window.innerWidth <= 640;
+  return { width: window.innerWidth - (compact ? 16 : 24), height: window.innerHeight - (compact ? 16 : 76) };
+}
+
 /**
  * Top Context-Bar Speed & Performance Indicator (方案B)
  *
@@ -64,7 +73,6 @@ export function SpeedIndicator({
   sessionId,
   sessionStatus,
   className = "",
-  align = "left",
   monitor,
   costOnly = false,
 }: SpeedIndicatorProps) {
@@ -76,11 +84,18 @@ export function SpeedIndicator({
   const [billingHistoryTab, setBillingHistoryTab] = useState<"all" | "main" | "subagent">("all");
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+  const [maximized, setMaximized] = useState(false);
+  const closePanel = useCallback(() => {
+    setPopoverOpen(false);
+    buttonRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Resizable window dimensions (persisted)
-  const [popoverWidth, setPopoverWidth] = useState(() => savedSize("speed-monitor-popover-width", 560, 340, window.innerWidth - 24));
+  const [popoverWidth, setPopoverWidth] = useState(() => savedSize("speed-monitor-popover-width", 560, 340, panelSpace().width));
 
-  const [popoverHeight, setPopoverHeight] = useState(() => savedSize("speed-monitor-popover-height", 640, 300, window.innerHeight - 120));
+  const [popoverHeight, setPopoverHeight] = useState(() => savedSize("speed-monitor-popover-height", 720, 300, panelSpace().height));
 
   const isResizingRef = useRef<"width" | "bottom" | "corner" | null>(null);
   const startPosRef = useRef({ x: 0, y: 0, startW: 375, startH: 520 });
@@ -90,16 +105,17 @@ export function SpeedIndicator({
   useEffect(() => {
     if (!popoverOpen) resizeCleanupRef.current?.();
     const fit = () => {
-      const bounds = buttonRef.current?.getBoundingClientRect();
-      const width = bounds ? (align === "left" ? window.innerWidth - bounds.left - 12 : bounds.right - 12) : window.innerWidth - 24;
-      const height = bounds ? window.innerHeight - bounds.bottom - 20 : window.innerHeight - 120;
+      const { width, height } = panelSpace();
       setPopoverWidth(w => clampSize(w, 340, width));
       setPopoverHeight(h => clampSize(h, 300, height));
     };
     fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
-  }, [popoverOpen, align]);
+  }, [popoverOpen]);
+  useEffect(() => {
+    if (popoverOpen) closeRef.current?.focus({ preventScroll: true });
+  }, [popoverOpen]);
   useEffect(() => {
     try {
       localStorage.setItem("speed-monitor-popover-width", String(popoverWidth));
@@ -131,15 +147,12 @@ export function SpeedIndicator({
       const dy = moveEv.clientY - startPosRef.current.y;
 
       if (isResizingRef.current === "width" || isResizingRef.current === "corner") {
-        const deltaW = align === "left" ? dx : -dx;
-        const bounds = buttonRef.current?.getBoundingClientRect();
-        const available = bounds ? (align === "left" ? window.innerWidth - bounds.left - 12 : bounds.right - 12) : window.innerWidth - 24;
-        const newW = clampSize(startPosRef.current.startW + deltaW, 340, available);
+        // The panel is docked to the right: its left edge grows toward the left.
+        const newW = clampSize(startPosRef.current.startW - dx, 340, panelSpace().width);
         setPopoverWidth(newW);
       }
       if (isResizingRef.current === "bottom" || isResizingRef.current === "corner") {
-        const available = window.innerHeight - (buttonRef.current?.getBoundingClientRect().bottom ?? 100) - 20;
-        const newH = clampSize(startPosRef.current.startH + dy, 300, available);
+        const newH = clampSize(startPosRef.current.startH + dy, 300, panelSpace().height);
         setPopoverHeight(newH);
       }
     };
@@ -174,7 +187,10 @@ export function SpeedIndicator({
       }
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPopoverOpen(false);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePanel();
+      }
     };
     document.addEventListener("mousedown", handleDocumentClick);
     document.addEventListener("keydown", handleKeyDown);
@@ -182,7 +198,7 @@ export function SpeedIndicator({
       document.removeEventListener("mousedown", handleDocumentClick);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [popoverOpen]);
+  }, [popoverOpen, closePanel]);
 
   // Don't render anything if no data and not streaming
   if (!stats && !isStreaming) {
@@ -222,11 +238,12 @@ export function SpeedIndicator({
         aria-label="会话用量与计费"
         aria-haspopup="dialog"
         aria-expanded={popoverOpen}
-        onClick={() => setPopoverOpen((prev) => !prev)}
-        title="点击查看详细输出速率、主/子智能体模型与计费明细（窗口可自由拖拽缩放）"
-        className={`group flex h-6.5 items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[11px] font-mono leading-none cursor-pointer select-none transition-all shadow-sm active:scale-95 ${
+        aria-controls={popoverOpen ? panelId : undefined}
+        onClick={() => popoverOpen ? closePanel() : setPopoverOpen(true)}
+        title="查看本月费用、主/子智能体分账与输出性能；详情面板可调大小或最大化"
+        className={`research-usage-trigger group flex h-6.5 items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[11px] font-mono leading-none cursor-pointer select-none transition-all shadow-sm active:scale-95 ${
           costOnly
-            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/60 shadow-emerald-500/5 hover:shadow-md"
+            ? "border-[var(--border-primary)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:border-[var(--accent-primary)]"
             : isStreaming
             ? "bg-[var(--bg-surface)] border-[var(--accent-green)] text-[var(--accent-green-text)] shadow-sm shadow-emerald-500/10"
             : "bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[var(--text-secondary)] hover:border-[var(--border-secondary)] hover:bg-[var(--bg-surface)]"
@@ -234,9 +251,9 @@ export function SpeedIndicator({
       >
         {costOnly ? (
           <span className="flex items-center gap-1 font-sans">
-            <SafeIcon path={mdiCurrencyCny} size={0.48} className="text-emerald-400 transition-transform group-hover:scale-110" />
-            <span className="font-semibold text-emerald-400 text-[11px]">费用</span>
-            <span className="font-mono font-bold text-emerald-300 ml-0.5">
+            <SafeIcon path={mdiCurrencyCny} size={0.48} className="text-[var(--accent-primary)]" />
+            <span className="font-semibold text-[var(--text-secondary)] text-[11px]">费用</span>
+            <span className="font-mono font-semibold text-[var(--text-primary)] ml-0.5">
               <SessionCost billing={stats?.billing} />
             </span>
           </span>
@@ -276,98 +293,90 @@ export function SpeedIndicator({
         )}
       </button>
 
-      {/* Popover on click: uses system theme variables, 100% solid, resizable */}
-      {popoverOpen && (
+      {/* A portal keeps the right-side inspector out of clipped editor/header containers. */}
+      {popoverOpen && createPortal(
         <div
           ref={popoverRef}
+          id={panelId}
           data-testid="speed-indicator-popover"
+          data-maximized={maximized}
           role="dialog"
           aria-label="会话用量与计费"
-          style={{
-            width: `${popoverWidth}px`,
-            height: `${popoverHeight}px`,
-            maxHeight: "calc(100vh - 120px)",
-            maxWidth: "calc(100vw - 24px)",
-          }}
-          className={`@container absolute ${align === "left" ? "left-0" : "right-0"} top-full mt-2 z-50 flex flex-col rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-xs shadow-2xl text-[var(--text-primary)] select-text`}
-          onClick={(e) => e.stopPropagation()}
+          aria-modal="false"
+          style={{ width: maximized ? undefined : `${popoverWidth}px`, height: maximized ? undefined : `${popoverHeight}px` }}
+          className="research-usage-panel @container z-dialog flex flex-col text-[var(--text-primary)] select-text"
+          onClick={(event) => event.stopPropagation()}
         >
-          {/* Edge Resize Bar (调节宽度) */}
-          {align === "left" ? (
+          {!maximized && <>
             <div
-              onMouseDown={(e) => startResize("width", e)}
-              className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize group/resizer z-20 flex items-center justify-center select-none"
+              role="separator"
+              tabIndex={0}
+              aria-label="调整用量面板宽度"
+              aria-orientation="vertical"
+              aria-valuenow={Math.round(popoverWidth)}
+              aria-valuemin={Math.min(340, panelSpace().width)}
+              aria-valuemax={Math.min(850, panelSpace().width)}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                setPopoverWidth(width => clampSize(width + (event.key === "ArrowLeft" ? 24 : -24), 340, panelSpace().width));
+              }}
+              onMouseDown={(event) => startResize("width", event)}
+              className="research-usage-resize research-usage-resize-width"
               title="左右拖拽调节窗口宽度"
-            >
-              <div className="w-1 h-12 rounded-full bg-[var(--border-secondary)] opacity-50 group-hover/resizer:opacity-100 group-hover/resizer:bg-[var(--accent-primary)] group-hover/resizer:w-1.5 transition-all" />
-            </div>
-          ) : (
+            ><span /></div>
             <div
-              onMouseDown={(e) => startResize("width", e)}
-              className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize group/resizer z-20 flex items-center justify-center select-none"
-              title="左右拖拽调节窗口宽度"
-            >
-              <div className="w-1 h-12 rounded-full bg-[var(--border-secondary)] opacity-50 group-hover/resizer:opacity-100 group-hover/resizer:bg-[var(--accent-primary)] group-hover/resizer:w-1.5 transition-all" />
-            </div>
-          )}
-
-          {/* Bottom Edge Resize Bar (调节高度) */}
-          <div
-            onMouseDown={(e) => startResize("bottom", e)}
-            className="absolute left-0 right-0 bottom-0 h-2.5 cursor-ns-resize group/b-resizer z-20 flex items-center justify-center select-none"
-            title="上下拖拽调节窗口高度"
-          >
-            <div className="h-1 w-12 rounded-full bg-[var(--border-secondary)] opacity-50 group-hover/b-resizer:opacity-100 group-hover/b-resizer:bg-[var(--accent-primary)] group-hover/b-resizer:h-1.5 transition-all" />
-          </div>
-
-          {/* Corner Resize Handle (对角调节) */}
-          {align === "left" ? (
+              role="separator"
+              tabIndex={0}
+              aria-label="调整用量面板高度"
+              aria-orientation="horizontal"
+              aria-valuenow={Math.round(popoverHeight)}
+              aria-valuemin={Math.min(300, panelSpace().height)}
+              aria-valuemax={Math.min(850, panelSpace().height)}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+                event.preventDefault();
+                setPopoverHeight(height => clampSize(height + (event.key === "ArrowDown" ? 24 : -24), 300, panelSpace().height));
+              }}
+              onMouseDown={(event) => startResize("bottom", event)}
+              className="research-usage-resize research-usage-resize-height"
+              title="上下拖拽调节窗口高度"
+            ><span /></div>
             <div
-              onMouseDown={(e) => startResize("corner", e)}
-              className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize z-30 group/c-resizer flex items-end justify-end p-1 select-none"
+              onMouseDown={(event) => startResize("corner", event)}
+              className="research-usage-resize research-usage-resize-corner"
               title="对角拖拽同时调节宽高"
-            >
-              <div className="w-2.5 h-2.5 border-b-2 border-r-2 border-[var(--border-secondary)] group-hover/c-resizer:border-[var(--accent-primary)] transition-colors" />
-            </div>
-          ) : (
-            <div
-              onMouseDown={(e) => startResize("corner", e)}
-              className="absolute bottom-0 left-0 w-5 h-5 cursor-nesw-resize z-30 group/c-resizer flex items-end justify-start p-1 select-none"
-              title="对角拖拽同时调节宽高"
-            >
-              <div className="w-2.5 h-2.5 border-b-2 border-l-2 border-[var(--border-secondary)] group-hover/c-resizer:border-[var(--accent-primary)] transition-colors" />
-            </div>
-          )}
+            ><span /></div>
+          </>}
 
-          {/* Header */}
-          <div className="flex items-center justify-between pb-3 mb-3 border-b border-[var(--border-primary)] shrink-0">
-            <div className="flex items-center gap-2 font-bold text-[var(--text-primary)] text-sm">
-              <div className={`flex h-7 w-7 items-center justify-center rounded-lg shadow-sm ${
-                activeView === "billing" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"
-              }`}>
-                <SafeIcon
-                  path={activeView === "billing" ? mdiCurrencyCny : mdiSpeedometer}
-                  size={0.65}
-                />
-              </div>
-              <span>{activeView === "billing" ? "会话计费与模型消费明细" : "实时速度与模型性能明细"}</span>
-              <span className="text-[11px] text-[var(--text-secondary)] font-normal hidden @sm:inline select-none">
-                (边条可拖拽调节)
-              </span>
+          <header className="research-usage-header">
+            <div className="min-w-0 flex-1">
+              <p className="research-usage-eyebrow">用量与性能</p>
+              <h2 className="research-usage-title">{activeView === "billing" ? "本月费用明细" : "模型输出性能"}</h2>
+              <p className="research-usage-subtitle">{activeView === "billing" ? "主 Agent 与子任务的等价消耗 · 北京时间" : "输出速度、响应耗时与逐轮记录"}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setPopoverOpen(false)}
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
-              title="关闭"
-              aria-label="关闭用量面板"
-            >
-              <SafeIcon path={mdiClose} size={0.6} />
-            </button>
-          </div>
+            <div className="flex shrink-0 gap-1">
+              <button
+                type="button"
+                onClick={() => { resizeCleanupRef.current?.(); setMaximized(value => !value); }}
+                className="research-usage-icon-button"
+                title={maximized ? "还原面板大小" : "最大化用量面板"}
+                aria-label={maximized ? "还原用量面板" : "最大化用量面板"}
+                aria-pressed={maximized}
+              ><SafeIcon path={maximized ? mdiFullscreenExit : mdiFullscreen} size={0.8} /></button>
+              <button
+                ref={closeRef}
+                type="button"
+                onClick={closePanel}
+                className="research-usage-icon-button"
+                title="关闭"
+                aria-label="关闭用量面板"
+              ><SafeIcon path={mdiClose} size={0.75} /></button>
+            </div>
+          </header>
 
           {/* Sliding View Switcher Tabs (滑动的窗口切换控制器) */}
-          <div className="relative flex p-1 mb-3 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded-xl text-xs font-semibold select-none shrink-0 shadow-inner">
+          <div className="research-usage-tabs relative flex p-1 bg-[var(--bg-tertiary)] rounded-lg text-sm font-medium select-none shrink-0">
             {/* Sliding background pill indicator */}
             <div
               className="absolute top-1 bottom-1 rounded-lg transition-all duration-200 ease-out bg-[var(--bg-surface)] border border-[var(--border-secondary)] shadow-sm"
@@ -379,6 +388,7 @@ export function SpeedIndicator({
             <button
               type="button"
               data-testid="tab-view-speed"
+              aria-pressed={activeView === "speed"}
               onClick={() => setActiveView("speed")}
               className={`relative z-10 flex-1 py-1.5 flex items-center justify-center gap-1.5 cursor-pointer rounded-lg transition-colors ${
                 activeView === "speed"
@@ -386,12 +396,13 @@ export function SpeedIndicator({
                   : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
               }`}
             >
-              <SafeIcon path={mdiSpeedometer} size={0.48} className={activeView === "speed" ? "text-amber-400" : ""} />
+              <SafeIcon path={mdiSpeedometer} size={0.48} className={activeView === "speed" ? "text-[var(--accent-yellow-text)]" : ""} />
               <span>速度与性能</span>
             </button>
             <button
               type="button"
               data-testid="tab-view-billing"
+              aria-pressed={activeView === "billing"}
               onClick={() => setActiveView("billing")}
               className={`relative z-10 flex-1 py-1.5 flex items-center justify-center gap-1.5 cursor-pointer rounded-lg transition-colors ${
                 activeView === "billing"
@@ -399,18 +410,18 @@ export function SpeedIndicator({
                   : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
               }`}
             >
-              <SafeIcon path={mdiCurrencyCny} size={0.48} className={activeView === "billing" ? "text-emerald-400" : ""} />
+              <SafeIcon path={mdiCurrencyCny} size={0.48} className={activeView === "billing" ? "text-[var(--accent-green-text)]" : ""} />
               <span>计费明细</span>
               {billing && billing.sessionTotalCost > 0 && (
-                <span className="text-[11px] px-2 py-0.2 rounded-full bg-emerald-500/15 text-emerald-400 font-mono ml-1 font-semibold border border-emerald-500/20">
-                  ¥{billing.sessionTotalCost.toFixed(2)}
+                <span className="text-[11px] px-2 py-0.2 rounded-full bg-emerald-500/15 text-[var(--accent-green-text)] font-mono ml-1 font-semibold border border-emerald-500/20">
+                  <SessionCost billing={billing} />
                 </span>
               )}
             </button>
           </div>
 
           {/* Keep filters and scroll positions mounted, but show only the selected pane. */}
-          <div className="flex-1 min-h-0 overflow-y-auto">
+          <div data-testid="usage-panel-scroll" className="research-usage-content flex-1 min-h-0 overflow-y-auto">
             <div className="min-w-0">
               {/* ======================================================== */}
               {/* SLIDE 1: 速度与性能 (Speed & Performance View)           */}
@@ -543,7 +554,8 @@ export function SpeedIndicator({
                         <button
                           type="button"
                           data-testid="tab-speed-all"
-                          onClick={() => setHistoryTab("all")}
+                          aria-pressed={historyTab === "all"}
+                        onClick={() => setHistoryTab("all")}
                           className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
                             historyTab === "all"
                               ? "bg-[var(--bg-surface)] text-[var(--text-primary)] font-medium"
@@ -555,7 +567,8 @@ export function SpeedIndicator({
                         <button
                           type="button"
                           data-testid="tab-speed-main"
-                          onClick={() => setHistoryTab("main")}
+                          aria-pressed={historyTab === "main"}
+                        onClick={() => setHistoryTab("main")}
                           className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
                             historyTab === "main"
                               ? "bg-[var(--bg-surface)] text-[var(--text-primary)] font-medium"
@@ -567,7 +580,8 @@ export function SpeedIndicator({
                         <button
                           type="button"
                           data-testid="tab-speed-subagent"
-                          onClick={() => setHistoryTab("subagent")}
+                          aria-pressed={historyTab === "subagent"}
+                        onClick={() => setHistoryTab("subagent")}
                           disabled={!stats.subagentHistory || stats.subagentHistory.length === 0}
                           className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
                             historyTab === "subagent"
@@ -652,22 +666,22 @@ export function SpeedIndicator({
                         </div>
                       )}
                       <div className="text-2xl font-extrabold font-mono text-[var(--accent-green-text)] tracking-tight mt-1 flex items-baseline gap-1.5">
-                        <span>{billing ? `¥${billing.sessionTotalCost.toFixed(4)}` : "—"}</span>
+                        <span data-testid="billing-total">{billing ? (!billing.complete && billing.sessionTotalCost === 0 ? "待定价" : `${billing.complete ? "" : "≥"}¥${billing.sessionTotalCost.toFixed(4)}`) : "—"}</span>
                         {billing?.complete ? (
-                          <span className="text-[10px] font-sans font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                          <span className="text-[10px] font-sans font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-[var(--accent-green-text)] border border-emerald-500/30">
                             完整计费
                           </span>
                         ) : null}
                       </div>
                       {billing && !billing.complete && (
-                        <div className="text-[11px] text-amber-400 font-medium mt-1">
+                        <div className="text-[11px] text-[var(--accent-yellow-text)] font-medium mt-1">
                           {billing.unpricedTurns} 轮待定价 · {billing.invalidRecords} 条用量未能读取
                         </div>
                       )}
                     </div>
                     {billing?.totalCacheSavings && billing.totalCacheSavings > 0 ? (
                       <div className="text-right rounded-lg bg-emerald-500/10 border border-emerald-500/25 px-2.5 py-1.5">
-                        <div className="text-[10.5px] text-emerald-400 font-semibold">缓存节省</div>
+                        <div className="text-[10.5px] text-[var(--accent-green-text)] font-semibold">缓存节省</div>
                         <div className="text-xs font-mono text-[var(--accent-green-text)] font-bold">
                           +¥{billing.totalCacheSavings.toFixed(4)}
                         </div>
@@ -684,11 +698,11 @@ export function SpeedIndicator({
                       </span>
                     </div>
                     <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-[var(--bg-surface)] border border-purple-500/30 shadow-sm">
-                      <span className="text-purple-300 font-medium flex items-center gap-1">
+                      <span className="text-[var(--accent-purple-text)] font-medium flex items-center gap-1">
                         <SafeIcon path={mdiBrain} size={0.38} />
                         <span>Subagents:</span>
                       </span>
-                      <span className="font-mono text-purple-300 font-bold">
+                      <span className="font-mono text-[var(--accent-purple-text)] font-bold">
                         ¥{(billing?.subagentTotalCost ?? 0).toFixed(4)}
                       </span>
                     </div>
@@ -786,6 +800,7 @@ export function SpeedIndicator({
                     <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] p-0.5 rounded border border-[var(--border-primary)] text-[10px]">
                       <button
                         type="button"
+                        aria-pressed={billingHistoryTab === "all"}
                         onClick={() => setBillingHistoryTab("all")}
                         className={`px-1.5 py-0.2 rounded cursor-pointer transition-colors ${
                           billingHistoryTab === "all"
@@ -797,6 +812,7 @@ export function SpeedIndicator({
                       </button>
                       <button
                         type="button"
+                        aria-pressed={billingHistoryTab === "main"}
                         onClick={() => setBillingHistoryTab("main")}
                         className={`px-1.5 py-0.2 rounded cursor-pointer transition-colors ${
                           billingHistoryTab === "main"
@@ -808,6 +824,7 @@ export function SpeedIndicator({
                       </button>
                       <button
                         type="button"
+                        aria-pressed={billingHistoryTab === "subagent"}
                         onClick={() => setBillingHistoryTab("subagent")}
                         disabled={(stats?.billingSubagentHistory ?? stats?.subagentHistory ?? []).length === 0}
                         className={`px-1.5 py-0.2 rounded cursor-pointer transition-colors ${
@@ -827,7 +844,7 @@ export function SpeedIndicator({
                   </div>
 
                   {/* History item list */}
-                  <div className="flex-1 min-h-[100px] overflow-y-auto space-y-1 font-mono text-[10px] pr-0.5">
+                  <div data-testid="billing-history" className="flex-1 min-h-[100px] overflow-y-auto space-y-1 font-mono text-[10px] pr-0.5">
                     {billingDisplayList.slice(-25).reverse().map((r, i) => (
                       <div
                         key={r.id || i}
@@ -875,7 +892,9 @@ export function SpeedIndicator({
               </div>
             </div>
           </div>
-        </div>
+          <footer className="research-usage-footer">费用按北京时间每月 1 日归零；等价消耗以当前定价计算。</footer>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -20,7 +20,6 @@ import { InlineRenameInput } from "../primitives/InlineRenameInput.js";
 // SessionFlowActionsClaim. See change: pluginize-flows-via-registry.
 import { SearchableSelectDialog, type SelectOption } from "../primitives/SearchableSelectDialog.js";
 import { MobileActionMenu } from "../shell/MobileActionMenu.js";
-import { LayoutModeSwitch } from "../split/LayoutModeSwitch.js";
 import { useOptionalSplitWorkspace } from "../split/SplitWorkspaceContext.js";
 import { TagChip } from "../tags/TagChip.js";
 import { TagEditor } from "../tags/TagEditor.js";
@@ -28,7 +27,11 @@ import { CountBadges } from "./CountBadges.js";
 import { PiBelowFloorWarning } from "./PiBelowFloorWarning.js";
 import { VaultBindingsChip } from "./VaultBindingsChip.js";
 
+import { LayoutModeSwitch } from "../split/LayoutModeSwitch.js";
+
 interface Props {
+  /** The task navigation owns layout controls in the main shell. */
+  hideLayoutSwitch?: boolean;
   session?: DashboardSession;
   state: SessionState;
   onRename?: (sessionId: string, name: string) => void;
@@ -188,7 +191,7 @@ function MobileAttachButton({ session, openspecChanges, onAttach, onDetach }: {
 }
 
 /** Mobile header: back + name + attach icon + kebab */
-function MobileHeader({ session, showBack, onBack, isRenaming, onConfirmRename, onCancelRename, canRename, onStartRename, mobileActions, onReadArtifact }: {
+function MobileHeader({ session, showBack, onBack, isRenaming, onConfirmRename, onCancelRename, canRename, onStartRename, mobileActions, onReadArtifact, hideLayoutSwitch }: {
   session: DashboardSession;
   showBack?: boolean;
   onBack?: () => void;
@@ -197,6 +200,7 @@ function MobileHeader({ session, showBack, onBack, isRenaming, onConfirmRename, 
   onCancelRename: () => void;
   canRename: boolean;
   onStartRename: () => void;
+  hideLayoutSwitch?: boolean;
   mobileActions?: SessionHeaderMobileActions;
   onReadArtifact?: (changeName: string, artifactId: string) => void;
 }) {
@@ -244,7 +248,7 @@ function MobileHeader({ session, showBack, onBack, isRenaming, onConfirmRename, 
           onDetach={mobileActions.onDetachProposal}
         />
       )}
-      <LayoutModeSwitch />
+      {!hideLayoutSwitch && <LayoutModeSwitch />}
       {mobileActions && (
         <MobileActionMenu
           session={session}
@@ -333,7 +337,7 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
-export function SessionHeader({ session, state, onRename, showBack, onBack, mobileActions, commands, onSendPrompt, openspecChanges, onAttachProposal, onDetachProposal, hasFileChanges, onOpenDiffView, onRefresh, onReadArtifact, onOpenExtensionModulePicker, onResume, allTags, onSetTags, onSeekToCard }: Props) {
+export function SessionHeader({ hideLayoutSwitch = false, session, state, onRename, showBack, onBack, mobileActions, commands, onSendPrompt, openspecChanges, onAttachProposal, onDetachProposal, hasFileChanges, onOpenDiffView, onRefresh, onReadArtifact, onOpenExtensionModulePicker, onResume, allTags, onSetTags, onSeekToCard }: Props) {
   const [now, setNow] = useState(Date.now());
   const [isRenaming, setIsRenaming] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -368,7 +372,7 @@ export function SessionHeader({ session, state, onRename, showBack, onBack, mobi
 
   if (!session) {
     return (
-      <div className="px-4 py-2 border-b border-[var(--border-primary)] text-sm text-[var(--text-tertiary)]">
+      <div className="workspace-session-header px-4 py-2 border-b border-[var(--border-primary)] text-sm text-[var(--text-tertiary)]">
         {i18nT("session.noSessionSelected", undefined, "No session selected")}
       </div>
     );
@@ -390,6 +394,7 @@ export function SessionHeader({ session, state, onRename, showBack, onBack, mobi
   if (isMobile) {
     return (
       <MobileHeader
+        hideLayoutSwitch={hideLayoutSwitch}
         session={session}
         showBack={showBack}
         onBack={onBack}
@@ -419,7 +424,7 @@ export function SessionHeader({ session, state, onRename, showBack, onBack, mobi
 
   // Desktop: full header
   return (
-    <div className="px-4 py-2 border-b border-[var(--border-primary)] flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm" data-testid="session-header">
+    <div className="workspace-session-header px-4 py-2 border-b border-[var(--border-primary)] flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm" data-testid="session-header">
       {showBack && onBack && (
         <button
           onClick={onBack}
@@ -460,7 +465,7 @@ export function SessionHeader({ session, state, onRename, showBack, onBack, mobi
           (change: redesign-split-layout-controls). Model + thinking level were
           dropped from the header (both already render on the session card); the
           pi version segment below is kept as the only per-session pi surface. */}
-      <LayoutModeSwitch />
+      {!hideLayoutSwitch && <LayoutModeSwitch />}
       {onSeekToCard && (
         <button
           type="button"

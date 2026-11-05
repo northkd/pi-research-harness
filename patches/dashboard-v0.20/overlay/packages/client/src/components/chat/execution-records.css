@@ -1,0 +1,31 @@
+/* Execution records share the chat's original renderers and interaction state. */
+.research-execution-group {
+  border-left-color: var(--border-subtle);
+  padding-left: 10px;
+}
+
+.research-execution-group > div:first-child {
+  min-width: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-tertiary) 60%, transparent);
+}
+
+.research-execution-group [data-testid="tool-burst-header"] {
+  min-height: 32px;
+  padding: 6px 8px;
+  line-height: 1.5;
+}
+
+.research-execution-group [data-attention-only="true"] {
+  margin-top: 8px;
+}
+
+.research-execution-group [data-tool-call-id] {
+  min-width: 0;
+}
+
+@media (pointer: coarse) {
+  .research-execution-group [data-testid="tool-burst-header"] {
+    min-height: 44px;
+  }
+}

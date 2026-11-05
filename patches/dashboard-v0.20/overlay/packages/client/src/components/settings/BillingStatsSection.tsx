@@ -6,10 +6,12 @@ import {
 import { useEffect, useId, useState } from "react";
 import { useApiBase } from "../../lib/api/api-context.js";
 import { useI18n } from "../../lib/i18n/i18n.js";
+import "./BillingStatsSection.css";
 
-type View = "directories" | "sessions" | "models";
+const detailViews = ["directories", "sessions", "models"] as const;
+type View = (typeof detailViews)[number];
 const controlSurfaceClass =
-  "min-h-9 rounded-md border border-[var(--border-secondary)] bg-[var(--bg-secondary)] text-[var(--text-primary)]";
+  "billing-control min-h-9 rounded-md border border-[var(--border-secondary)] bg-[var(--bg-primary)] text-[var(--text-primary)]";
 const controlClass = `${controlSurfaceClass} px-2 text-sm`;
 const detailControlClass = `${controlSurfaceClass} min-w-0 px-1.5 text-xs sm:px-2 sm:text-sm`;
 // Entry names stay left-aligned; the amount column is pinned right with
@@ -138,13 +140,13 @@ export function BillingStatsSection() {
     <section
       data-testid="billing-statistics"
       aria-busy={loading}
-      className="min-w-0 space-y-4"
+      className="billing-statistics min-w-0 space-y-4"
     >
       <div>
         <h2 className="text-lg font-semibold text-[var(--text-primary)]">
           {t("settings.billing", undefined, "Billing statistics")}
         </h2>
-        <p className="mt-1 text-xs leading-relaxed text-[var(--text-tertiary)]">
+        <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">
           {t(
             "billing.description",
             undefined,
@@ -153,7 +155,7 @@ export function BillingStatsSection() {
         </p>
       </div>
 
-      <div className="flex flex-wrap items-end gap-2">
+      <div className="billing-statistics-filters flex flex-wrap items-end gap-3">
         <label
           htmlFor={`${id}-month`}
           className="flex flex-col gap-1 text-xs text-[var(--text-secondary)]"
@@ -241,12 +243,12 @@ export function BillingStatsSection() {
         ).map(([key, label]) => (
           <div
             key={key}
-            className="min-w-0 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3"
+            className="billing-statistics-metric min-w-0 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4"
           >
             <div className="text-xs text-[var(--text-tertiary)]">{label}</div>
             <div
               data-testid={`billing-${key}`}
-              className="mt-1 break-all font-mono text-xl font-semibold text-[var(--accent-green-text)]"
+              className="mt-2 break-all font-mono text-2xl font-semibold tabular-nums text-[var(--text-primary)]"
             >
               {amount(key)}
             </div>
@@ -337,6 +339,18 @@ export function BillingStatsSection() {
                   id={`${id}-${value}`}
                   aria-controls={`${id}-details`}
                   aria-selected={view === value}
+                  tabIndex={view === value ? 0 : -1}
+                  onKeyDown={(event) => {
+                    const index = detailViews.indexOf(value);
+                    const next = event.key === "ArrowRight" ? (index + 1) % detailViews.length
+                      : event.key === "ArrowLeft" ? (index + detailViews.length - 1) % detailViews.length
+                      : event.key === "Home" ? 0 : event.key === "End" ? detailViews.length - 1 : null;
+                    if (next === null) return;
+                    event.preventDefault();
+                    const nextView = detailViews[next];
+                    setView(nextView);
+                    document.getElementById(`${id}-${nextView}`)?.focus();
+                  }}
                   className={`${detailControlClass} truncate ${view === value ? "font-semibold ring-1 ring-[var(--accent-blue)]" : ""}`}
                   onClick={() => setView(value)}
                 >
@@ -384,7 +398,7 @@ export function BillingStatsSection() {
                   <div
                     key={entry.cwd}
                     data-testid="billing-directory-row"
-                    className="flex min-w-0 items-center gap-3 rounded-md border border-[var(--border-primary)] p-3"
+                    className="billing-statistics-row flex min-w-0 items-center gap-3 border-b border-[var(--border-primary)] py-4"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="break-all text-sm text-[var(--text-primary)]">
@@ -423,7 +437,7 @@ export function BillingStatsSection() {
                   <div
                     key={session.key}
                     data-testid="billing-session-row"
-                    className="min-w-0 rounded-md border border-[var(--border-primary)] p-3"
+                    className="billing-statistics-row min-w-0 border-b border-[var(--border-primary)] py-4"
                   >
                     <div className="flex min-w-0 items-start gap-3">
                       <div className="min-w-0 flex-1">
@@ -476,7 +490,7 @@ export function BillingStatsSection() {
                   <div
                     key={`${model.provider}/${model.model}`}
                     data-testid="billing-model-row"
-                    className="min-w-0 rounded-md border border-[var(--border-primary)] p-3"
+                    className="billing-statistics-row min-w-0 border-b border-[var(--border-primary)] py-4"
                   >
                     <div className="flex min-w-0 items-start gap-3">
                       <div className="min-w-0 flex-1">

@@ -79,6 +79,8 @@ interface Props {
    * See change: configurable-chat-display.
    */
   showResultBody?: boolean;
+  /** Execution groups expose a newly failed result without opening ordinary logs. */
+  revealError?: boolean;
   /**
    * When true, the leading status glyph (status/`ask_user` icon) is omitted.
    * Defaults to `false` (icon shown) so the main chat is unchanged; flow agent
@@ -114,7 +116,7 @@ const statusIcons: Record<string, ReactNode> = {
   elided: <Icon path={mdiMinusCircleOutline} size={0.55} />,
 };
 
-export function ToolCallStep({ toolName, toolCallId, args, status, result, images, context, startedAt, duration, toolDetails, showResultBody = true, hideStatusIcon = false, onAbort, onForceKill, stopController, nested, nestedComplete, enterSuppressed = false }: Props) {
+export function ToolCallStep({ toolName, toolCallId, args, status, result, images, context, startedAt, duration, toolDetails, showResultBody = true, revealError = false, hideStatusIcon = false, onAbort, onForceKill, stopController, nested, nestedComplete, enterSuppressed = false }: Props) {
   const isMobile = useMobile();
   // Live-arrival entry + in-instance completion cue (both inert unless ChatView
   // supplies a ChatMotionContext). See change: add-fluid-chat-motion.
@@ -133,7 +135,10 @@ export function ToolCallStep({ toolName, toolCallId, args, status, result, image
   const resultNotReceived = isAgentResultNotReceived(toolDetails, context.session?.subagents);
   const isAskUser = toolName === "ask_user";
   const isFailedAskUser = isAskUser && status === "error";
-  const [expanded, setExpanded] = useState(hasImages || isAgentRunning || (isAskUser && !isFailedAskUser));
+  const [expanded, setExpanded] = useState(hasImages || isAgentRunning || (isAskUser && !isFailedAskUser) || (revealError && status === "error" && !isAskUser));
+  React.useEffect(() => {
+    if (revealError && status === "error" && !isAskUser) setExpanded(true);
+  }, [revealError, status, isAskUser]);
   // Hook always called (rules of hooks); inactive when a burst controller is supplied.
   const ownStop = useToolStopState({ active: status === "running" && !stopController, onAbort, onForceKill });
   const stop = stopController ?? ownStop;
@@ -185,7 +190,7 @@ export function ToolCallStep({ toolName, toolCallId, args, status, result, image
   }, [hasImages]);
 
   return (
-    <div className={`${isMobile ? "mx-2" : "mx-4"} border-l-2 border-[var(--border-secondary)] pl-3${entering ? ` ${CHAT_ENTER_CLASS}` : ""}`}>
+    <div data-tool-call-id={toolCallId} className={`${isMobile ? "mx-2" : "mx-4"} border-l-2 border-[var(--border-secondary)] pl-3${entering ? ` ${CHAT_ENTER_CLASS}` : ""}`}>
       <div className="flex items-center">
       <button
         type="button"

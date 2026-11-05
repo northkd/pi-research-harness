@@ -6,13 +6,14 @@
  * tab when the in-page back control is used.
  */
 import { scienceArtifactTabPath } from "@blackbelt-technology/pi-dashboard-shared/science-paths.js";
+import { isFolderPaneId } from "../../lib/layout/folder-pane-id.js";
 import type { ViewerProps } from "../editor-pane/types.js";
 import { useSplitWorkspace } from "../split/SplitWorkspaceContext.js";
 import { ResearchPipelinePage } from "./ResearchPipelinePage.js";
 import { ResearchSourceViewer } from "./ResearchSourceViewer.js";
 
 export function ResearchTabViewer({ cwd, path }: ViewerProps) {
-  const { sessionId, paneState, dispatch, openInSplit, openScience, researchChangeSignal, connectionGeneration, resyncWatch } = useSplitWorkspace();
+  const { sessionId, split, paneState, dispatch, openInSplit, openResearch, researchSurface, setMode, openScience, researchChangeSignal, connectionGeneration, resyncWatch } = useSplitWorkspace();
   const close = () => {
     const index = paneState.openFiles.findIndex((f) => f.path === path);
     if (index >= 0) dispatch({ type: "closeTab", index });
@@ -24,7 +25,11 @@ export function ResearchTabViewer({ cwd, path }: ViewerProps) {
         cwd={cwd}
         onBack={close}
         embedded
-        activeSessionId={sessionId}
+        visible={split.mode !== "closed" && paneState.openFiles[paneState.activeIndex]?.path === path}
+        surface={researchSurface ?? "legacy"}
+        onOpenAgents={() => openResearch("agents")}
+        onOpenConversation={() => setMode("closed")}
+        activeSessionId={isFolderPaneId(sessionId) ? undefined : sessionId}
         refreshSignal={researchChangeSignal}
         connectionGeneration={connectionGeneration}
         resyncWatch={resyncWatch}

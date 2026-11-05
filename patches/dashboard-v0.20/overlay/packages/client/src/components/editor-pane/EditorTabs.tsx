@@ -19,6 +19,8 @@ import { parseScienceArtifactTabPath } from "@blackbelt-technology/pi-dashboard-
 interface EditorTabsProps {
   openFiles: OpenFile[];
   activeIndex: number;
+  /** The retained tab strip owns global shortcuts only while its pane is visible. */
+  active?: boolean;
   onActivate: (index: number) => void;
   onClose: (index: number) => void;
   onReorder: (from: number, to: number) => void;
@@ -94,7 +96,7 @@ function UnreadDot({ file }: { file: OpenFile }) {
   );
 }
 
-export function EditorTabs({ openFiles, activeIndex, onActivate, onClose, onReorder, terminalTitle, pluginLabel }: EditorTabsProps) {
+export function EditorTabs({ openFiles, activeIndex, onActivate, onClose, onReorder, terminalTitle, pluginLabel, active = true }: EditorTabsProps) {
   const { t } = useI18n();
   const dragFrom = useRef<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
@@ -120,6 +122,7 @@ export function EditorTabs({ openFiles, activeIndex, onActivate, onClose, onReor
 
   // Close the active tab on Ctrl/Cmd-W (best-effort; the browser may preempt).
   useEffect(() => {
+    if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "w" || e.key === "W")) {
         if (activeIndex >= 0) {
@@ -130,7 +133,7 @@ export function EditorTabs({ openFiles, activeIndex, onActivate, onClose, onReor
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeIndex, onClose]);
+  }, [activeIndex, onClose, active]);
 
   return (
     <div role="tablist" aria-label={t("editor.openFiles", undefined, "Open files")} className="flex shrink-0 overflow-x-auto border-b border-[var(--border-primary)] bg-[var(--bg-secondary)]">
@@ -144,7 +147,7 @@ export function EditorTabs({ openFiles, activeIndex, onActivate, onClose, onReor
           aria-selected={i === activeIndex}
           data-testid="editor-tab"
           data-tab-path={file.path}
-          tabIndex={i === activeIndex ? 0 : -1}
+          tabIndex={i === (activeIndex < 0 ? 0 : activeIndex) ? 0 : -1}
           onKeyDown={(e) => onTabKeyDown(e, i)}
           title={file.viewer === "science" ? t("science.title", undefined, "Science") : file.path}
           draggable

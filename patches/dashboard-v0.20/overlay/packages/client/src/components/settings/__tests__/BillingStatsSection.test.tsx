@@ -100,6 +100,25 @@ afterEach(() => {
 });
 
 describe("billing statistics", () => {
+  it("navigates detail tabs with the keyboard while preserving the directory filter and fetched report", async () => {
+    render(<BillingStatsSection />);
+    await respond(0, report());
+    fireEvent.change(screen.getByLabelText("Directory"), { target: { value: "/one" } });
+    const directories = screen.getByRole("tab", { name: "Directories" });
+    directories.focus();
+    fireEvent.keyDown(directories, { key: "ArrowLeft" });
+    const models = screen.getByRole("tab", { name: "Models" });
+    expect(document.activeElement).toBe(models);
+    expect(models.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("billing-model-row").textContent).toContain("¥3.0000");
+    fireEvent.keyDown(models, { key: "Home" });
+    expect(document.activeElement).toBe(directories);
+    fireEvent.keyDown(directories, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Sessions" }));
+    expect(screen.getByText("Ended session")).toBeTruthy();
+    expect(screen.getByLabelText<HTMLSelectElement>("Directory").value).toBe("/one");
+    expect(requests).toHaveLength(1);
+  });
   it("sorts model costs high to low by default and toggles direction without refetching", async () => {
     render(<BillingStatsSection />);
     const data = report();

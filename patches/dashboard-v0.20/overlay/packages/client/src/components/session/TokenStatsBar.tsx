@@ -14,6 +14,8 @@ interface Props {
   onTurnClick?: (turnIndex: number) => void;
   /** Gate butterfly chart + token stats (default true). */
   showStats?: boolean;
+  /** The task shell can render one shared usage entry above all views. */
+  showCost?: boolean;
   /** Gate context-window progress bar (default true). */
   showContextBar?: boolean;
   sessionId?: string;
@@ -26,8 +28,8 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-export function TokenStatsBar({ turnStats, contextUsage, tokensIn, tokensOut, cacheRead, cacheWrite, onTurnClick, showStats = true, showContextBar = true, sessionId, sessionStatus }: Props) {
-  const monitor = useSpeedStats(sessionId, sessionStatus, !!sessionId);
+export function TokenStatsBar({ turnStats, contextUsage, tokensIn, tokensOut, cacheRead, cacheWrite, onTurnClick, showStats = true, showCost = true, showContextBar = true, sessionId, sessionStatus }: Props) {
+  const monitor = useSpeedStats(sessionId, sessionStatus, !!sessionId && showCost);
   // Independent normalization per half
   const maxInput = turnStats.reduce(
     (max, t) => Math.max(max, t.input + t.cacheRead),
@@ -136,7 +138,7 @@ export function TokenStatsBar({ turnStats, contextUsage, tokensIn, tokensOut, ca
           reduce-chat-render-cpu-umbrella (Phase 1, task 2.2). */}
       {showContextBar && contextUsage && contextUsage.contextWindow > 0 ? (
         <div data-testid="session-context-row" className="flex items-center gap-2 text-[10px] text-[var(--text-tertiary)]">
-          <SpeedIndicator sessionId={sessionId} sessionStatus={sessionStatus} align="left" monitor={monitor} costOnly />
+          {showCost && <SpeedIndicator sessionId={sessionId} sessionStatus={sessionStatus} align="left" monitor={monitor} costOnly />}
           <span>{contextUsage.tokens != null ? formatTokens(contextUsage.tokens) : "—"}</span>
           <div className="flex-1 h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden flex" data-testid="context-bar">
             {contextPercent != null && latestTurn && latestTotal > 0 ? (
@@ -175,7 +177,7 @@ export function TokenStatsBar({ turnStats, contextUsage, tokensIn, tokensOut, ca
         </div>
       ) : (
         <div className="flex justify-start">
-          <SpeedIndicator sessionId={sessionId} sessionStatus={sessionStatus} align="left" monitor={monitor} costOnly />
+          {showCost && <SpeedIndicator sessionId={sessionId} sessionStatus={sessionStatus} align="left" monitor={monitor} costOnly />}
         </div>
       )}
     </div>

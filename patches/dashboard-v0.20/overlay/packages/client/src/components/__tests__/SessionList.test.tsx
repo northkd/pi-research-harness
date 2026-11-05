@@ -209,7 +209,7 @@ describe("SessionList elevated spawn buttons", () => {
     expect(body?.querySelector('[data-testid="folder-spawn-session-btn"]')).toBeTruthy();
   });
 
-  it("tints a top-level folder but not a workspace-grouped one (change: folder-card-enclosure)", () => {
+  it("keeps the compact folder neutral and restores the original tint in comfortable density", () => {
     const { container } = render(
       <TestRouter>
         <ThemeProvider>
@@ -227,7 +227,11 @@ describe("SessionList elevated spawn buttons", () => {
     // background (color-mix on --accent-blue); a workspace folder does not.
     const rootBody = container.querySelector('[data-testid="folder-body-/root/proj"]') as HTMLElement | null;
     expect(rootBody).toBeTruthy();
+    expect(rootBody?.getAttribute("style") ?? "").not.toContain("--accent-blue");
+    fireEvent.click(screen.getByRole("button", { name: "Comfortable" }));
     expect(rootBody?.getAttribute("style") ?? "").toContain("--accent-blue");
+    const workspaceBody = container.querySelector('[data-testid="folder-body-/ws/proj"]');
+    expect(workspaceBody?.getAttribute("style") ?? "").not.toContain("--accent-blue");
   });
 });
 
@@ -392,7 +396,7 @@ describe("SessionList header layout", () => {
     expect(appBar.contains(settingsBtn)).toBe(true);
   });
 
-  it("places theme controls in app-bar row", () => {
+  it("keeps theme controls mounted in the named interface and connection disclosure", () => {
     render(
       <TestRouter>
         <ThemeProvider>
@@ -403,11 +407,16 @@ describe("SessionList header layout", () => {
         </ThemeProvider>
       </TestRouter>,
     );
-    const appBar = screen.getByTestId("header-app-bar");
-    const themePicker = appBar.querySelector('[data-testid="theme-picker"]');
-    const themeToggle = appBar.querySelector('[data-testid="theme-toggle"]');
+    const utilities = document.getElementById("session-navigation-utilities") as HTMLElement;
+    const themePicker = utilities.querySelector('[data-testid="theme-picker"]');
+    const themeToggle = utilities.querySelector('[data-testid="theme-toggle"]');
     expect(themePicker).toBeTruthy();
     expect(themeToggle).toBeTruthy();
+    expect(utilities.hidden).toBe(true);
+    fireEvent.click(screen.getByTestId("navigation-utilities-toggle"));
+    expect(utilities.hidden).toBe(false);
+    expect(utilities.querySelector('[data-testid="theme-picker"]')).toBe(themePicker);
+    expect(utilities.querySelector('[data-testid="theme-toggle"]')).toBe(themeToggle);
   });
 
   it("filter bar no longer renders the folder pin chip", () => {

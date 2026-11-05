@@ -21,6 +21,17 @@ function makeSidebar(overrides: Partial<SidebarState> = {}): SidebarState {
 }
 
 describe("ResizableSidebar", () => {
+  it("resizes with the keyboard without treating the collapse button as a resize gesture", () => {
+    const sidebar = makeSidebar({ width: 240 });
+    render(<ResizableSidebar sidebar={sidebar}><div>Content</div></ResizableSidebar>);
+    const separator = screen.getByRole("separator", { name: "Resize project navigation" });
+    expect(separator.getAttribute("aria-valuenow")).toBe("240");
+    fireEvent.keyDown(separator, { key: "ArrowRight" });
+    expect(sidebar.setWidth).toHaveBeenCalledWith(256);
+    fireEvent.keyDown(screen.getByTestId("sidebar-collapse"), { key: "ArrowRight" });
+    expect(sidebar.setWidth).toHaveBeenCalledTimes(1);
+  });
+
   it("renders children when expanded", () => {
     render(
       <ResizableSidebar sidebar={makeSidebar()}>

@@ -19,8 +19,12 @@
 
 import type { TerminalSession } from "@blackbelt-technology/pi-dashboard-shared/terminal-types.js";
 import { useEffect, useRef } from "react";
+import { useLocation } from "wouter";
+import { saveSplitState } from "../../lib/layout/split-state.js";
+import { buildFolderHomeUrl } from "../../lib/nav/route-builders.js";
 import { EditorPane } from "../editor-pane/EditorPane.js";
 import { useSplitWorkspace } from "../split/SplitWorkspaceContext.js";
+import { WorkspaceNavigation, WorkspaceTools } from "../split/WorkspaceNavigation.js";
 import { FolderSplitProvider } from "./FolderSplitProvider.js";
 
 interface Props {
@@ -55,6 +59,28 @@ function ResearchOpenOnce() {
   return null;
 }
 
+function FolderWorkspaceView({ onOpenConversation }: { onOpenConversation: () => void }) {
+  const { sessionId, cwd, split, setMode } = useSplitWorkspace();
+  const revealed = useRef(false);
+  // A direct editor route is an explicit reveal, even if the same folder's
+  // home page last stored a chat-only layout.
+  useEffect(() => { setMode("full"); }, [cwd, setMode]);
+  useEffect(() => {
+    if (split.mode !== "closed") revealed.current = true;
+    else if (revealed.current) {
+      // Toolbar/Layout close also leaves this route. Commit before navigation:
+      // the receiving folder provider can mount before this provider's effects.
+      saveSplitState(sessionId, split);
+      onOpenConversation();
+    }
+  }, [sessionId, split, onOpenConversation]);
+  return <div className="workspace-shell flex min-h-0 min-w-0 flex-1 flex-col h-full">
+    <WorkspaceNavigation folder onOpenConversation={onOpenConversation} />
+    <EditorPane workspaceChrome />
+    <WorkspaceTools />
+  </div>;
+}
+
 export function FolderEditorView({
   cwd,
   terminals,
@@ -67,6 +93,7 @@ export function FolderEditorView({
   onFocusConsumed,
   openResearch = false,
 }: Props) {
+  const [, navigate] = useLocation();
   return (
     <FolderSplitProvider
       cwd={cwd}
@@ -80,9 +107,7 @@ export function FolderEditorView({
       onFocusConsumed={onFocusConsumed}
     >
       {openResearch && <ResearchOpenOnce />}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, height: "100%" }}>
-        <EditorPane />
-      </div>
+      <FolderWorkspaceView onOpenConversation={() => navigate(buildFolderHomeUrl(cwd))} />
     </FolderSplitProvider>
   );
 }

@@ -1,0 +1,83 @@
+packages/server/src/res-workflow/adoption-service.ts(453,41): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+packages/server/src/res-workflow/analysis-agent.ts(78,41): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(78,57): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(78,67): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(78,78): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(78,93): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(78,114): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(108,233): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(108,249): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(108,259): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(108,270): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(108,285): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(108,306): error TS18046: 'model' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(144,35): error TS18046: 'args' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(145,53): error TS18046: 'args' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(150,20): error TS18046: 'args' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(159,33): error TS18046: 'args' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(159,58): error TS18046: 'args' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(161,54): error TS18046: 'args' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(163,32): error TS18046: 'args' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(172,126): error TS18046: 'args' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(190,15): error TS18048: 'auth' is possibly 'undefined'.
+packages/server/src/res-workflow/analysis-agent.ts(190,37): error TS18048: 'auth' is possibly 'undefined'.
+packages/server/src/res-workflow/analysis-agent.ts(203,54): error TS18048: 'iterator' is possibly 'undefined'.
+packages/server/src/res-workflow/analysis-agent.ts(236,19): error TS18046: 'parsed' is of type 'unknown'.
+packages/server/src/res-workflow/analysis-agent.ts(236,36): error TS7006: Parameter 'item' implicitly has an 'any' type.
+packages/server/src/res-workflow/analysis-agent.ts(245,39): error TS2698: Spread types may only be created from object types.
+packages/server/src/res-workflow/analysis-agent.ts(304,22): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+packages/server/src/res-workflow/full-history-material.ts(176,75): error TS2322: Type '{ source: { id: string; kind: "artifact" | "file" | "session-message"; label: string; sessionId?: string | undefined; entryId?: string | undefined; path?: string | undefined; timestamp?: string | undefined; sha256: string; bytes: number; incomplete: boolean; unverified: true; }; content: string | undefined; }[]' is not assignable to type '{ source: Source; content: string; role?: string | undefined; }[]'.
+  Type '{ source: { id: string; kind: "file" | "artifact" | "session-message"; label: string; sessionId?: string; entryId?: string; path?: string; timestamp?: string; sha256: string; bytes: number; incomplete: boolean; unverified: true; }; content: string | undefined; }' is not assignable to type '{ source: Source; content: string; role?: string | undefined; }'.
+    Types of property 'content' are incompatible.
+      Type 'string | undefined' is not assignable to type 'string'.
+        Type 'undefined' is not assignable to type 'string'.
+packages/server/src/res-workflow/full-history-material.ts(253,284): error TS18048: 'authority' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(254,68): error TS18048: 'authority' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(254,142): error TS18048: 'authority' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(254,323): error TS18048: 'authority' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(254,397): error TS18048: 'authority' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(257,246): error TS18048: 'node' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(257,303): error TS18048: 'node' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(257,512): error TS2345: Argument of type 'Artifact | undefined' is not assignable to parameter of type 'Artifact'.
+  Type 'undefined' is not assignable to type 'Artifact'.
+packages/server/src/res-workflow/full-history-material.ts(257,706): error TS18048: 'node' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(257,914): error TS18048: 'node' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(260,246): error TS18048: 'record' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(260,367): error TS18048: 'record' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(260,394): error TS18048: 'record' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(260,423): error TS18048: 'record' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-material.ts(260,465): error TS18048: 'record' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-review.ts(139,9): error TS18046: 'value' is of type 'unknown'.
+packages/server/src/res-workflow/full-history-review.ts(139,30): error TS7006: Parameter 'id' implicitly has an 'any' type.
+packages/server/src/res-workflow/full-history-review.ts(140,23): error TS18046: 'value' is of type 'unknown'.
+packages/server/src/res-workflow/full-history-review.ts(140,61): error TS18046: 'value' is of type 'unknown'.
+packages/server/src/res-workflow/full-history-review.ts(155,19): error TS2698: Spread types may only be created from object types.
+packages/server/src/res-workflow/full-history-review.ts(199,21): error TS18048: 'auth' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-review.ts(199,43): error TS18048: 'auth' is possibly 'undefined'.
+packages/server/src/res-workflow/full-history-review.ts(275,61): error TS2454: Variable 'validated' is used before being assigned.
+packages/server/src/res-workflow/full-history-review.ts(279,268): error TS2454: Variable 'validated' is used before being assigned.
+packages/server/src/res-workflow/full-history-review.ts(282,52): error TS2454: Variable 'validated' is used before being assigned.
+packages/server/src/res-workflow/full-history-review.ts(282,83): error TS2454: Variable 'validated' is used before being assigned.
+packages/server/src/res-workflow/full-history-review.ts(283,46): error TS2454: Variable 'validated' is used before being assigned.
+packages/server/src/res-workflow/full-history-review.ts(283,77): error TS2454: Variable 'validated' is used before being assigned.
+packages/server/src/res-workflow/full-history-review.ts(286,32): error TS2322: Type 'ResWorkflowProposal | undefined' is not assignable to type 'ResWorkflowProposal'.
+  Type 'undefined' is not assignable to type 'ResWorkflowProposal'.
+packages/server/src/res-workflow/local-history-stream.ts(62,7): error TS7034: Variable 'before' implicitly has type 'any' in some locations where its type cannot be determined.
+packages/server/src/res-workflow/local-history-stream.ts(173,23): error TS7005: Variable 'before' implicitly has an 'any' type.
+packages/server/src/res-workflow/local-history-stream.ts(175,68): error TS7005: Variable 'before' implicitly has an 'any' type.
+packages/server/src/routes/res-workflow-research-session-routes.ts(127,48): error TS2322: Type 'Promise<ResWorkflowSpawnRef>' is not assignable to type 'Promise<Record<string, unknown>>'.
+  Type 'ResWorkflowSpawnRef' is not assignable to type 'Record<string, unknown>'.
+    Index signature for type 'string' is missing in type 'ResWorkflowSpawnRef'.
+packages/server/src/routes/res-workflow-research-session-routes.ts(127,81): error TS2345: Argument of type '{ ownerKey?: string | undefined; researchSession: ResearchSessionProvenance; }' is not assignable to parameter of type '{ ownerKey?: string | undefined; researchSession?: ResearchSessionProvenance | undefined; }'.
+  The types of 'researchSession.stage' are incompatible between these types.
+    Type 'string' is not assignable to type '"1-idea" | "2-experiment" | "3-review" | "4-summary" | "5-writing"'.
+packages/server/src/routes/res-workflow-research-session-routes.ts(131,5): error TS2322: Type '(cwd: string, options: { spawnToken: string; strategy?: string | undefined; }) => Promise<SpawnResult>' is not assignable to type '(cwd: string, options: { spawnToken: string; strategy?: string | undefined; }) => Promise<{ [key: string]: unknown; success: boolean; }>'.
+  Type 'Promise<SpawnResult>' is not assignable to type 'Promise<{ [key: string]: unknown; success: boolean; }>'.
+    Type 'SpawnResult' is not assignable to type '{ [key: string]: unknown; success: boolean; }'.
+      Index signature for type 'string' is missing in type 'SpawnResult'.
+packages/server/src/routes/res-workflow-research-session-routes.ts(132,44): error TS2345: Argument of type '{ spawnToken: string; strategy?: string | undefined; }' is not assignable to parameter of type '{ spawnToken: string; strategy?: SpawnStrategy | undefined; }'.
+  Types of property 'strategy' are incompatible.
+    Type 'string | undefined' is not assignable to type 'SpawnStrategy | undefined'.
+      Type 'string' is not assignable to type 'SpawnStrategy | undefined'.

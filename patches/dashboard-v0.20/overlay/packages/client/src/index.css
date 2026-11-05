@@ -2,6 +2,7 @@
 /* AsciiDoc / docx preview typography, scoped to `.asciidoc-body`.
    See change: asciidoc-support. */
 @import "./styles/asciidoc.css";
+@import "./styles/workspace.css";
 
 /* Plugin packages that ship client-side React components with Tailwind
    utility classes. Without these @source directives, Tailwind v4 only
@@ -282,7 +283,7 @@
   --status-unread: #0891b2;
   /* Backgrounds */
   --bg-primary: #ffffff;       /* page background */
-  --bg-secondary: #fafafa;     /* panels, sidebar */
+  --bg-secondary: #f6f8fb;     /* panels, sidebar */
   --bg-tertiary: #f0f0f0;      /* cards, inputs */
   --bg-surface: #e0e0e0;       /* badges, buttons */
   --bg-hover: rgba(0, 0, 0, 0.04);
@@ -293,15 +294,15 @@
   --table-stripe: rgba(0, 0, 0, 0.035); /* markdown table zebra overlay */
 
   /* Text */
-  --text-primary: #1a1a1a;
-  --text-secondary: #444444;
+  --text-primary: #202b3c;
+  --text-secondary: #4e5c70;
   /* Mirrors themes.ts baseLight (see the :root note above). */
   --text-tertiary: #636363;
   --text-muted: #aaaaaa;
   --text-faint: #d0d0d0;
 
   /* Borders */
-  --border-primary: #e0e0e0;
+  --border-primary: #e3e7ed;
   --border-secondary: #cccccc;
   --border-subtle: rgba(0, 0, 0, 0.06);
   /* WCAG 2.1 SC 1.4.11 overlay boundary — 4.48:1 against light --bg-primary.
@@ -1399,8 +1400,8 @@ mark.markdown-search-highlight-active {
 }
 
 [data-theme="light"] {
-  --bg-primary: #f3f3f3;
-  --bg-secondary: #fafafa;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fb;
   --bg-tertiary: #ffffff;
   --bg-surface: #f0f0f0;
   --bg-hover: rgba(0, 0, 0, 0.04);
@@ -1410,13 +1411,13 @@ mark.markdown-search-highlight-active {
   --bg-overlay: rgba(0, 0, 0, 0.25);
   --table-stripe: rgba(0, 0, 0, 0.03);
 
-  --text-primary: #1b1b1b;
-  --text-secondary: #424242;
+  --text-primary: #202b3c;
+  --text-secondary: #4e5c70;
   --text-tertiary: #5c5c5c;
   --text-muted: #8a8a8a;
   --text-faint: #c8c8c8;
 
-  --border-primary: #e5e5e5;
+  --border-primary: #e3e7ed;
   --border-secondary: #d6d6d6;
   --border-subtle: rgba(0, 0, 0, 0.06);
   --border-strong: #8a8a8a;

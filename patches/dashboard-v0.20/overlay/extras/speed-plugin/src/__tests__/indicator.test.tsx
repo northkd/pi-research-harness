@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TokenStatsBar } from "../../../client/src/components/session/TokenStatsBar.js";
+import { TokenStatsBar } from "../../../../packages/client/src/components/session/TokenStatsBar.js";
 import { billingPeriod } from "../billing-period.js";
 import { SpeedIndicator, type SpeedMonitorState } from "../index.js";
 import { SessionCost } from "../SessionCost.js";
@@ -112,6 +112,63 @@ describe("billing and popover", () => {
     expect(screen.getByRole("dialog", { name: "会话用量与计费" })).toBeTruthy();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByTestId("speed-indicator-popover")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("speed-indicator-badge"));
+  });
+  it("opens outside a clipped host and maximizes without losing filters, scroll or restored size", () => {
+    const { container } = render(<div style={{ overflow: "hidden", width: 100 }}><SpeedIndicator sessionId="test" monitor={monitor} /></div>);
+    fireEvent.click(screen.getByTestId("speed-indicator-badge"));
+    const panel = screen.getByTestId("speed-indicator-popover");
+    expect(container.contains(panel)).toBe(false);
+    expect(panel.parentElement).toBe(document.body);
+    const size = { width: panel.style.width, height: panel.style.height };
+    const history = screen.getByTestId("speed-history");
+    const content = screen.getByTestId("usage-panel-scroll");
+    history.scrollTop = 47;
+    content.scrollTop = 80;
+    fireEvent.click(within(screen.getByTestId("speed-panel")).getByRole("button", { name: /主 Agent/ }));
+    fireEvent.click(screen.getByRole("button", { name: "最大化用量面板" }));
+    expect(panel.getAttribute("data-maximized")).toBe("true");
+    expect(screen.queryByRole("separator", { name: "调整用量面板宽度" })).toBeNull();
+    expect(screen.getByTestId("speed-history")).toBe(history);
+    fireEvent.click(screen.getByRole("button", { name: "还原用量面板" }));
+    expect(panel.style.width).toBe(size.width);
+    expect(panel.style.height).toBe(size.height);
+    expect(history.scrollTop).toBe(47);
+    expect(content.scrollTop).toBe(80);
+    expect(within(history).queryByText("sub-model")).toBeNull();
+    expect(localStorage.getItem("speed-monitor-popover-width")).toBe(String(Number.parseFloat(size.width)));
+  });
+  it("resizes from the left edge, supports keyboard size adjustment and stays inside a narrow viewport", () => {
+    render(<SpeedIndicator sessionId="test" monitor={monitor} />);
+    fireEvent.click(screen.getByTestId("speed-indicator-badge"));
+    const panel = screen.getByTestId("speed-indicator-popover");
+    const widthHandle = screen.getByRole("separator", { name: "调整用量面板宽度" });
+    const before = Number.parseFloat(panel.style.width);
+    fireEvent.keyDown(widthHandle, { key: "ArrowLeft" });
+    expect(Number.parseFloat(panel.style.width)).toBe(before + 24);
+    fireEvent.mouseDown(widthHandle, { clientX: 300, clientY: 0 });
+    fireEvent.mouseMove(document, { clientX: 260, clientY: 0 });
+    fireEvent.mouseUp(document);
+    expect(Number.parseFloat(panel.style.width)).toBe(before + 64);
+    const heightHandle = screen.getByRole("separator", { name: "调整用量面板高度" });
+    const height = Number.parseFloat(panel.style.height);
+    fireEvent.keyDown(heightHandle, { key: "ArrowUp" });
+    expect(Number.parseFloat(panel.style.height)).toBe(height - 24);
+    vi.stubGlobal("innerWidth", 360);
+    vi.stubGlobal("innerHeight", 640);
+    fireEvent(window, new Event("resize"));
+    expect(Number.parseFloat(panel.style.width)).toBeLessThanOrEqual(344);
+    expect(Number.parseFloat(panel.style.height)).toBeLessThanOrEqual(624);
+  });
+  it("uses the same partial-total and pending-pricing semantics in the inspector and its trigger", () => {
+    const stats = monitor.stats!;
+    const { rerender } = render(<SpeedIndicator sessionId="test" monitor={{ ...monitor, stats: { ...stats, billing: { ...billing, complete: false, unpricedTurns: 1 } } }} costOnly />);
+    expect(screen.getByTestId("speed-indicator-badge").textContent).toContain("≥¥3.00");
+    fireEvent.click(screen.getByTestId("speed-indicator-badge"));
+    expect(screen.getByTestId("billing-total").textContent).toBe("≥¥3.0000");
+    rerender(<SpeedIndicator sessionId="test" monitor={{ ...monitor, stats: { ...stats, billing: { ...billing, complete: false, unpricedTurns: 1, sessionTotalCost: 0 } } }} costOnly />);
+    expect(screen.getByTestId("speed-indicator-badge").textContent).toContain("待定价");
+    expect(screen.getByTestId("billing-total").textContent).toBe("待定价");
   });
   it("shows the aggregate rather than the legacy main-only cost and polls once", async () => {
     const fetch = vi.fn(async () => ({

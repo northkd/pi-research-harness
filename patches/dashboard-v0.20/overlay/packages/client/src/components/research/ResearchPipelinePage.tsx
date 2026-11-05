@@ -14,7 +14,7 @@ import {
   mdiInformationOutline,
 } from "@mdi/js";
 import { Icon } from "@mdi/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useApiBase } from "../../lib/api/api-context.js";
 import { useI18n } from "../../lib/i18n/i18n.js";
 import { useOptionalSplitWorkspace } from "../split/SplitWorkspaceContext.js";
@@ -28,9 +28,14 @@ import { executionRoleName, ResearchExecutionPanels } from "./ResearchExecutionP
 import { ResearchClaimPanels } from "./ResearchClaimPanels.js";
 import { ResearchOverviewAndBudget, STAGES } from "./ResearchOverviewAndBudget.js";
 import { CollapsibleSection } from "./CollapsibleSection.js";
+import { ResearchPersistentDrawer, ResearchStageOverview, ResearchTaskOverview } from "./ResearchWorkspaceSummary.js";
 import type { ScienceViewTarget } from "@blackbelt-technology/pi-dashboard-shared/science-viewer.js";
+import "./research-workspace.css";
 
 const EMPTY: ResearchSnapshot = { state: null, attempts: [], events: [], receipt: null };
+const savedOverviewChoice = (key: string): { key: string; open: boolean } | null => {
+  try { const saved = window.localStorage.getItem(key); return saved === "open" || saved === "closed" ? { key, open: saved === "open" } : null; } catch { return null; }
+};
 
 export type ResearchTabKey = "teams" | "workflow" | "overview" | "claims" | "audit" | "all";
 
@@ -54,6 +59,10 @@ export function ResearchPipelinePage({
   onOpenSource,
   onOpenScience,
   onOpenScienceArtifact,
+  surface = "legacy",
+  onOpenAgents,
+  onOpenConversation,
+  visible = true,
 }: {
   cwd: string;
   onBack?: () => void;
@@ -66,6 +75,10 @@ export function ResearchPipelinePage({
   onOpenSource?: (adoptionId: string, sourceId: string) => void;
   onOpenScience?: (target?: ScienceViewTarget) => void;
   onOpenScienceArtifact?: (taskId: string, artifactId: string) => void;
+  surface?: "legacy" | "workbench" | "agents";
+  onOpenAgents?: () => void;
+  onOpenConversation?: () => void;
+  visible?: boolean;
 }) {
   const { t } = useI18n(), apiBase = useApiBase();
   const splitWorkspace = useOptionalSplitWorkspace();
@@ -75,10 +88,42 @@ export function ResearchPipelinePage({
   const objective = state?.charter?.objective?.trim() || null;
   const [viewStage, setViewStage] = useState<StageId | null>(null);
   const [selected, setSelection] = useState<{ scope: string; role: ConfiguredRole; execution?: ResearchExecution; stage: StageId | null } | null>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  const overviewStorageKey = `res_workflow_task_overview:${JSON.stringify([apiBase, cwd])}`;
+  const [overviewChoice, setOverviewChoice] = useState(() => savedOverviewChoice(overviewStorageKey));
+  const overviewOpen = overviewChoice?.key === overviewStorageKey ? overviewChoice.open : workspaceWidth >= 1100;
+  const setOverviewOpen = (open: boolean) => {
+    setOverviewChoice({ key: overviewStorageKey, open });
+    try { window.localStorage.setItem(overviewStorageKey, open ? "open" : "closed"); } catch { /* Explicit state still persists for this mounted workspace. */ }
+  };
+  useEffect(() => { setOverviewChoice(savedOverviewChoice(overviewStorageKey)); }, [overviewStorageKey]);
+  useLayoutEffect(() => {
+    const node = workspaceRef.current;
+    if (!node || !visible) return;
+    const measure = () => { const width = node.getBoundingClientRect().width || node.clientWidth; if (width > 0) setWorkspaceWidth(width); };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(node);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, [loading, visible, surface]);
+  const [intakeOpen, setIntakeOpen] = useState(false);
+  const [intakeVisited, setIntakeVisited] = useState(false);
+  const [showAllAttempts, setShowAllAttempts] = useState(false);
+  const [showAllActions, setShowAllActions] = useState(false);
+  const openIntake = () => { setIntakeVisited(true); setIntakeOpen(true); };
 
   // Default to "all" in Vitest test suites so all sections are simultaneously queryable;
   // in live browser, default to "teams" or persisted user tab choice.
-  const [activeTab, setActiveTab] = useState<ResearchTabKey>(() => {
+  const [savedTab, setActiveTab] = useState<ResearchTabKey>(() => {
+    if (surface !== "legacy") {
+      try {
+        const saved = window.localStorage.getItem(`res_workflow_workbench_tab:${cwd}`);
+        if (saved && ["workflow", "overview", "claims", "audit", "all"].includes(saved)) return saved as ResearchTabKey;
+      } catch { /* A blocked browser store must not prevent opening a project. */ }
+      return "workflow";
+    }
     const isTestEnv = typeof process !== "undefined" && Boolean((process as any).env?.VITEST);
     if (isTestEnv) return "all";
     if (typeof window !== "undefined" && window.localStorage) {
@@ -89,29 +134,37 @@ export function ResearchPipelinePage({
     }
     return "teams";
   });
+  const activeTab = surface === "agents" ? "teams" : surface === "workbench" && savedTab === "teams" ? "workflow" : savedTab;
+  const [visitedTabs, setVisitedTabs] = useState<ResearchTabKey[]>([]);
+  const shows = (tab: ResearchTabKey) => activeTab === tab || activeTab === "all";
+  const keeps = (tab: ResearchTabKey) => shows(tab) || visitedTabs.includes(tab);
+  useEffect(() => { setVisitedTabs(previous => [...new Set([...previous, ...(activeTab === "all" ? ["teams", "workflow", "overview", "claims", "audit"] as ResearchTabKey[] : [activeTab])])]); }, [activeTab]);
 
   const handleTabChange = (key: ResearchTabKey) => {
     setActiveTab(key);
-    if (typeof window !== "undefined" && window.localStorage) {
-      window.localStorage.setItem("res_workflow_active_tab", key);
-    }
+    setSelection(null);
+    try { window.localStorage.setItem(surface === "legacy" ? "res_workflow_active_tab" : `res_workflow_workbench_tab:${cwd}`, key); } catch { /* Tab navigation still works without persistence. */ }
   };
 
   const scope = JSON.stringify([apiBase, cwd, connectionGeneration, adoption?.id, state?.charter]);
   const selection = selected?.scope === scope ? selected : null;
-  useEffect(() => { setViewStage(null); setSelection(null); }, [scope]);
+  useEffect(() => { setViewStage(null); setSelection(null); setIntakeOpen(false); setIntakeVisited(false); setShowAllAttempts(false); setShowAllActions(false); }, [scope]);
+  useEffect(() => { setIntakeOpen(false); }, [surface]);
   const selectedStage = viewStage ?? projection.stage;
   const currentStage = STAGES.find(stage => stage.id === projection.stage);
   const stageIndex = STAGES.findIndex(stage => stage.id === projection.stage);
   const observationStale = observationStatus !== "current";
   const legacyInstances = projection.runs.flatMap(run => run.steps.map(step => ({ run, step })));
-  const chosenLegacy = selection ? legacyInstances.filter(row => row.step.agent === selection.role.name && (selection.stage === null || row.step.stage === selection.stage)) : [];
-  const chosenObserved = selection ? projection.executions.filter(row => row.source === "observation" && executionRoleName(row) === selection.role.name
-    && (selection.stage === null || row.stage === selection.stage || !row.stage)) : [];
+  const chosenLegacy = selection ? legacyInstances.filter(row =>
+    row.run.runId === selection.execution?.workflowRunId && row.step.key === selection.execution?.workflowKey ||
+    row.step.agent === selection.role.name && (selection.stage === null || row.step.stage === selection.stage)) : [];
+  const chosenObserved = selection ? projection.executions.filter(row => row.source === "observation" && (
+    row.id === selection.execution?.id || executionRoleName(row) === selection.role.name
+    && (selection.stage === null || row.stage === selection.stage || !row.stage))) : [];
   const initialLegacy = selection?.execution?.workflowRunId ? chosenLegacy.find(row => row.run.runId === selection.execution?.workflowRunId && row.step.key === selection.execution?.workflowKey) : undefined;
   if (loading) return <div className="flex h-full items-center justify-center text-sm text-[var(--text-tertiary)]">正在加载研究状态…</div>;
 
-  const isAnyExecuting = projection.executions.some(row => ["streaming", "started", "running"].includes(row.status));
+  const isAnyExecuting = projection.executions.some(row => !(observationStale && row.source === "observation") && ["streaming", "started", "running"].includes(row.status));
 
   const tabs: TabDef[] = [
     {
@@ -132,7 +185,7 @@ export function ResearchPipelinePage({
       key: "overview",
       label: "总览与预算",
       icon: mdiChartBoxOutline,
-      badge: state?.budget?.dailyMaxAttempts ? `¥${state.budget.dailyMaxAttempts}` : undefined,
+      badge: state?.budget?.maxAttempts !== undefined ? `${state.budget.maxAttempts} 次` : undefined,
     },
     {
       key: "claims",
@@ -155,13 +208,37 @@ export function ResearchPipelinePage({
 
   return (
     <div
+      ref={workspaceRef}
       data-testid="research-pipeline"
-      className="win11-page @container flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden"
+      data-surface={surface}
+      className={`${surface === "legacy" ? "win11-page" : "research-workspace"} @container flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden`}
     >
+      {surface !== "legacy" && <header className="research-workspace-heading">
+        <div className="min-w-0">
+          <p className="research-workspace-breadcrumb" title={cwd}>{cwd.split(/[\\/]/).filter(Boolean).slice(-2).join(" / ") || cwd}</p>
+          <h1>{surface === "agents" ? "智能体协作" : "研究工作台"}</h1>
+          <p className="text-xs text-[var(--text-tertiary)]">{surface === "agents" ? "独立会话、子代理与有来源的协作关系" : adopted ? "已接入项目 · 按正式记录跟踪研究" : "连接研究资料，建立可追溯的工作流"}</p>
+        </div>
+        <div className="research-workspace-actions">
+          {onOpenConversation && <button type="button" className="research-workspace-action" onClick={onOpenConversation}>回到对话</button>}
+          {surface === "workbench" && onOpenAgents && <button type="button" className="research-workspace-action" onClick={onOpenAgents}><Icon path={mdiAccountGroup} size={0.65} />智能体协作</button>}
+          {surface === "workbench" && <button type="button" className="research-workspace-action primary" onClick={openIntake}>资料接入与项目设置</button>}
+          {onOpenScience && <button type="button" className="research-workspace-action" data-testid="research-open-science" onClick={() => onOpenScience()}>Science</button>}
+          {splitWorkspace && <details className="research-layout-menu"><summary className="research-workspace-action"><Icon path={mdiViewSplitVertical} size={0.65} />布局</summary><div>
+            <button type="button" onClick={() => splitWorkspace.setMode("full")}>全宽工作区</button>
+            <button type="button" onClick={() => splitWorkspace.updateSplit({ mode: "split", ratio: 0.65 })}>会话 65% · 工作区 35%</button>
+            <button type="button" onClick={() => splitWorkspace.updateSplit({ mode: "split", ratio: 0.5 })}>会话 50% · 工作区 50%</button>
+            <button type="button" onClick={() => splitWorkspace.updateSplit({ mode: "split", ratio: 0.35 })}>会话 35% · 工作区 65%</button>
+          </div></details>}
+          <button type="button" className="research-workspace-action" aria-pressed={overviewOpen} onClick={() => setOverviewOpen(!overviewOpen)}>任务概览</button>
+          <button type="button" className="research-workspace-action" onClick={refresh} disabled={refreshing} aria-label="刷新科研记录"><Icon path={mdiRefresh} size={0.65} className={refreshing ? "animate-spin" : ""} /></button>
+          <span data-testid="research-sync-status" className="text-[11px] text-[var(--text-tertiary)]">{refreshing ? "同步中" : error ? "记录待同步" : observationStale ? "执行观测待同步" : "已同步"}</span>
+        </div>
+      </header>}
       {/* =========================================================================
           Windows 11 Command Bar Header (Acrylic Top Bar)
           ========================================================================= */}
-      <header className="win11-acrylic-bar flex shrink-0 flex-wrap items-center justify-between gap-2.5 px-4 py-2.5">
+      {surface === "legacy" && <header className="win11-acrylic-bar flex shrink-0 flex-wrap items-center justify-between gap-2.5 px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {!embedded && onBack && (
             <button
@@ -275,16 +352,17 @@ export function ResearchPipelinePage({
             </button>
           </div>
         </div>
-      </header>
+      </header>}
 
       {/* =========================================================================
           Windows 11 Pivot Tab Navigation Bar (3px Bottom Accent Pill)
           ========================================================================= */}
-      <nav
+      {surface !== "agents" && <nav
         aria-label="科研工作流导航标签"
-        className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-2 scrollbar-none"
+        role="tablist"
+        className={surface === "legacy" ? "flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-2 scrollbar-none" : "research-workspace-nav"}
       >
-        {tabs.map((tab) => {
+        {tabs.filter(tab => surface === "legacy" || tab.key !== "teams").map((tab) => {
           const isActive = activeTab === tab.key;
           return (
             <button
@@ -294,7 +372,7 @@ export function ResearchPipelinePage({
               aria-selected={isActive}
               data-testid={`research-tab-${tab.key}`}
               onClick={() => handleTabChange(tab.key)}
-              className={`win11-pivot-tab whitespace-nowrap ${
+              className={surface !== "legacy" ? "" : `win11-pivot-tab whitespace-nowrap ${
                 isActive ? "win11-pivot-tab-active" : ""
               }`}
             >
@@ -306,7 +384,7 @@ export function ResearchPipelinePage({
               <span>{tab.label}</span>
               {tab.badge !== undefined && (
                 <span
-                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-mono leading-none ${
+                  className={`research-tab-count rounded-full px-1.5 py-0.5 text-[10px] font-mono leading-none ${
                     isActive
                       ? "bg-[var(--accent-soft)] text-[var(--accent-text)] font-bold"
                       : "bg-[var(--bg-surface)] text-[var(--text-secondary)]"
@@ -324,7 +402,7 @@ export function ResearchPipelinePage({
             </button>
           );
         })}
-      </nav>
+      </nav>}
 
       {error && (
         <div
@@ -338,28 +416,34 @@ export function ResearchPipelinePage({
       {/* =========================================================================
           Main Tab Content Viewport (Mica Canvas with Generous Breathing Room)
           ========================================================================= */}
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-5">
+      <div className={surface === "legacy" ? "contents" : "research-workspace-layout"}>
+      <div className={surface === "legacy" ? "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-5" : "research-workspace-main"}>
+        {surface === "workbench" && !adopted && <div className="research-intake-hint"><div><strong>接入已有研究资料</strong><p>选择目录资料与历史会话，核对来源和预算后确认接入。</p></div><button type="button" className="research-workspace-action" onClick={openIntake}>开始接入</button></div>}
+        {surface === "workbench" && (activeTab === "workflow" || activeTab === "all") && <ResearchStageOverview projection={projection} objective={objective} viewStage={viewStage} onSelectStage={setViewStage} onOpenArtifact={onOpenArtifact} />}
         {/* TAB 1: Agent 协作网络 (Teams View) */}
-        {(activeTab === "teams" || activeTab === "all") && (
-          <div>
+        {keeps("teams") && (
+          <div hidden={!shows("teams")}>
             <ResearchExecutionPanels
               mode="teams"
+              visible={visible && shows("teams")}
               cwd={cwd}
               projection={projection}
-              stage={selectedStage}
-              includeUnstaged={viewStage === null}
+              stage={surface === "agents" ? null : selectedStage}
+              includeUnstaged={surface === "agents" || viewStage === null}
               stale={observationStale}
               activeSessionId={activeSessionId}
-              onAgent={(role, execution) => setSelection({ scope, role, execution, stage: selectedStage })}
+              onAgent={(role, execution) => setSelection({ scope, role, execution, stage: surface === "agents" ? null : selectedStage })}
             />
           </div>
         )}
 
         {/* TAB 2: 工作流进度 (Workflow Pipeline View) */}
-        {(activeTab === "workflow" || activeTab === "all") && (
-          <div>
+        {keeps("workflow") && (
+          <div hidden={!shows("workflow")}>
             <ResearchExecutionPanels
               mode="workflow"
+              compactStages={surface !== "legacy"}
+              visible={visible && shows("workflow")}
               cwd={cwd}
               projection={projection}
               stage={selectedStage}
@@ -372,10 +456,10 @@ export function ResearchPipelinePage({
         )}
 
         {/* TAB 3: 总览与预算 (Overview & Budget View) */}
-        {(activeTab === "overview" || activeTab === "all") && (
-          <div className="space-y-4">
+        {keeps("overview") && (
+          <div hidden={!shows("overview")} className="space-y-4">
             {/* Windows 11 Hero Card: Current Stage & Research Objective */}
-            <section className="win11-card p-5">
+            {(surface === "legacy" || activeTab === "overview") && <section className="win11-card p-5">
               <div className="flex items-start gap-3.5">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-[var(--accent-soft)] text-[var(--accent-text)]">
                   <Icon path={currentStage?.icon ?? mdiCircleOutline} size={0.95} />
@@ -405,7 +489,7 @@ export function ResearchPipelinePage({
                   {objective ?? "未记录研究目标（state.json 缺少 charter.objective）"}
                 </span>
               </div>
-            </section>
+            </section>}
 
             {/* Merged Overview and Budget */}
             <ResearchOverviewAndBudget
@@ -422,6 +506,7 @@ export function ResearchPipelinePage({
               onRefresh={refresh}
               workbench={workbench}
               observationStale={observationStale}
+              showStageSelector={surface === "legacy"}
             />
 
             <ScienceInstances
@@ -432,7 +517,7 @@ export function ResearchPipelinePage({
               onOpenArtifact={onOpenScienceArtifact}
             />
 
-            {snapshot && (
+            {snapshot && surface === "legacy" && (
               <ResWorkflowAdoption
                 key={`adoption:${scope}`}
                 cwd={cwd}
@@ -487,15 +572,15 @@ export function ResearchPipelinePage({
         )}
 
         {/* TAB 4: 主张与评审 (Claims & Peer Review View) */}
-        {(activeTab === "claims" || activeTab === "all") && (
-          <div>
+        {keeps("claims") && (
+          <div hidden={!shows("claims")}>
             <ResearchClaimPanels claims={claims} reviews={projection.reviews} onOpenArtifact={onOpenArtifact} />
           </div>
         )}
 
         {/* TAB 5: 历史与审计 (History & Audit Ledger View) */}
-        {(activeTab === "audit" || activeTab === "all") && (
-          <div className="space-y-4">
+        {keeps("audit") && (
+          <div hidden={!shows("audit")} className="space-y-4">
             <CollapsibleSection
               id="research-attempts-ledger"
               title={`尝试记录 · ${attempts.length} 条`}
@@ -509,7 +594,7 @@ export function ResearchPipelinePage({
                 </div>
               ) : (
                 <ol className="space-y-2.5 text-xs">
-                  {attempts.slice(-12).reverse().map((attempt) => (
+                  {(showAllAttempts ? attempts : attempts.slice(-12)).slice().reverse().map((attempt) => (
                     <li key={attempt.seq} className="win11-card-subtle p-3.5 space-y-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="font-semibold text-[var(--text-primary)]">
@@ -529,6 +614,7 @@ export function ResearchPipelinePage({
                   ))}
                 </ol>
               )}
+              {attempts.length > 12 && <button type="button" className="research-show-more" onClick={() => setShowAllAttempts(value => !value)}>{showAllAttempts ? "仅显示最近 12 条" : `查看全部 ${attempts.length} 条尝试记录`}</button>}
             </CollapsibleSection>
 
             {!!workbench?.actions?.length && (
@@ -540,7 +626,7 @@ export function ResearchPipelinePage({
                 subtitle="已观测的研究行为记录（不代替科学验收结果）"
               >
                 <ul className="space-y-2 text-xs">
-                  {workbench.actions.slice(-12).reverse().map((action) => (
+                  {(showAllActions ? workbench.actions : workbench.actions.slice(-12)).slice().reverse().map((action) => (
                     <li
                       key={action.id}
                       className="win11-card-subtle flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5"
@@ -562,6 +648,7 @@ export function ResearchPipelinePage({
                     </li>
                   ))}
                 </ul>
+                {workbench.actions.length > 12 && <button type="button" className="research-show-more" onClick={() => setShowAllActions(value => !value)}>{showAllActions ? "仅显示最近 12 条" : `查看全部 ${workbench.actions.length} 条观测动作`}</button>}
               </CollapsibleSection>
             )}
 
@@ -575,6 +662,12 @@ export function ResearchPipelinePage({
           </div>
         )}
       </div>
+      {surface !== "legacy" && overviewOpen && <ResearchTaskOverview projection={projection} claims={claims} observation={workbench} stale={observationStale} activeSessionId={activeSessionId} checkedAt={checkedAt} onClose={() => setOverviewOpen(false)} onOpenAgents={surface === "workbench" ? onOpenAgents : undefined} onOpenConversation={onOpenConversation} onOpenBudget={surface === "workbench" ? () => handleTabChange("overview") : undefined} />}
+      </div>
+
+      {surface !== "legacy" && intakeVisited && snapshot && <ResearchPersistentDrawer open={visible && intakeOpen && surface === "workbench"} title="资料接入与项目设置" onClose={() => setIntakeOpen(false)}>
+        <ResWorkflowAdoption key={`adoption:${scope}`} cwd={cwd} adopted={adopted} adoption={adoption} charter={state?.charter} onRefresh={refresh} onOpenSource={onOpenSource} />
+      </ResearchPersistentDrawer>}
 
       {/* Drilldown Modal: Active across all tabs */}
       {selection && (
@@ -588,6 +681,7 @@ export function ResearchPipelinePage({
           cwd={cwd}
           initialExecution={selection.execution?.source === "observation" ? selection.execution.id : undefined}
           observationsStale={observationStale}
+          visible={visible}
           onClose={() => setSelection(null)}
           onOpenArtifact={onOpenArtifact}
           onSelectExecution={(role, execution) =>

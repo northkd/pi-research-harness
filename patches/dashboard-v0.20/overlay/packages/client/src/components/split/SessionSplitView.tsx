@@ -14,6 +14,7 @@ import { isLoopbackUrl } from "@blackbelt-technology/pi-dashboard-shared/live-se
 import { useEffect, useRef } from "react";
 import { useCanvasTier } from "../../hooks/useCanvasTier.js";
 import { EditorPane } from "../editor-pane/EditorPane.js";
+import { WorkspaceNavigation, WorkspaceTools } from "./WorkspaceNavigation.js";
 import { SplitWorkspace } from "./SplitWorkspace.js";
 import { useSplitWorkspace } from "./SplitWorkspaceContext.js";
 
@@ -23,6 +24,8 @@ export function SessionSplitView({ chat }: { chat: React.ReactNode }) {
   // full-width canvas, no side-by-side, no chip (auto-canvas Decision 1 / S24).
   const tier = useCanvasTier();
   return (
+    <div className="workspace-shell flex min-h-0 min-w-0 flex-1 flex-col">
+    <WorkspaceNavigation />
     <SplitWorkspace
       mode={split.mode}
       ratio={split.ratio}
@@ -30,9 +33,12 @@ export function SessionSplitView({ chat }: { chat: React.ReactNode }) {
       onRatioChange={(ratio) => updateSplit({ ratio })}
       onModeChange={(mode) => updateSplit({ mode })}
       chat={chat}
-      editor={<EditorPane />}
+      editor={<EditorPane workspaceChrome />}
+      keepMounted
       replaceChat={tier === "tablet" && split.mode !== "closed"}
     />
+    <WorkspaceTools />
+    </div>
   );
 }
 

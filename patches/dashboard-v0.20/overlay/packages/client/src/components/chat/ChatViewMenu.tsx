@@ -193,6 +193,23 @@ export function ChatViewMenu({ sessionId, send, currentOverride }: Props): React
           <div data-testid="chat-view-list" className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-2">
           {/* Locked while Set as global is pending: an edit made mid-save would be wiped by the override clear. */}
           <fieldset data-testid="chat-view-rows" disabled={saving} className="m-0 min-w-0 border-0 p-0">
+          <div className="mb-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2">
+            <div className="mb-1.5 font-medium text-[var(--text-secondary)]">{i18nT("session.executionRecords", undefined, "Execution records")}</div>
+            <div className="flex gap-1" role="group" aria-label={i18nT("session.executionRecords", undefined, "Execution records")}>
+              {[true, false].map((collapsed) => (
+                <button
+                  key={String(collapsed)}
+                  type="button"
+                  aria-pressed={prefs.toolGroupDefaultCollapsed === collapsed}
+                  onClick={() => patch({ toolGroupDefaultCollapsed: collapsed })}
+                  className={`focus-ring min-h-[32px] flex-1 rounded-md border px-2 py-1 ${prefs.toolGroupDefaultCollapsed === collapsed ? "border-[var(--tint-blue-border)] bg-[var(--tint-blue-bg)] text-[var(--accent-text)]" : "border-[var(--border-subtle)] text-[var(--text-secondary)]"}`}
+                >
+                  {collapsed ? i18nT("session.executionSummaries", undefined, "Summaries") : i18nT("session.executionLiveDetails", undefined, "Live details")}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-tertiary)]">{i18nT("session.executionAttentionVisible", undefined, "Errors and questions stay visible. Open any record to inspect the original output.")}</p>
+          </div>
           <Row label={i18nT("common.tokenStatsBar", undefined, "Token stats bar")} value={prefs.tokenStatsBar} marked={isOverridden("tokenStatsBar")} onChange={(v) => patch({ tokenStatsBar: v })} />
           <Row label={i18nT("common.contextUsageBar", undefined, "Context usage bar")} value={prefs.contextUsageBar} marked={isOverridden("contextUsageBar")} onChange={(v) => patch({ contextUsageBar: v })} />
           <Row label={i18nT("session.reasoningBlocks", undefined, "Reasoning blocks")} value={prefs.reasoning} marked={isOverridden("reasoning")} onChange={(v) => patch({ reasoning: v })} />

@@ -140,7 +140,12 @@ export async function resumeResWorkflowAgent(id: string, body: ResWorkflowAgentR
 }
 /** Budget edits are policy-only writes. Never retry or resume a paid task here. */
 export class ResWorkflowIntakeBudgetApiError extends Error {
-  constructor(readonly status: number) { super(`res-workflow intake budget HTTP ${status}`); this.name = "ResWorkflowIntakeBudgetApiError"; }
+  readonly status: number;
+  constructor(status: number) {
+    super(`res-workflow intake budget HTTP ${status}`);
+    this.name = "ResWorkflowIntakeBudgetApiError";
+    this.status = status;
+  }
 }
 export async function updateResWorkflowAgentBudget(id: string, body: ResWorkflowAgentBudgetUpdateRequest, signal?: AbortSignal): Promise<ResWorkflowAdoption> {
   if (!id || !body.cwd || !body.requestId || !body.grantHash || !Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0 ||

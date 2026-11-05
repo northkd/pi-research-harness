@@ -1,6 +1,6 @@
 import { mdiChevronDown, mdiChevronRight } from "@mdi/js";
 import { Icon } from "@mdi/react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 interface CollapsibleSectionProps {
   id: string;
@@ -26,10 +26,18 @@ export function CollapsibleSection({
   testId,
 }: CollapsibleSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
+  const [hasOpened, setHasOpened] = useState(defaultOpen);
+  const userToggled = useRef(false);
+  const toggle = () => {
+    userToggled.current = true;
+    setHasOpened(true);
+    setIsOpen(previous => !previous);
+  };
 
   useEffect(() => {
-    if (isUpdating) {
+    if (isUpdating && !userToggled.current) {
       setIsOpen(true);
+      setHasOpened(true);
     }
   }, [isUpdating]);
 
@@ -40,11 +48,13 @@ export function CollapsibleSection({
         role="button"
         tabIndex={0}
         aria-expanded={isOpen}
-        onClick={() => setIsOpen((prev) => !prev)}
+        aria-controls={`${id}-content`}
+        onClick={toggle}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setIsOpen((prev) => !prev);
+            toggle();
           }
         }}
         className="flex cursor-pointer select-none flex-wrap items-center justify-between gap-3 px-4 py-3.5 transition-colors hover:bg-[var(--bg-hover)]"
@@ -80,7 +90,7 @@ export function CollapsibleSection({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setIsOpen((prev) => !prev);
+              toggle();
             }}
             className="win11-btn px-2.5 py-1 text-xs text-[var(--text-secondary)]"
             title={isOpen ? "点击收起面板" : "点击展开面板"}
@@ -97,8 +107,8 @@ export function CollapsibleSection({
       </div>
 
       {/* WinUI 3 Expander Content Drawer */}
-      {isOpen && (
-        <div className="min-w-0 border-t border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
+      {hasOpened && (
+        <div id={`${id}-content`} hidden={!isOpen} className="min-w-0 border-t border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
           {children}
         </div>
       )}

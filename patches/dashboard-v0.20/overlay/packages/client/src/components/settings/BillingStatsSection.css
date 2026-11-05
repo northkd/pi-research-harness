@@ -1,0 +1,15 @@
+.billing-statistics { color: var(--text-primary); }
+.billing-statistics-filters { padding: 16px; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); }
+.billing-statistics-metric:first-child { border-color: var(--accent-primary); background: var(--bg-primary); }
+.billing-statistics .billing-control { cursor: pointer; }
+.billing-statistics .billing-control:disabled { opacity: 0.5; cursor: not-allowed; }
+.billing-statistics .billing-control:hover:not(:disabled) { border-color: var(--accent-primary); }
+.billing-statistics button:focus-visible,
+.billing-statistics select:focus-visible,
+.billing-statistics input:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.billing-statistics [role="tab"][aria-selected="true"] { background: var(--bg-active, var(--bg-hover)); }
+.billing-statistics-row { font-size: 14px; }
+@media (max-width: 640px) {
+  .billing-statistics-filters { padding: 12px; }
+  .billing-statistics .billing-control { min-height: 40px; }
+}

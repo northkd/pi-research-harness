@@ -18,6 +18,7 @@ import type { SidebarState } from "../../hooks/useSidebarState.js";
 import { t as i18nT } from "../../lib/i18n/i18n.js";
 import { RestoreTab } from "../split/RestoreTab.js";
 import { SeamGrip } from "../split/SeamGrip.js";
+import "../session/session-navigation.css";
 
 interface Props {
   sidebar: SidebarState;
@@ -62,7 +63,7 @@ export function ResizableSidebar({ sidebar, children }: Props) {
 
   // Expanded sidebar with an always-visible dotted-grip resize seam.
   return (
-    <div ref={sidebarRef} className="flex flex-shrink-0 relative" style={{ width }}>
+    <div ref={sidebarRef} className="research-navigation-rail flex flex-shrink-0 relative" style={{ width }}>
       <div className="flex-1 overflow-hidden flex flex-col">{children}</div>
       {/* Resize seam — visible dotted grip + centered collapse knob. */}
       <div
@@ -70,7 +71,21 @@ export function ResizableSidebar({ sidebar, children }: Props) {
         onMouseDown={drag.onMouseDown}
         style={{ touchAction: "none" }}
         data-testid="drag-handle"
-        className="relative flex w-2.5 shrink-0 cursor-col-resize items-center justify-center bg-[var(--border-primary)] transition-colors hover:bg-blue-500/30 active:bg-blue-500/50"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={i18nT("sessionList.resizeNavigation", undefined, "Resize project navigation")}
+        aria-valuemin={MIN_WIDTH}
+        aria-valuemax={MAX_WIDTH}
+        aria-valuenow={width}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+            e.preventDefault();
+            setWidth(clampWidth(width + (e.key === "ArrowRight" ? 16 : -16)));
+          }
+        }}
+        className="research-navigation-seam focus-ring relative flex w-2.5 shrink-0 cursor-col-resize items-center justify-center transition-colors"
       >
         <SeamGrip dots={3} data-testid="rail-seam-grip" />
         <button

@@ -56,11 +56,13 @@ import { isPseudoTabViewer, type OpenPathViewer } from "./viewer-kinds.js";
 
 const absOf = (cwd: string, rel: string): string => (rel ? `${cwd}/${rel}` : cwd);
 
-export function EditorPane() {
+export function EditorPane({ workspaceChrome = false }: { workspaceChrome?: boolean } = {}) {
   const { t } = useI18n();
   const {
     sessionId,
     cwd,
+    split,
+    filesRevealSignal = 0,
     paneState: state,
     dispatch,
     updateSplit,
@@ -115,7 +117,16 @@ export function EditorPane() {
       setTreeVisible(true);
     }
   }, [changesRevealSignal, setTreeVisible]);
-  const [refreshNonce, setRefreshNonce] = useState(0);
+  const prevFilesReveal = useRef(filesRevealSignal);
+  useEffect(() => {
+    if (prevFilesReveal.current !== filesRevealSignal) {
+      prevFilesReveal.current = filesRevealSignal;
+      setTreeVisible(true);
+    }
+  }, [filesRevealSignal, setTreeVisible]);
+  // A refresh belongs to one document. A pane-wide nonce would also remount
+  // every retained draft the next time its tab becomes active.
+  const [refreshVersions, setRefreshVersions] = useState<Record<string, number>>({});
   // Fail-safe ordering (changed-on-disk verification): a file tab's content
   // baseline is read BEFORE its viewer mounts, so a change landing in between
   // can only produce a false-positive banner, never a silently stale view.
@@ -129,6 +140,8 @@ export function EditorPane() {
 
   // Cmd/Ctrl-P (filenames) or Cmd/Ctrl-Shift-F (contents) toggles the search.
   useEffect(() => {
+    // A retained but hidden pane must not steal the chat/composer shortcuts.
+    if (workspaceChrome && split.mode === "closed") return;
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
@@ -139,7 +152,7 @@ export function EditorPane() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [workspaceChrome, split.mode]);
 
   const onContentSearch = useCallback(
     (q: string, regex: boolean) => grepContents(cwd, q, regex),
@@ -157,13 +170,19 @@ export function EditorPane() {
 
   const activeTab = state.activeIndex >= 0 ? state.openFiles[state.activeIndex] : null;
   const activePath = activeTab?.path ?? null;
+  const paneVisible = !workspaceChrome || split.mode !== "closed";
+  const refreshScope = `${sessionId}\0${cwd}\0${activePath ?? ""}`;
+  const refreshNonce = refreshVersions[refreshScope] ?? 0;
+  const refreshActive = useCallback(() => {
+    setRefreshVersions(previous => ({ ...previous, [refreshScope]: (previous[refreshScope] ?? 0) + 1 }));
+  }, [refreshScope]);
   // A browse rail can consume almost the entire narrow research pane.
   useEffect(() => {
     if (activeTab?.viewer === "research") setTreeVisible(false);
   }, [activeTab?.viewer, sessionId, setTreeVisible]);
   // Plugin file-handler modes (session-scoped panes only — `changeDetection` is
   // the session-pane flag). See change: add-editor-pane-file-handlers.
-  const fh = useFileHandlerPane({ sessionId, cwd, sessionPane: changeDetection, state, dispatch });
+  const fh = useFileHandlerPane({ sessionId, cwd, sessionPane: changeDetection, state, dispatch, visible: paneVisible });
   // The binary notice names the matching modes (D11 A4); same claims + action as the switcher.
   const fhSelect = fh.selectMode;
   const modeOffers = useMemo<FileModeOffers | null>(
@@ -198,20 +217,37 @@ export function EditorPane() {
 
   const lineForTab = scrollTo && scrollTo.path === activePath ? scrollTo.line : undefined;
 
-  // The mount key of the active FILE tab's viewer (open, activation, Refresh and
-  // provenance/line changes all change it); `null` for pseudo/plugin tabs, which
+  // The mount key of the active FILE tab's viewer (Refresh and provenance/line
+  // changes change it); `null` for pseudo/plugin tabs, which
   // are never watched or baselined. `autoOpened` is in the key: a provenance
   // change remounts the tab so its next request uses the new eligibility
   // (surface-denial-remedy-in-previews, D4). Scoped to (session, cwd): a switch drops the
   // per-scope baseline store, so an identical path:nonce key must still recapture one.
   // A handler-mode tab has no built-in viewer: no baseline read here (the handler's
   // `snapshot()` sets the baseline) and `refreshNonce` does not key it.
+  const retainAuthoringFile = workspaceChrome && activeTab && !fh.handlerView
+    && ["markdown", "asciidoc", "spreadsheet"].includes(activeTab.viewer);
+  // Rich authoring viewers do not consume a source-line target. Navigating to
+  // a line in another tab must not invalidate one of their retained drafts.
+  const viewerLineKey = retainAuthoringFile ? "" : lineForTab ?? "";
   const fileViewerKey =
     activeTab && !isPseudoTabViewer(activeTab.viewer) && !fh.handlerView
-      ? `${sessionId}\u0000${cwd}\u0000${activeTab.path}:${refreshNonce}:${lineForTab ?? ""}:${activeTab.autoOpened === true}`
+      ? `${sessionId}\u0000${cwd}\u0000${activeTab.path}:${refreshNonce}:${viewerLineKey}:${activeTab.autoOpened === true}`
       : null;
+
+  // Keep the baseline paired with the buffer that was actually loaded. A
+  // cache hit must not adopt a new disk digest or dismiss its conflict banner.
+  const retainedScope = `${sessionId}\0${cwd}`;
+  const retained = useRef<{ scope: string; bodies: Map<string, { body: React.ReactNode; viewerKey: string | null }> }>({ scope: retainedScope, bodies: new Map() });
+  if (retained.current.scope !== retainedScope) retained.current = { scope: retainedScope, bodies: new Map() };
+  for (const path of retained.current.bodies.keys()) {
+    if (!state.openFiles.some(file => file.path === path) || (activePath === path && fh.handlerView)) retained.current.bodies.delete(path);
+  }
+  const retainActive = retainAuthoringFile || (workspaceChrome && activeTab?.path === "research:");
+  const retainedBaseline = !!(retainActive && activePath && fileViewerKey
+    && retained.current.bodies.get(activePath)?.viewerKey === fileViewerKey);
   useEffect(() => {
-    if (!changeDetection || !fileViewerKey || !activePath) return;
+    if (!changeDetection || !fileViewerKey || !activePath || retainedBaseline) return;
     let active = true;
     void captureBaselineRef.current(activePath).then(() => {
       if (active) setBaselineReadyKey(fileViewerKey);
@@ -219,7 +255,7 @@ export function EditorPane() {
     return () => {
       active = false;
     };
-  }, [changeDetection, fileViewerKey, activePath]);
+  }, [changeDetection, fileViewerKey, activePath, retainedBaseline]);
 
   let body: React.ReactNode;
   if (!activeTab) {
@@ -273,7 +309,7 @@ export function EditorPane() {
             // Plugin file-handler mode: the page-level layer aligns the live
             // instance over this anchor; CappedViewer is NOT mounted.
             <FileHandlerAnchor instanceKey={fh.activeKey} />
-          ) : changeDetection && baselineReadyKey !== viewerKey ? (
+          ) : changeDetection && !retainedBaseline && baselineReadyKey !== viewerKey ? (
             // Baseline first (D2): the digest round-trip is the price of the
             // fail-safe ordering; a failed digest still resolves (null baseline).
             <div className="p-4 text-sm text-[var(--text-tertiary)]">{t("editor.loadingViewer", undefined, "Loading viewer…")}</div>
@@ -286,6 +322,18 @@ export function EditorPane() {
       </PreviewProvenance>
     );
   }
+
+  // Retain only stateful authoring surfaces after their first visit. Heavy
+  // read-only previews and browser/Science subscriptions still unmount on exit.
+  // Explicit tab closure and a scope change always release the retained tree.
+  // An explicit refresh/provenance change checks a new baseline first. Keep
+  // the old buffer mounted until that finishes; a first visit shows loading.
+  const waitingForBaseline = changeDetection && fileViewerKey && !retainedBaseline && baselineReadyKey !== fileViewerKey;
+  if (retainActive && activePath && !waitingForBaseline) {
+    retained.current.bodies.set(activePath, { body, viewerKey: fileViewerKey });
+  }
+  const workspaceSurface = workspaceChrome && (activeTab?.path === "research:" || activeTab?.viewer === "science");
+  const liveBodyVisible = !workspaceChrome || split.mode !== "closed" || (activeTab?.viewer !== "science" && activeTab?.viewer !== "plugin");
 
   const language = activeTab && activeTab.viewer !== "research" && activeTab.viewer !== "science" ? activeTab.path.slice(activeTab.path.lastIndexOf(".") + 1) : "";
   const scienceTitle = activeTab?.viewer === "science" ? parseScienceArtifactTabPath(activeTab.path)
@@ -301,7 +349,7 @@ export function EditorPane() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Header */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-primary)] px-3 py-2">
+      <div className="editor-pane-toolbar flex shrink-0 items-center gap-2 border-b border-[var(--border-primary)] px-3 py-2" hidden={workspaceSurface} style={workspaceSurface ? { display: "none" } : undefined}>
         <button
           type="button"
           onClick={() => setTreeVisible(!treeVisible)}
@@ -353,7 +401,7 @@ export function EditorPane() {
         {activeTab && (
           <button
             type="button"
-            onClick={() => (fh.handlerView ? void fh.refreshHandler() : setRefreshNonce((n) => n + 1))}
+            onClick={() => (fh.handlerView ? void fh.refreshHandler() : refreshActive())}
             className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
             title={t("editor.reloadFile", undefined, "Reload file")}
           >
@@ -375,8 +423,9 @@ export function EditorPane() {
       <TerminalLimitNotice cwd={cwd} inline={false} />
 
       {/* Tabs */}
-      {state.openFiles.length > 0 && (
+      {state.openFiles.length > 0 && !workspaceSurface && (
         <EditorTabs
+          active={paneVisible}
           openFiles={state.openFiles}
           activeIndex={state.activeIndex}
           terminalTitle={terminalTitle}
@@ -403,7 +452,7 @@ export function EditorPane() {
 
       {/* Tree + inner divider + viewer */}
       <div ref={rowRef} className="flex min-h-0 flex-1">
-        {treeVisible && (
+        {treeVisible && !workspaceSurface && (
           <>
             <div ref={railRef} className="shrink-0 flex min-h-0 flex-col" style={{ width: railWidth }}>
               {/* Changes section pinned atop the project-tree rail (change:
@@ -460,7 +509,7 @@ export function EditorPane() {
                   });
                   return;
                 }
-                setRefreshNonce((n) => n + 1);
+                refreshActive();
                 clearChanged(activePath);
                 // Re-declare the open set so a key the server dropped (a long
                 // delete) is restored. See change: gate-changed-on-disk-by-content (D5).
@@ -482,7 +531,14 @@ export function EditorPane() {
               term tab is active `body` is the null placeholder and the layer's
               active terminal fills. See change: terminals-in-tabbed-panes. */}
           <div className="min-h-0 flex-1 flex flex-col">
-            {body}
+            {workspaceChrome && [...retained.current.bodies].map(([path, content]) => (
+              <div key={`${retainedScope}\0${path}`} data-testid="retained-workspace-view" data-path={path}
+                className="min-h-0 min-w-0 flex-1 flex-col" hidden={activePath !== path || !retainActive}
+                style={{ display: activePath === path && retainActive ? "flex" : "none" }}>
+                {content.body}
+              </div>
+            ))}
+            {(!retainActive || !activePath || !retained.current.bodies.has(activePath)) && liveBodyVisible && body}
             {/* D3: mount the lazy layer only once a terminal tab has been the
                 active tab. The `Suspense` fallback fills the same pane-body
                 region (`min-h-0 flex-1`) so the pane does not collapse while
@@ -511,7 +567,7 @@ export function EditorPane() {
       </div>
 
       {/* Status footer */}
-      {activeTab && activeTab.viewer !== "research" && (
+      {activeTab && activeTab.viewer !== "research" && !workspaceSurface && (
         <div className="flex shrink-0 items-center gap-3 border-t border-[var(--border-primary)] px-3 py-1 text-xs text-[var(--text-tertiary)]">
           {activeTab.viewer === "science" ? <span>{scienceTitle}</span> : <>
             <span>{activeTab.viewer}</span>

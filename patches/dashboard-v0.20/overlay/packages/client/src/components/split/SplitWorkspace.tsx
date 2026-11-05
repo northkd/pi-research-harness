@@ -46,6 +46,8 @@ interface SplitWorkspaceProps {
    * side-by-side, no divider). Desktop keeps side-by-side.
    */
   replaceChat?: boolean;
+  /** Preserve visited workspace forms and document drafts when changing views. */
+  keepMounted?: boolean;
 }
 
 export function SplitWorkspace({
@@ -57,8 +59,11 @@ export function SplitWorkspace({
   chat,
   editor,
   replaceChat = false,
+  keepMounted = false,
 }: SplitWorkspaceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const editorVisited = useRef(mode !== "closed");
+  if (mode !== "closed") editorVisited.current = true;
   // Clipping boundary for popovers rendered in the chat pane (ChatViewMenu,
   // ModelSelector, ThinkingLevelSelector, composer menus). Provided via context
   // so those popovers flip/clamp against this offset `overflow-hidden` pane
@@ -103,7 +108,7 @@ export function SplitWorkspace({
   const isFull = mode === "full";
   const isDesktop = orientation === "h";
 
-  if (replaceChat && !isClosed) {
+  if (replaceChat && !isClosed && !keepMounted) {
     // Tablet: the canvas replaces chat — full-width editor, chat pane omitted.
     return (
       <div
@@ -138,14 +143,14 @@ export function SplitWorkspace({
         key="chat"
         ref={chatPaneRef}
         data-testid="split-chat-pane"
-        className={`flex min-h-0 min-w-0 flex-col overflow-hidden ${isFull ? "hidden" : ""}`}
+        className={`flex min-h-0 min-w-0 flex-col overflow-hidden ${isFull || (replaceChat && !isClosed) ? "hidden" : ""}`}
         style={isSplit ? { flexGrow: ratio, flexShrink: 1, flexBasis: 0 } : isClosed ? { flex: "1 1 0" } : undefined}
       >
         <PopoverBoundaryProvider value={chatPaneRef}>{chat}</PopoverBoundaryProvider>
       </div>
 
       {/* Resize-only divider — `split` only, no collapse control. */}
-      {isSplit && (
+      {isSplit && !replaceChat && (
         <SplitDivider
           key="divider"
           orientation={orientation}
@@ -157,15 +162,16 @@ export function SplitWorkspace({
         />
       )}
 
-      {/* Editor pane — mounted in `split` and `full`, unmounted in `closed`.
-          Its EDITOR caption lives inside EditorPane's own header row. */}
-      {!isClosed && (
+      {/* The task shell retains visited authoring surfaces while hidden. The
+          legacy layout still releases the pane on close. */}
+      {(!isClosed || (keepMounted && editorVisited.current)) && (
         <div
           key="editor"
           ref={editorPaneRef}
           data-testid="split-editor-pane"
+          hidden={isClosed}
           className="flex min-h-0 min-w-0 flex-col overflow-hidden"
-          style={isSplit ? { flexGrow: 1 - ratio, flexShrink: 1, flexBasis: 0 } : { flex: "1 1 0" }}
+          style={isClosed ? { display: "none" } : isSplit && !replaceChat ? { flexGrow: 1 - ratio, flexShrink: 1, flexBasis: 0 } : { flex: "1 1 0" }}
         >
           {editor}
         </div>

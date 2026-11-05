@@ -1,12 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResearchWorkbenchObservation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
-import { ResearchExecutionPanels } from "../ResearchExecutionPanels.js";
+import { getActualSkills, ResearchExecutionPanels } from "../ResearchExecutionPanels.js";
+import { CollapsibleSection } from "../CollapsibleSection.js";
 import { ResearchClaimPanels } from "../ResearchClaimPanels.js";
 import { latestObservedExecution, parseResearchSnapshot, projectResearch, type ResearchSnapshot } from "../research-projection.js";
 const snapshot: ResearchSnapshot = { state: { charter: { objective: "question", revision: 1 }, claims: [] }, events: [], attempts: [], receipt: null };
 function observation(): ResearchWorkbenchObservation { return { schema: "res-workflow.workbench-observation.v1", cwd: "/project", adoptionId: "adoption-1", charterHash: `sha256:${"a".repeat(64)}`, revision: `sha256:${"b".repeat(64)}`, updatedAt: "2026-10-30T10:00:00.000Z", heartbeatAt: "2026-10-30T10:00:00.000Z", coverage: { partial: false, reasons: [], parentSessions: 1, nativeRuns: 1 }, executions: [{ id: "pi:main", kind: "pi-session", sessionId: "main", status: "streaming" }, { id: "native:child", kind: "native-subagent", parentExecutionId: "pi:main", role: "numerics", status: "running", observedModel: "actual/numerics", lastActivityAt: "2026-10-30T10:00:00.000Z" }], relations: [], observedUsage: { responses: 1, inputTokens: 2, outputTokens: 3, inheritedExcluded: 0, metric: "observed-assistant-responses" } }; }
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("research scientific panels", () => {
   it("does not create default roles, model names, graph nodes or a Stage 1 for an empty project", () => {
     const projection = projectResearch(snapshot); render(<ResearchExecutionPanels projection={projection} stage={null} includeUnstaged stale={false} onAgent={vi.fn()} />);
@@ -78,13 +79,14 @@ describe("research scientific panels", () => {
       await waitFor(() => expect(within(canvas).getAllByText("实验协作者").length).toBeGreaterThan(0));
       expect(canvas.textContent).toContain("创建者：研究主会话");
       expect(canvas.textContent).toContain("Lead 创建");
-      expect(canvas.textContent).toContain("全流程主控协调");
+      expect(canvas.textContent).toContain("暂无已记录的任务职责");
+      expect(canvas.textContent).not.toContain("全流程主控协调");
       expect(canvas.textContent).not.toMatch(/parent-uuid|child-uuid|DO_NOT_USE_RAW_FIRST_PROMPT/);
     } finally { vi.unstubAllGlobals(); }
   });
 
   it("requests res-workflow membership when independently launching a stage session", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ success: true }) }));
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ success: true }) }));
     vi.stubGlobal("fetch", fetchMock);
     try {
       const projection = projectResearch(snapshot);
@@ -98,5 +100,37 @@ describe("research scientific panels", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("does not turn configured skills or task text into observed tool calls", () => {
+    const row = projectResearch(snapshot, observation()).executions[1];
+    row.prompt = "Use research-lit and paper-writing if needed";
+    expect(getActualSkills(row, { name: "reviewer", skills: ["idea-creator"] })).toEqual([]);
+    row.currentTool = "bash";
+    expect(getActualSkills(row, { name: "reviewer", skills: ["idea-creator"] })).toEqual(["bash"]);
+  });
+
+  it("respects a manual collapse while activity continues and retains form state", () => {
+    const view = render(<CollapsibleSection id="manual-collapse" title="活动面板" isUpdating><input aria-label="未发送草稿" defaultValue="keep me" /></CollapsibleSection>);
+    fireEvent.change(screen.getByRole("textbox", { name: "未发送草稿" }), { target: { value: "changed draft" } });
+    fireEvent.click(screen.getByRole("button", { name: /^收起$/ }));
+    view.rerender(<CollapsibleSection id="manual-collapse" title="活动面板" isUpdating={false}><input aria-label="未发送草稿" defaultValue="keep me" /></CollapsibleSection>);
+    view.rerender(<CollapsibleSection id="manual-collapse" title="活动面板" isUpdating><input aria-label="未发送草稿" defaultValue="keep me" /></CollapsibleSection>);
+    expect(screen.queryByRole("textbox", { name: "未发送草稿" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^展开$/ }));
+    expect((screen.getByRole("textbox", { name: "未发送草稿" }) as HTMLInputElement).value).toBe("changed draft");
+  });
+
+  it("offers all native executions beyond the initial 36 without counting formal steps as subagents", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [] }))));
+    const observed = observation();
+    observed.executions = [observed.executions[0], ...Array.from({ length: 38 }, (_, index) => ({ ...observed.executions[1], id: `native-${index}`, prompt: `unique-task-${index}`, status: "completed" as const }))];
+    const formal: ResearchSnapshot = { ...snapshot, events: [{ kind: "run-registered", detail: { runId: "workflow", charterRevision: 1 } }, { kind: "run-step", detail: { runId: "workflow", key: "one", agent: "historical-role", status: "completed" } }] };
+    render(<ResearchExecutionPanels projection={projectResearch(formal, observed)} stage={null} includeUnstaged stale={false} mode="teams" onAgent={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "角色矩阵" }));
+    expect(screen.queryByText("unique-task-37")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "查看全部 38 项子任务" }));
+    expect(screen.getByText("unique-task-37")).toBeTruthy();
+    expect(screen.getByTestId("research-workflow-step-fallback")).toBeTruthy();
   });
 });

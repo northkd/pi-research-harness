@@ -37,6 +37,7 @@ export function ResearchOverviewAndBudget({
   onRefresh,
   workbench,
   observationStale,
+  showStageSelector = true,
 }: {
   cwd: string;
   viewStage: StageId | null;
@@ -51,10 +52,11 @@ export function ResearchOverviewAndBudget({
   onRefresh?: () => void;
   workbench?: ResearchWorkbenchObservation | null;
   observationStale?: boolean;
+  showStageSelector?: boolean;
 }) {
   const selectedStage = viewStage ?? projection.stage;
   const isUpdating = projection.executions.some((ex) =>
-    ["streaming", "started", "running"].includes(ex.status)
+    !(observationStale && ex.source === "observation") && ["streaming", "started", "running"].includes(ex.status)
   );
 
   return (
@@ -64,11 +66,11 @@ export function ResearchOverviewAndBudget({
       title="科研进度、阶段与预算总览"
       isUpdating={isUpdating}
       defaultOpen={true}
-      subtitle="整合阶段控制、4 项核心审计指标与受控研究预算；有活跃更新时自动展开"
+      subtitle="正式研究指标、按次数计量的受控预算与实际执行观测"
     >
       <div className="space-y-4">
         {/* Stage Selection Card (WinUI 3 Surface) */}
-        <div className="win11-card-subtle p-4 space-y-3">
+        {showStageSelector && <div className="win11-card-subtle p-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-[var(--text-secondary)]">
               正在查看：
@@ -128,7 +130,7 @@ export function ResearchOverviewAndBudget({
               );
             })}
           </ol>
-        </div>
+        </div>}
 
         {/* 4 Stats KPI Cards (Auto-Fit Grid prevents squishing in any Split Ratio) */}
         <section data-testid="research-stats" className="win11-grid-stats">

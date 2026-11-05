@@ -31,16 +31,18 @@ describe("ResearchPipelinePage formal science and actual executions", () => {
   it("keeps explicit workflow steps and stage browsing functional without marking prior stages complete", async () => {
     fakeApi({ events: [{ kind: "run-registered", detail: { runId: "actual-run", charterRevision: 1 } }, { kind: "stage-enter", detail: { runId: "actual-run", stage: "2-experiment", sourceSeq: 1 } }, { kind: "run-step", detail: { runId: "actual-run", key: "real-step", agent: "research-numerics", stage: "2-experiment", status: "completed", observedModel: "actual/model", summary: "真实结果" } }] });
     render(<ResearchPipelinePage cwd={CWD} />); await flush(); expect(screen.getByTestId("research-current-stage").textContent).toBe("实验与验证");
-    expect(screen.getAllByTestId("research-agent-node")).toHaveLength(1); expect(screen.getByText("最新观测模型：actual/model")).toBeTruthy();
-    expect(screen.queryByText("已完成")).toBeNull(); fireEvent.click(screen.getByTestId("research-stage-3-review")); expect(screen.queryAllByTestId("research-agent-node")).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "跟随当前实际记录" })); expect(screen.getAllByTestId("research-agent-node")).toHaveLength(1);
+    expect(screen.queryAllByTestId("research-agent-node")).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("research-workflow-step-fallback").querySelector("[role=button]")!);
+    expect(screen.getAllByTestId("research-workflow-step-record")).toHaveLength(1); expect(screen.getByText("记录模型：actual/model")).toBeTruthy();
+    expect(screen.getByTestId("research-stage-2-experiment").closest("ol")?.textContent).not.toContain("已完成"); fireEvent.click(screen.getByTestId("research-stage-3-review")); expect(screen.queryAllByTestId("research-workflow-step-record")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "跟随当前实际记录" })); expect(screen.getByTestId("research-workflow-step-fallback")).toBeTruthy();
   });
   it("shows every claim gate independently and exposes only safe evidence in the same pane", async () => {
     const open = vi.fn(); fakeApi({ initialState: { ...state, claims: [{ id: "accepted", statement: "one fact", status: "supported", acceptance: { verdict: "accepted", counterexample: { status: "completed" } }, publication: { authorized: true } }, { id: "blocked", statement: "still unresolved", status: "proposed", evidence: ["runs/result.csv", "../secret"], acceptance: { verdict: "blocked", diagnostics: ["second family missing"] } }] }, events: [{ kind: "review-gate", detail: { verdict: "blocked", diagnostics: ["review not complete"] } }] });
     render(<ResearchPipelinePage cwd={CWD} onOpenArtifact={open} />); await flush(); expect(screen.getAllByTestId("research-claim-gate")).toHaveLength(2);
     expect(screen.getByText(/1 \/ 2 条主张/)).toBeTruthy(); expect(screen.getByText("second family missing")).toBeTruthy(); expect(screen.getByText("review not complete")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "runs/result.csv" })); expect(open).toHaveBeenCalledWith("runs/result.csv"); expect(screen.queryByText("../secret")).toBeNull();
-    expect(within(screen.getByTestId("research-claims")).getByText("发表已授权（非实际发表）")).toBeTruthy();
+    expect(within(screen.getByTestId("research-claims")).getByText("发表授权：已授权（非实际发表）")).toBeTruthy();
   });
   it("does not call an adopted directory unstarted and prepares continuation after checking current tasks", async () => {
     fakeApi({ adopted: true }); render(<ResearchPipelinePage cwd={CWD} />); await flush();
@@ -49,7 +51,7 @@ describe("ResearchPipelinePage formal science and actual executions", () => {
   });
   it("refreshes formal claims and clears them after a directory denial while preserving honest errors", async () => {
     const api = fakeApi(); render(<ResearchPipelinePage cwd={CWD} />); await flush(); api.setState({ ...state, claims: [{ id: "new", statement: "new recorded claim", status: "proposed" }] });
-    fireEvent.click(screen.getByRole("button", { name: "刷新", exact: true })); expect(await screen.findByText("new recorded claim")).toBeTruthy();
-    api.deny(); fireEvent.click(screen.getByRole("button", { name: "刷新", exact: true })); expect(await screen.findByText(/无权读取科研记录/)).toBeTruthy(); expect(screen.queryByText("new recorded claim")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^刷新$/ })); expect(await screen.findByText("new recorded claim")).toBeTruthy();
+    api.deny(); fireEvent.click(screen.getByRole("button", { name: /^刷新$/ })); expect(await screen.findByText(/无权读取科研记录/)).toBeTruthy(); expect(screen.queryByText("new recorded claim")).toBeNull();
   });
 });

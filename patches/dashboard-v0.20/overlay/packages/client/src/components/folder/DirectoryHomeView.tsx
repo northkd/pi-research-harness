@@ -36,7 +36,7 @@ import { YoloComposerStrip } from "../access-grant/YoloIndicators.js";
 import { CommandInput } from "../chat/CommandInput.js";
 import { EditorPane } from "../editor-pane/EditorPane.js";
 import { ResWorkflowSpawnChoice } from "../research/ResWorkflowSpawnChoice.js";
-import { LayoutModeSwitch } from "../split/LayoutModeSwitch.js";
+import { WorkspaceNavigation, WorkspaceTools } from "../split/WorkspaceNavigation.js";
 import { SplitWorkspace } from "../split/SplitWorkspace.js";
 import { useOptionalSplitWorkspace } from "../split/SplitWorkspaceContext.js";
 import { LazyWorktreeSpawnDialog } from "../worktree/lazy-worktree-dialogs.js";
@@ -386,7 +386,6 @@ export function DirectoryHomeView({
         </span>
         <span className="hidden min-w-0 truncate font-mono text-xs text-[var(--text-tertiary)] sm:inline">{cwd}</span>
         <span className="flex-1" />
-        {inFolderSplit && <LayoutModeSwitch />}
         <button
           type="button"
           data-testid="directory-home-settings"
@@ -400,6 +399,8 @@ export function DirectoryHomeView({
       </header>
 
       {inFolderSplit && split ? (
+        <>
+        <WorkspaceNavigation folder />
         <SplitWorkspace
           mode={split.split.mode}
           ratio={split.split.ratio}
@@ -407,8 +408,11 @@ export function DirectoryHomeView({
           onRatioChange={(ratio) => split.updateSplit({ ratio })}
           onModeChange={(mode) => split.updateSplit({ mode })}
           chat={pane}
-          editor={<EditorPane />}
+          editor={<EditorPane workspaceChrome />}
+          keepMounted
         />
+        <WorkspaceTools />
+        </>
       ) : (
         pane
       )}
