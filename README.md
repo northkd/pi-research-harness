@@ -168,11 +168,13 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 授权接入实际的文件访问门控及主线监督确认流程。批准范围内直接继续；普通路径遇到到期、撤销或范围不符时返回明确阻塞并记录到面板，供 agent 继续其余独立工作、最后说明未完成条件。敏感及不可授予路径仍遵守原有独立门控。授权不会扩大原有计算预算、提供外部服务凭据或自动授权材料外发与发表，也不会修改全局 Pi YOLO 设置。
 
-新的 `research_dispatch` 是持久化分发执行器。主 agent 通过 `plan` 提交有稳定 ID 和依赖关系的任务；执行器创建真实子会话、控制并发、等待结果并通知父会话。协作者收到多个可分开的工作后也要建立计划；单一不可拆分任务使用 `atomic` 说明原因。通过 `research_session.tasks` 明确提交的工作，在子会话注册后由后台自动分发。
+新的 `research_dispatch` 是持久化分发执行器。对于较大的目标，主 agent 优先通过 `delegate` 一次提交目标、必要约束、验收条件和材料引用，由独立的执行协调者完成详细分析、拆分、跟进、复核与汇总。协调者通过 `plan` 提交有稳定 ID 和依赖关系的任务；执行器创建真实子会话、控制并发、等待结果并通知父会话。协作者收到多个可分开的工作后也要建立计划；单一不可拆分任务使用 `atomic` 说明原因。通过 `research_session.tasks` 明确提交的工作，在子会话注册后由后台自动分发。
 
 子任务须通过 `report` 提交真实状态、摘要和证据路径。idle 不等于完成，未返回的孩子与失败回执不能被上层的成功声明覆盖。语义拆分仍由模型决定；实际调度、依赖和回执由代码执行。等待中的协调者保留驻留资源统计，但不会占满可运行工作者的名额。
 
-使用步骤、工具示例、限额、恢复行为和实际验证范围见 [长任务与协作实现说明](docs/autonomous-collaboration/implementation.md)。
+主 agent 的默认分发回执限制为 8 KiB UTF-8 文本，重复查询只返回简短的未变更状态；详情按需分页，每页最多 16 KiB，并核对记录版本。子会话不复制父会话全文，工作台记忆块也设有独立预算。主 agent 保留目标、关键决策和最终验收，详细材料及执行过程留在协调者与 worker 中。代码限制后续注入量，不会清除已经进入上下文的历史内容，也不承诺降低所有 agent 合计的 token 开销。
+
+使用步骤、工具示例、限额、恢复行为和实际验证范围见 [长任务与协作实现说明](docs/autonomous-collaboration/implementation.md)及[主 agent 上下文减负说明](docs/autonomous-collaboration/context-offload.md)。
 
 ## 证据、评审与发表授权
 
@@ -419,7 +421,9 @@ node scripts/ui-preview/launcher.mjs run \
 
 已保存的 2026-11-05 UI 验证覆盖五个主视图、未保存编辑状态、费用、接入抽屉、明暗主题与多种宽度：浏览器 25 项通过；Harness 233 项与监督离线 63 项通过；覆盖层 610 个文件完成应用与校验。各前端测试组存在重叠，不应相加成唯一测试总数。完整范围和失败项见 [validation.json](docs/ui-redesign/validation.json) 与[实施报告](docs/ui-redesign/implementation.md)。本次文档重写的检查另记于 [README 核查记录](docs/README-VERIFICATION.md)。
 
-2026-11-06 本分支完成新的原生部署与浏览器验证：29 项通过，包含协作层级、画布内动效展开与授权面板。Harness 265 项、监督离线 64 项、画布 31 项、原生路径门控 39 项及服务端门控 10 项通过；624 个覆盖层文件与部署目录一致。完整类型检查仍有 61 条既有诊断，新增 0 条。分组范围、adapter 检查、运行边界及截图见[本次实施记录](docs/autonomous-collaboration/implementation.md)和[验证结果](docs/autonomous-collaboration/validation.json)。没有运行真实模型或连续十几个小时的作业。
+2026-11-06 首轮原生部署与浏览器验证 29 项通过，包含协作层级、画布内动效展开与授权面板。Harness 265 项、监督离线 64 项、画布 31 项、原生路径门控 39 项及服务端门控 10 项通过；当时的 624 个覆盖层文件与部署目录一致。分组范围、adapter 检查、运行边界及截图见[首轮实施记录](docs/autonomous-collaboration/implementation.md)和[首轮验证结果](docs/autonomous-collaboration/validation.json)。
+
+同日跟进增加目标委托、有限回执与记忆、只读继承和首次提示登记屏障：Harness 308 项、监督离线 64 项、原生提示/授权/事件接线 9 项通过；重新构建、原生服务部署和浏览器 29 项通过，627 个覆盖层文件校验一致。完整类型检查仍有 61 条既有诊断，本次新增 0 条。合成状态文本测量及完整范围见[减负验证结果](docs/autonomous-collaboration/context-offload-validation.json)。两轮均未运行真实模型或连续十几个小时的作业。
 
 ## 可用范围与已知问题
 

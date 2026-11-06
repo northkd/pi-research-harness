@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-06",
+  "method": "Synthetic snapshots rendered by the previous JSON.stringify(snapshot,null,2) path and the current production projectDispatchContext; UTF-8 bytes of model-facing text. No model/provider/token usage measurement.",
+  "limits": {
+    "defaultReplyBytes": 8192,
+    "detailReplyBytes": 16384
+  },
+  "results": [
+    {
+      "name": "six-medium-CJK-tasks",
+      "inputs": {
+        "tasks": 6,
+        "taskCharacters": 600,
+        "summaryCharacters": 400,
+        "evidencePathsPerTask": 2,
+        "evidencePathCharacters": 48
+      },
+      "oldModelBytes": 21484,
+      "newModelBytes": 6579,
+      "reductionPercent": 69.38,
+      "preservedFailures": 1
+    },
+    {
+      "name": "twenty-four-long-CJK-tasks",
+      "inputs": {
+        "tasks": 24,
+        "taskCharacters": 4000,
+        "summaryCharacters": 4000,
+        "evidencePathsPerTask": 16,
+        "evidencePathCharacters": 1002
+      },
+      "oldModelBytes": 1734291,
+      "newModelBytes": 8029,
+      "reductionPercent": 99.54,
+      "preservedFailures": 1
+    }
+  ]
+}

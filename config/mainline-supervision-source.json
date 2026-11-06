@@ -19,7 +19,8 @@
     "Remove four trailing spaces inherited from local author-owned source/tests; no behavioral change",
     "macOS capture reports OS total/free memory separately; Linux-only resource admission remains fail-closed",
     "Project-local auto-approval preference is persisted separately from scientific acceptance; explicit startup defaults and existing hard gates are preserved",
-    "Confirmed time-limited workbench task grants suppress repeated soft confirmations; dispatch plans retain resource and branch gates, with live revocation and dormant-start guidance tests"
+    "Confirmed time-limited workbench task grants suppress repeated soft confirmations; dispatch plans retain resource and branch gates, with live revocation and dormant-start guidance tests",
+    "Goal delegation uses the same live task grant, scoped branch and resource checks as declared dispatch plans; model-facing receipts are separately bounded by the research extension"
   ],
   "liveNewModelRoundtrip": "NOT_RUN",
   "persistentWorkflowHumanAdjudication": "NOT_IMPLEMENTED",
@@ -91,7 +92,7 @@
     },
     {
       "path": "src/policy.mjs",
-      "sha256": "81d967592772f643e1bd0ae10ecf25d31bf42e1458141b215a5aa7b575cb6657",
+      "sha256": "d0c584eea0bbca2ba6c7ae577c724e1963b565d08d24514c1293ccb28f53e094",
       "localSourceSha256": "1d463b2f3f7c70054cada527b614d0795c855a8fbeae2e7dc1aebf12d1b6f93b"
     },
     {
@@ -136,7 +137,7 @@
     },
     {
       "path": "test/proportional-policy.test.mjs",
-      "sha256": "ee81e72f4e8b1e612e08668e4f9c353019f9cfae6eefd4745e3ca972baefcf0b",
+      "sha256": "386b8e1da0a0bc2c7a7120cac9fa6848993aca013d7121771832aeaa1e57152c",
       "localSourceSha256": "003c33e51880f2b8655b815576a548f67032ceb265526a93c90c6cf61ade635e"
     },
     {

@@ -6,6 +6,13 @@ import { readResearchBudget } from './research-budget.mjs';
 import { buildDelegationGuidance, mergeDelegationRestrictions } from './delegation-policy.mjs';
 
 export const WORKBENCH_CONTEXT_SECTION = 'res_workflow_records';
+/** Covers the complete memory block, including source references and omission
+ * notices. The fixed record/delegation protocol outside that block is separate. */
+export const WORKBENCH_MEMORY_MAX_BYTES = 8 * 1024;
+const HISTORY_PREVIEW_MAX_BYTES = 1024;
+const LEDGER_TAIL_MAX_BYTES = 16 * 1024;
+const STATE_SOURCE = '.pi/research-loop/state.json';
+const MEMORY_END = '【Research Memory end】';
 const STAGES = new Set(['1-idea', '2-experiment', '3-review', '4-summary', '5-writing']);
 const HASH = /^sha256:[a-f0-9]{64}$/;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -77,8 +84,42 @@ function confirmedOwnerAdoption(privateDir, cwd, ownerKey, hash) {
   } catch { return null; }
 }
 
+/** History is only a small lead-session preview, never a full ledger read. */
+function readRecentFindings(cwd) {
+  let fd;
+  try {
+    const file = canonical(path.join(cwd, 'ledger.jsonl'));
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+    const before = fs.fstatSync(fd);
+    if (!before.isFile() || before.nlink !== 1) return '';
+    const start = Math.max(0, before.size - LEDGER_TAIL_MAX_BYTES);
+    const buffer = Buffer.alloc(before.size - start);
+    let count = 0;
+    while (count < buffer.length) {
+      const read = fs.readSync(fd, buffer, count, buffer.length - count, start + count);
+      if (!read) break;
+      count += read;
+    }
+    const after = fs.fstatSync(fd), named = fs.lstatSync(file);
+    if (count !== buffer.length || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || named.isSymbolicLink() || named.ino !== before.ino || named.dev !== before.dev) return '';
+    let raw = buffer.toString('utf8');
+    // The tail can begin inside a UTF-8 character or a JSON record. Only whole
+    // records are eligible; an oversized last record stays available by reference.
+    if (start > 0) raw = raw.includes('\n') ? raw.slice(raw.indexOf('\n') + 1) : '';
+    return raw.trim().split('\n').filter(Boolean).slice(-3).map(line => {
+      try {
+        const item = JSON.parse(line);
+        if (!object(item)) return '';
+        const text = (value, fallback = '') => typeof value === 'string' ? value : fallback;
+        return `- [${text(item.kind, '尝试')}] ${text(item.action)}: ${text(item.observed) || text(item.lesson)} (信号: ${text(item.signal, '未知')})`;
+      } catch { return ''; }
+    }).filter(Boolean).join('\n');
+  } catch { return ''; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
 /** The hook authorizes only this session's exact persisted membership and owner scope. */
-export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.homedir(), '.pi', 'dashboard', 'res-workflow') } = {}) {
+export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.homedir(), '.pi', 'dashboard', 'res-workflow'), env = process.env } = {}) {
   const cwd = canonical(ctx?.cwd);
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   const sessionFile = ctx?.sessionManager?.getSessionFile?.();
@@ -115,42 +156,100 @@ export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.home
     };
   } catch { /* Unavailable budget is unknown, never fabricated as zero or unlimited. */ }
 
-  let memory = {
-    objective: state.charter?.objective,
-    successCriteria: state.charter?.successCriteria ?? [],
-    claimsCount: Array.isArray(state.claims) ? state.claims.length : 0,
-    acceptedClaims: Array.isArray(state.claims) ? state.claims.filter(c => c.acceptance?.verdict === 'accepted').map(c => c.statement).slice(0, 3) : [],
-    recentFindings: '',
-  };
-  try {
-    const ledgerFile = path.join(cwd, 'ledger.jsonl');
-    if (fs.existsSync(ledgerFile)) {
-      const lines = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').filter(Boolean);
-      const recent = lines.slice(-3).map(l => {
-        try {
-          const item = JSON.parse(l);
-          return `- [${item.kind || '尝试'}] ${item.action || ''}: ${item.observed || item.lesson || ''} (信号: ${item.signal || '未知'})`;
-        } catch { return ''; }
-      }).filter(Boolean);
-      memory.recentFindings = recent.join('\n');
-    }
-  } catch {}
-
   const researchSession = meta.researchSession ?? meta.pluginRefs?.['res-workflow']?.researchSession;
   const collaborator = object(researchSession) && researchSession.schema === 'pi-research-session.v1' && researchSession.workflowCwd === cwd && researchSession.charterHash === hash && researchSession.adoptionId === adoptionId && ID.test(researchSession.parentSessionId ?? '');
-  return { ...(collaborator ? { researchSession: { parentSessionId: researchSession.parentSessionId, spawnToken: researchSession.spawnToken, depth: researchSession.depth, role: researchSession.role, declaredTasks: researchSession.tasks?.length ?? 0 } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, budget, memory };
+  const includeHistory = !collaborator && env?.PI_SUBAGENT_CHILD !== '1';
+  const memory = {
+    objective: state.charter?.objective,
+    successCriteria: state.charter?.successCriteria ?? [],
+    constraints: state.charter?.constraints ?? [],
+    nonGoals: state.charter?.nonGoals ?? [],
+    claimsCount: Array.isArray(state.claims) ? state.claims.length : 0,
+    acceptedClaims: includeHistory && Array.isArray(state.claims) ? state.claims.filter(c => c?.acceptance?.verdict === 'accepted').slice(0, 3).map(c => c.statement) : [],
+    recentFindings: includeHistory ? readRecentFindings(cwd) : '',
+    historyPolicy: includeHistory ? 'bounded-lead-preview' : 'references-only',
+  };
+  return { ...(collaborator ? { researchSession: { parentSessionId: researchSession.parentSessionId, spawnToken: researchSession.spawnToken, depth: researchSession.depth, role: researchSession.role, readOnly: researchSession.readOnly === true, declaredTasks: researchSession.tasks?.length ?? 0 } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, budget, memory };
+}
+
+function utf8Prefix(value, maximum) {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.length <= maximum) return value;
+  let end = Math.max(0, maximum);
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+function memoryField(label, value, source, count) {
+  const prefix = label + '\n';
+  const notice = `\n[truncated=true; ${count === undefined ? 'field prefix only' : `list prefix only, ${count} entries total`}; read ${source} in full.]`;
+  const full = prefix + value;
+  const minimum = Math.min(Buffer.byteLength(full), Buffer.byteLength(prefix + notice));
+  return {
+    size: Buffer.byteLength(full), minimum,
+    render(maximum) {
+      if (Buffer.byteLength(full) <= maximum) return full;
+      return prefix + utf8Prefix(value, maximum - Buffer.byteLength(prefix + notice)) + notice;
+    },
+  };
+}
+
+/** Bounded excerpts are navigation aids, never replacements for a frozen charter. */
+export function buildWorkbenchMemory(context, memory = context?.memory ?? {}, options = {}) {
+  const memSource = object(memory) ? memory : {};
+  const header = [
+    '【科研工作流深度记忆与上下文注入 (Research Memory)】',
+    `Memory block budget: ${WORKBENCH_MEMORY_MAX_BYTES} UTF-8 bytes, including references/notices. The fixed record and delegation guidance outside this block is separate.`,
+    `Authority: ${STATE_SOURCE}#/charter, relative to this verified workbench; hash=${HASH.test(context?.charterHash ?? '') ? context.charterHash : 'unavailable'}; revision=${Number.isSafeInteger(context?.charterRevision) ? context.charterRevision : 'unknown'}.`,
+    'A truncated field is incomplete: read its exact source field before acting on its scope or claiming its criteria are met. No omitted goal, criterion or constraint is waived. History previews are optional; fetch only evidence relevant to the current assignment.',
+  ].join('\n');
+  const list = (key, label) => {
+    const source = `${STATE_SOURCE}#/charter/${key}`;
+    const values = memSource[key];
+    const text = Array.isArray(values) ? values.length ? values.map((value, index) => `  - [${index}] ${typeof value === 'string' ? value : `[non-text value; read ${source}/${index}]`}`).join('\n') : '[none recorded]' : `[not loaded; read ${source}]`;
+    return memoryField(`${label}：`, text, source, Array.isArray(values) ? values.length : undefined);
+  };
+  const fields = [
+    memoryField('当前研究核心目标：', typeof memSource.objective === 'string' ? memSource.objective : `[not loaded; read ${STATE_SOURCE}#/charter/objective]`, `${STATE_SOURCE}#/charter/objective`),
+    list('successCriteria', '验收成功准则'),
+    list('constraints', '任务约束'),
+    list('nonGoals', '非目标与边界'),
+  ];
+  const child = !!context?.researchSession || (options.env ?? process.env)?.PI_SUBAGENT_CHILD === '1' || memSource.historyPolicy === 'references-only';
+  const historySource = `${STATE_SOURCE}#/claims (statement, evidence, acceptance.verdict) and ledger.jsonl (action, observed, lesson, signal)`;
+  const count = Number.isSafeInteger(memSource.claimsCount) && memSource.claimsCount >= 0 ? memSource.claimsCount : 'unknown';
+  const history = child
+    ? memoryField('History references only for this child:', `Historical claims and ledger text are not injected. Read task-relevant fields from ${historySource}.`, historySource)
+    : memoryField(`已记录主张：${count} 条；lead history preview (at most ${HISTORY_PREVIEW_MAX_BYTES} UTF-8 bytes):`, [
+      Array.isArray(memSource.acceptedClaims) && memSource.acceptedClaims.length ? `已通过内部验收主张 (up to 3): ${memSource.acceptedClaims.slice(0, 3).filter(value => typeof value === 'string').join('；')}` : '',
+      typeof memSource.recentFindings === 'string' && memSource.recentFindings ? `最新尝试记录与观测证据 (up to 3 complete tail records):\n${memSource.recentFindings}` : '',
+      `Read relevant full records from ${historySource}; a missing preview does not mean no record exists.`,
+    ].filter(Boolean).join('\n'), historySource);
+  const sections = [...fields, history];
+  // Reserve every field's exact omission notice before allocating excerpts.
+  // Objective/criteria/constraints/non-goals get all spare capacity before history.
+  const grants = sections.map(section => section.minimum);
+  const overhead = Buffer.byteLength(header) + Buffer.byteLength(MEMORY_END) + sections.length + 1;
+  let available = WORKBENCH_MEMORY_MAX_BYTES - overhead - grants.reduce((sum, value) => sum + value, 0);
+  const weights = [3, 4, 2, 1], share = available;
+  for (let index = 0; index < fields.length; index++) {
+    const extra = Math.min(fields[index].size - grants[index], Math.floor(share * weights[index] / 10));
+    grants[index] += extra; available -= extra;
+  }
+  for (let index = 0; index < fields.length; index++) {
+    const extra = Math.min(fields[index].size - grants[index], available);
+    grants[index] += extra; available -= extra;
+  }
+  const last = sections.length - 1;
+  grants[last] += Math.min(Math.max(0, Math.min(history.size, HISTORY_PREVIEW_MAX_BYTES) - grants[last]), available);
+  return [header, ...sections.map((section, index) => section.render(grants[index])), MEMORY_END].join('\n');
 }
 
 export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?? {}, options = {}) {
-  const memSource = object(memory) ? memory : {};
-  const mem = memSource.objective ? [
-    '',
-    '【科研工作流深度记忆与上下文注入 (Research Memory)】',
-    `当前研究核心目标：${memSource.objective}`,
-    memSource.successCriteria?.length ? `验收成功准则：\n${memSource.successCriteria.map(s => '  - ' + s).join('\n')}` : '',
-    `当前阶段已沉淀主张：${memSource.claimsCount} 条${memSource.acceptedClaims?.length ? '（含已通过内部验收主张：' + memSource.acceptedClaims.join('；') + '）' : ''}`,
-    memSource.recentFindings ? `最新尝试记录与观测证据：\n${memSource.recentFindings}` : '',
-  ].filter(Boolean).join('\n') : '';
+  // Direct callers may pass context.memory. Never serialize that unbounded
+  // payload again beside its budgeted rendering (the hook already separates it).
+  const { memory: _memory, ...recordContext } = object(context) ? context : {};
+  const mem = buildWorkbenchMemory(recordContext, memory, options);
   const delegation = buildDelegationGuidance({
     selectedTools: options.selectedTools,
     restrictions: options.restrictions,
@@ -159,7 +258,7 @@ export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?
 
   return [
     'This Pi session is joined to the confirmed res-workflow research workbench.',
-    `Verified current record context: ${JSON.stringify(context)}`,
+    `Verified current record context: ${JSON.stringify(recordContext)}`,
     mem,
     '',
     delegation,

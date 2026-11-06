@@ -204,7 +204,11 @@ export function buildDelegationGuidance({ selectedTools, restrictions, env } = {
   if (caps.researchSession) {
     lines.push('- `research_session` is active for independent Pi processes with real parent links. Supply tasks when a collaborator receives several jobs; the server automatically dispatches that structured list.');
   }
-  if (caps.researchDispatch) lines.push('- `research_dispatch` executes a declared DAG immediately, enforces dependencies and concurrency, and records child reports. Use stable planId on retries. For indivisible work record atomic with a reason; never substitute prose for an execution receipt.');
+  if (caps.researchDispatch) lines.push(
+    '- For a broad goal, prefer `research_dispatch` action=delegate with stable planId, task (goal, mandatory constraints, acceptance criteria and file references) and stage. A separate execution coordinator does the detailed decomposition, dispatch, debugging, evidence review and aggregation. The lead keeps scope, key decisions and the final conclusion; do not bulk-read the project before handing off.',
+    '- `research_dispatch` action=plan executes an already decomposed DAG, enforces dependencies and concurrency, and records child reports. Use stable planId on retries. For indivisible work record atomic with a reason; never substitute prose for an execution receipt.',
+    '- Default dispatch replies are bounded summaries. Read selected evidence with status view=detail and planId/taskId; follow nextOffset for additional pages. Detailed child logs stay in child sessions/files. Wait for completion notifications; do not poll or re-run delegated work in the lead context.',
+  );
   return lines.join('\n');
 }
 

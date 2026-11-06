@@ -181,4 +181,10 @@ test('research dispatch plans share resource and branch gates while status/repor
   const restricted = decide(store, 'research_dispatch', { action: 'plan', tasks: [{ task: 'Inspect src/a.py' }] });
   assert.equal(restricted.allow, false);
   assert.equal(restricted.confirmable, undefined);
+  const goal = { toolName: 'research_dispatch', input: { action: 'delegate', task: 'Inspect src/a.py', stage: '3-review', planId: 'goal' } };
+  assert.equal(needsResource(goal), true);
+  assert.equal(observationTool(goal.toolName, goal.input), false);
+  assert.equal(operationDecision(store, store.getState(), goal).allow, false);
+  store.meminfo = 'MemAvailable: 1000 kB';
+  assert.equal(operationDecision(store, store.getState(), goal).hard, true);
 });

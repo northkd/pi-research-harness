@@ -17,6 +17,7 @@ import { createAgentConfirmRegistry } from "./access/agent-confirm-registry.js";
 import { handlePathGateRefusal } from "./access/agent-yolo.js";
 import { recordRefusal } from "./access/refusal-ledger.js";
 import { handleResearchTaskPathRequest } from "./res-workflow/research-task-path-handler.js";
+import { createResearchRegistrationBarrier } from "./res-workflow/research-registration-barrier.mjs";
 import { handlePathGrantRequest } from "./access/agent-grant.js";
 import { announceableGrantStoreId } from "./access/grant-store-id.js";
 import { type PendingAttachment, prepareEventForIngest } from "./attachments/attachment-ingest.js";
@@ -370,6 +371,7 @@ export function wireEvents(deps: EventWiringDeps): void {
     customEventGroupResolver,
   } = deps;
   const inFlightToolCalls = deps.inFlightToolCalls ?? createInFlightToolCalls();
+  const researchRegistrationBarrier = createResearchRegistrationBarrier();
   const replayState = deps.replayState ?? createReplayState();
   const replayController = replayState.controller;
   const hydration = replayState.hydration;
@@ -701,6 +703,7 @@ export function wireEvents(deps: EventWiringDeps): void {
   };
 
   sessionManager.onUnregister = (sessionId) => {
+    researchRegistrationBarrier.clear(sessionId);
     // A dead session has no env to withdraw from and must not receive pushes.
     deps.vaultDelivery?.forget(sessionId);
     // Turn-boundary reset (change: auto-canvas): a terminated session must not
@@ -1925,8 +1928,13 @@ export function wireEvents(deps: EventWiringDeps): void {
       }
 
 
-      if (pendingResWorkflowRef && deps.registerResWorkflowParticipant) {
-        void deps.registerResWorkflowParticipant(sessionId, msg, pendingResWorkflowRef).catch(() => {
+      if (pendingResWorkflowRef) {
+        const association = pendingResWorkflowRef;
+        void researchRegistrationBarrier.register(sessionId,
+          () => {
+            if (!deps.registerResWorkflowParticipant) throw new Error("research participant association unavailable");
+            return deps.registerResWorkflowParticipant(sessionId, msg, association);
+          }).catch(() => {
           // Association failure never changes spawn success or material consent.
           // No private owner binding, path, transcript or provider error is logged.
           console.warn(`[res-workflow] participant association failed for ${sessionId}; manual retry remains available`);
@@ -1949,24 +1957,32 @@ export function wireEvents(deps: EventWiringDeps): void {
       // that was never consumed/rolled back may fall back to the cwd FIFO.
       // A consumed/rolled-back/expired token never falls back — otherwise a
       // duplicate register could steal a concurrent legacy prompt.
-      if (pendingInitialPromptRegistry) {
-        let prompt: string | null = null;
-        if (msg.spawnToken) {
-          prompt = pendingInitialPromptRegistry.consume(msg.cwd, msg.spawnToken);
-          if (prompt === null && !pendingInitialPromptRegistry.wasSpawnConsumed(msg.spawnToken)) {
+      const dispatchInitialPrompt = () => {
+        if (pendingInitialPromptRegistry) {
+          let prompt: string | null = null;
+          if (msg.spawnToken) {
+            prompt = pendingInitialPromptRegistry.consume(msg.cwd, msg.spawnToken);
+            if (prompt === null && !pendingInitialPromptRegistry.wasSpawnConsumed(msg.spawnToken)) {
+              prompt = pendingInitialPromptRegistry.consume(msg.cwd);
+              // Legacy WS caller filed this prompt by cwd (the token only
+              // carried ownership). Retire the token so a duplicate register
+              // cannot drain another same-cwd legacy intent.
+              pendingInitialPromptRegistry.remove(msg.cwd, msg.spawnToken);
+            }
+          } else {
             prompt = pendingInitialPromptRegistry.consume(msg.cwd);
-            // Legacy WS caller filed this prompt by cwd (the token only
-            // carried ownership). Retire the token so a duplicate register
-            // cannot drain another same-cwd legacy intent.
-            pendingInitialPromptRegistry.remove(msg.cwd, msg.spawnToken);
           }
-        } else {
-          prompt = pendingInitialPromptRegistry.consume(msg.cwd);
+          if (prompt) {
+            piGateway.sendToSession(sessionId, { type: "send_prompt", sessionId, text: prompt });
+          }
         }
-        if (prompt) {
-          piGateway.sendToSession(sessionId, { type: "send_prompt", sessionId, text: prompt });
-        }
-      }
+      };
+      // Research membership writes are asynchronous. Provisional/duplicate
+      // registration must not consume the first prompt ahead of trusted scope.
+      void researchRegistrationBarrier.deliver(sessionId, dispatchInitialPrompt,
+        { deferred: deferResWorkflow }).catch(() => {
+          console.warn(`[res-workflow] initial prompt delivery failed for ${sessionId}`);
+        });
 
       // Resolve the originating browser `requestId` (when known) so the
       // upcoming session_added broadcast can carry spawnRequestId and the

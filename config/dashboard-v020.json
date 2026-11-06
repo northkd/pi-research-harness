@@ -1767,6 +1767,10 @@
       "sha256": "d7e1179812ca55159a10f6de9deff2da6d16d352a817772a57452a820666f3d1",
       "baseBlob": null
     },
+    "packages/server/src/__tests__/research-session-context-budget.test.ts": {
+      "sha256": "0b3291b441afec5cb40db7a1938a432d249e82babc4a3b1d10787632928d2381",
+      "baseBlob": null
+    },
     "packages/server/src/__tests__/research-task-permissions.test.ts": {
       "sha256": "63890502eb7fee38c238194972b362c5755392575e37259f333dd0670875436a",
       "baseBlob": null
@@ -1904,7 +1908,7 @@
       "baseBlob": "53430c8b072730dbcff03968f3e378689945d3b0"
     },
     "packages/server/src/event-wiring.ts": {
-      "sha256": "e0e579e0fc0733634fcc3d56740f11be6c466250de8eed9f066a3af340f4e1ae",
+      "sha256": "52cfd73962c8a04552a232cf25f6845d3a683e1edc9a5eb2eeddd1cf11c6a184",
       "baseBlob": "81caad7ebac2737ac39b89e6f5434b40a3dfcbd9"
     },
     "packages/server/src/identity/__tests__/http-road-classification.test.ts": {
@@ -2112,19 +2116,27 @@
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-dispatch-service.d.mts": {
-      "sha256": "e947c4650278da0920dff293d74160aa20bf16b357e3a1ced7505e7cfa37924e",
+      "sha256": "f611d1c62a6483eb2fe3f70e0a857181e0b8bfd353cd556c61a102cf4d48c9dd",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-dispatch-service.mjs": {
-      "sha256": "d553f3f52448a3a3d1fc3eb8a977aaa3b45685a686d94acf992d6004333c4581",
+      "sha256": "3bc9901e502711d7be75b9d0aae16f8a82ea184642b1f3a490ed80cbac26c15f",
+      "baseBlob": null
+    },
+    "packages/server/src/res-workflow/research-registration-barrier.d.mts": {
+      "sha256": "7e691a64c05283e14fdc8ded145fb25c01e5fdbd31f80aaf508244e4398e4275",
+      "baseBlob": null
+    },
+    "packages/server/src/res-workflow/research-registration-barrier.mjs": {
+      "sha256": "cbfc9bb089eaf32d7c6a2b07dc8863073fb9f678c457c1d8c720a6340103855d",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-session-service.d.mts": {
-      "sha256": "9d3d0c4af2f12d975360420a87b0f0be42ca21522aacc9cebb6e2c597eac4591",
+      "sha256": "113d5823186e3d5b79f7fcd6389b34e9064faf5c65e2dcb83325e4975dca6fab",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-session-service.mjs": {
-      "sha256": "4a3eb6fc9ea882ee9cfebade63c8fa3c3753cfe69dec2d47a136c9f912c9e161",
+      "sha256": "c352739ac263e222b0e57af221e1cdafde1d856f7fbcf98c01a3ced5ce5b6717",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-task-path-handler.ts": {
@@ -2420,7 +2432,7 @@
       "baseBlob": null
     },
     "packages/shared/src/research-session.ts": {
-      "sha256": "1879959a717f832333826c49f730ceb36af09e8bad192295464e678b7df62aa7",
+      "sha256": "d3cdbab29d1bd61a485e652f32e0a2dbb1d7ddd1f5e8a2193e78a2f5772983f8",
       "baseBlob": null
     },
     "packages/shared/src/research-task-permissions.ts": {

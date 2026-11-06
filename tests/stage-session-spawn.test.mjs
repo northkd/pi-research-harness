@@ -365,6 +365,7 @@ async function run() {
       sendToSession(...args) {
         sent.push(args);
         if (args[1]?.type === 'send_prompt') sequence.push('prompt');
+        if (args[1]?.type === 'send_prompt') options.onPrompt?.(args[1]);
         return true;
       },
       getConnectedSessionIds() { return []; },
@@ -392,12 +393,12 @@ async function run() {
           }
         : {}),
     });
-    const register = (id, token, cwd = '/proj') => {
+    const register = (id, token, cwd = '/proj', extra = {}) => {
       sessionManager.register({ id, cwd, source: 'cli', startedAt: 1 });
-      piGateway.onEvent(id, { type: 'session_register', sessionId: id, cwd, source: 'cli', ...(token ? { spawnToken: token } : {}) });
+      piGateway.onEvent(id, { type: 'session_register', sessionId: id, cwd, source: 'cli', ...(token ? { spawnToken: token } : {}), ...extra });
     };
     const promptTexts = () => sent.filter(([, m]) => m?.type === 'send_prompt').map(([, m]) => m.text);
-    return { registry, sent, sequence, register, promptTexts, browserGateway };
+    return { registry, sent, sequence, register, promptTexts, browserGateway, unregister: id => sessionManager.unregister(id) };
   }
 
   test('event-wiring delivers token-bound prompt to the exact session, not same-cwd sibling', () => {
@@ -486,24 +487,71 @@ async function run() {
     r.browserGateway.wss.close();
   });
 
-  test('event-wiring resolves participant registration before dispatching the first prompt', () => {
+  test('event-wiring waits for completed membership before consuming the first research prompt', async () => {
     const refs = createPendingPluginRefRegistry({ now: () => 0, warn: () => {} });
     const calls = [];
+    let release, received;
+    const admission = new Promise(resolve => { release = resolve; });
+    const delivered = new Promise(resolve => { received = resolve; });
     const w = wiringRig({
       pendingPluginRefRegistry: refs,
+      onPrompt: received,
       registerResWorkflowParticipant: async (id, registration, ref) => {
         calls.push({ id, registration, ref });
+        await admission;
       },
     });
     assert.equal(refs.file('tok-join', workflowRefFixture, 'res-workflow'), true);
     w.registry.enqueue('/proj', 'stage prompt', 'tok-join');
     w.register('join-session', 'tok-join');
+    await Promise.resolve();
+    assert.deepEqual(w.sequence, ['participant']);
+    assert.equal(w.registry.sizeForSpawn(), 1);
+    w.register('join-session', 'tok-join');
+    assert.deepEqual(w.promptTexts(), []);
+    release(); await delivered;
     assert.deepEqual(w.sequence, ['participant', 'prompt']);
     assert.deepEqual(w.promptTexts(), ['stage prompt']);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].id, 'join-session');
     assert.equal(calls[0].ref.resWorkflow.canonicalCwd, '/proj');
     w.browserGateway.wss.close();
+  });
+
+  test('event-wiring provisional research registration cannot consume the eventual task', async () => {
+    const refs = createPendingPluginRefRegistry({ now: () => 0, warn: () => {} });
+    let received;
+    const delivered = new Promise(resolve => { received = resolve; });
+    const w = wiringRig({ pendingPluginRefRegistry: refs, registerResWorkflowParticipant: async () => {}, onPrompt: received });
+    refs.file('tok-provisional', workflowRefFixture, 'res-workflow');
+    w.registry.enqueue('/proj', 'trusted task', 'tok-provisional');
+    w.register('provisional-session', 'tok-provisional', '/proj', { provisional: true });
+    await new Promise(setImmediate);
+    assert.deepEqual(w.sequence, []);
+    assert.equal(w.registry.sizeForSpawn(), 1);
+    w.register('provisional-session', 'tok-provisional');
+    await delivered;
+    assert.deepEqual(w.sequence, ['participant', 'prompt']);
+    w.browserGateway.wss.close();
+  });
+
+  test('failed or unavailable research association stays closed across unregister and re-register', async () => {
+    for (const missing of [false, true]) {
+      const refs = createPendingPluginRefRegistry({ now: () => 0, warn: () => {} });
+      const w = wiringRig({ pendingPluginRefRegistry: refs,
+        ...(missing ? {} : { registerResWorkflowParticipant: async () => { throw new Error('admission refused'); } }) });
+      refs.file('tok-failed', workflowRefFixture, 'res-workflow');
+      w.registry.enqueue('/proj', 'must not execute', 'tok-failed');
+      w.register('failed-session', 'tok-failed');
+      await new Promise(setImmediate);
+      assert.deepEqual(w.promptTexts(), []);
+      w.unregister('failed-session');
+      w.register('failed-session', 'tok-failed');
+      await new Promise(setImmediate);
+      assert.deepEqual(w.promptTexts(), []);
+      assert.equal(w.registry.sizeForSpawn(), 1);
+      w.browserGateway.wss.close();
+    }
   });
 
   test('registry: token entries are invisible to cwd-only consume and mismatched tokens', () => {

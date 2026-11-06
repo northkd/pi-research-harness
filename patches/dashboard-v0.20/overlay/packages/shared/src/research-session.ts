@@ -51,6 +51,8 @@ export interface ResearchSessionProvenance {
   rootSessionId?: string;
   depth?: number;
   tasks?: ResearchDispatchTask[];
+  /** Narrowing inherited by every descendant; absence never clears a parent constraint. */
+  readOnly?: true;
   dispatchId?: string;
   taskId?: string;
   createdAt: string;
@@ -75,6 +77,7 @@ export function isResearchSessionProvenance(value: unknown): value is ResearchSe
     text(row.workflowCwd, 4096) && row.workflowCwd.startsWith("/") &&
     TOKEN.test(row.spawnToken ?? "") && iso(row.createdAt) &&
     row.origin === "research_session" && row.relation === "dispatch" &&
+    (row.readOnly === undefined || row.readOnly === true) &&
     (row.requestId === undefined || TOKEN.test(row.requestId)) &&
     (row.rootSessionId === undefined || ID.test(row.rootSessionId)) &&
     (row.depth === undefined || (Number.isSafeInteger(row.depth) && row.depth >= 1 && row.depth <= 3)) &&
@@ -91,6 +94,7 @@ export function normalizeResearchSessionProvenance(value: unknown): ResearchSess
     creatorAgent: value.creatorAgent, role: value.role, task: value.task, stage: value.stage,
     charterHash: value.charterHash, adoptionId: value.adoptionId, workflowCwd: value.workflowCwd,
     spawnToken: value.spawnToken, createdAt: value.createdAt, origin: value.origin, relation: value.relation,
+    ...(value.readOnly === true ? { readOnly: true as const } : {}),
     ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
     ...(value.rootSessionId === undefined ? {} : { rootSessionId: value.rootSessionId }),
     ...(value.depth === undefined ? {} : { depth: value.depth }),
@@ -165,21 +169,52 @@ export function deriveResearchSessionRelations(
   return [...byId.values()];
 }
 
-/** The first prompt for the child, built from verified metadata only. */
-export function buildResearchSessionInitialPrompt(provenance: ResearchSessionProvenance): string {
+export const RESEARCH_SESSION_INITIAL_PROMPT_BYTES = 16 * 1024;
+const promptBytes = (value: string) => new TextEncoder().encode(value).length;
+function promptPrefix(value: string, maximum: number) {
+  let used = 0, output = '';
+  for (const character of value) {
+    const bytes = promptBytes(character);
+    if (used + bytes > maximum) break;
+    output += character; used += bytes;
+  }
+  return output;
+}
+
+/** A fresh task brief, never a copy of the parent's transcript or dependency bodies. */
+export function buildResearchSessionInitialPrompt(provenance: ResearchSessionProvenance, taskContext?: { dispatchId?: string; taskId?: string; prerequisiteResults?: Array<{ id: string }> }): string {
   const row = normalizeResearchSessionProvenance(provenance);
-  return [
-    `You are a research collaborator with a real parent session in the confirmed res-workflow at ${row.workflowCwd}.`,
+  const ids = [...new Set((taskContext?.prerequisiteResults ?? []).map(row => row?.id).filter(id => typeof id === 'string' && ID.test(id)))].slice(0, 12);
+  const dispatchId = taskContext?.dispatchId ?? row.dispatchId;
+  const taskId = taskContext?.taskId ?? row.taskId;
+  const prefix = [
+    'You are a research collaborator in a fresh Pi session joined to the confirmed research workbench. No parent conversation is copied into this task.',
     `Role: ${row.role}`,
     `Stage: ${row.stage}`,
     `Parent session: ${row.parentSessionId}`,
     `Frozen charter: ${row.charterHash} (adoption ${row.adoptionId})`,
+    'Use the verified workbench context for the workspace, current charter, permission scope and shared budget. This assignment expands none of them.',
+    row.readOnly === true ? 'READ-ONLY assignment: preserve project files and external state. Do not edit, install, or run modifying experiments. Delegate only read-only work; coordination and result receipts remain available.' : '',
+    row.role === 'research-coordinator'
+      ? 'You are the execution coordinator: analyze the goal, decompose it into bounded tasks, schedule specialists, follow progress and blockers, arrange independent verification, and aggregate the evidence. Keep implementation and raw logs in worker contexts. Send the lead only decisions requiring attention and a short final aggregate receipt with evidence references.'
+      : 'Complete only this assigned scope. Keep analysis and raw execution details in this worker context; return a short truthful result and evidence references.',
     '',
     'Task:',
-    row.task,
+  ].filter(Boolean).join('\n') + '\n';
+  const suffix = [
     '',
-    'You run in a separate Pi process, but remain a child of the recorded parent. Keep the same workspace, owner, frozen charter, permission scope and shared task budget.',
-    'First call research_dispatch status. Declared structured tasks are automatically scheduled by the server; coordinate their results instead of doing them locally. For several separable work items, submit a research_dispatch plan with dependencies before bulk work. For one indivisible item, use research_dispatch atomic with a concrete reason. Controlled child delegation is allowed within the shared limits; leaf roles cannot delegate.',
-    'Use research_loop to record actual attempts and evidence. If status shows a dispatcher assignment, finish with research_dispatch report (completed, failed or blocked), a truthful summary and relative evidence paths. Wait for your own children before reporting completion. This assignment never expands the inherited permission scope, provider access, budget or workspace.',
-  ].join('\n');
+    typeof dispatchId === 'string' && ID.test(dispatchId) ? `Dispatcher plan reference: ${dispatchId}` : '',
+    typeof taskId === 'string' && ID.test(taskId) ? `Assignment task reference: ${taskId}` : '',
+    ids.length ? `Direct dependency IDs: ${ids.join(', ')}` : '',
+    'First call research_dispatch action="status". Retrieve dependency receipts with action="status", view="detail", taskId="<dependency-id>", offset=0; read further pages only as needed. Dependency summaries and evidence bodies are deliberately not copied into this prompt.',
+    'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.',
+    'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access, budget and workspace limits remain unchanged.',
+  ].filter(Boolean).join('\n');
+  const task = String(row.task ?? '');
+  const complete = prefix + task + '\n' + suffix;
+  if (promptBytes(complete) < RESEARCH_SESSION_INITIAL_PROMPT_BYTES) return complete;
+  const notice = '\n[Task brief truncated to fit the startup budget. The complete original task is preserved in the verified session record. Before ANY execution, call research_dispatch action="status", view="detail", taskId="self", offset=0 and read every task page. Apply all original goals and constraints; do not infer that omitted text grants permission.]';
+  const available = RESEARCH_SESSION_INITIAL_PROMPT_BYTES - 1 - promptBytes(prefix + notice + '\n' + suffix);
+  if (available < 0) throw new Error('research-session-prompt-metadata-too-large');
+  return prefix + promptPrefix(task, available) + notice + '\n' + suffix;
 }

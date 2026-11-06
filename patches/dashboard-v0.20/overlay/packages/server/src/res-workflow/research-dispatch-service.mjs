@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { ResearchSessionError, researchProvenanceOf, validateResearchTasks } from './research-session-service.mjs';
+import { ResearchSessionError, RESEARCH_SESSION_LIMITS, RESEARCH_SESSION_STAGES, researchProvenanceOf, validateResearchTasks } from './research-session-service.mjs';
 
 export const RESEARCH_DISPATCH_LIMITS = Object.freeze({ maxTasks: 12, maxConcurrency: 3, maxRootTasks: 24, maxPlans: 512, maxPlanBytes: 2 * 1024 * 1024, registrationGraceMs: 120_000, receiptRetryMs: 30_000 });
 const TERMINAL = new Set(['completed', 'failed', 'blocked']);
@@ -74,7 +74,7 @@ export function createResearchDispatchService(deps) {
   const persist = plan => { const saved = clone({ ...plan, updatedAt: now().toISOString() }); deps.store?.write(saved); plans.set(saved.id, saved); return saved; };
   const ownerPrincipal = session => deps.principalForSession ? deps.principalForSession(session) : session?.principalOwner ?? null;
   const activeFor = (sessionId, verified) => [...plans.values()].filter(row => row.parentSessionId === sessionId && row.kind === 'plan' && !TERMINAL.has(row.status) && (!verified || scopeMatches(row, verified)));
-  const publicPlan = plan => ({ id: plan.id, parentSessionId: plan.parentSessionId, rootSessionId: plan.rootSessionId, status: plan.status, concurrency: plan.concurrency, error: plan.error, tasks: plan.tasks.map(row => ({ ...row })), createdAt: plan.createdAt, updatedAt: plan.updatedAt });
+  const publicPlan = plan => ({ id: plan.id, clientPlanId: plan.clientPlanId, mode: plan.mode ?? 'tasks', parentSessionId: plan.parentSessionId, rootSessionId: plan.rootSessionId, status: plan.status, concurrency: plan.concurrency, ...(plan.readOnly === true ? { readOnly: true } : {}), error: plan.error, tasks: plan.tasks.map(row => ({ ...row })), createdAt: plan.createdAt, updatedAt: plan.updatedAt });
   const matchesTask = (plan, task, child) => {
     const p = researchProvenanceOf(child);
     return p && (p.spawnToken === task.spawnToken || p.requestId === task.requestId) && p.parentSessionId === plan.parentSessionId && p.adoptionId === plan.adoptionId && p.charterHash === plan.charterHash && p.workflowCwd === plan.cwd;
@@ -109,20 +109,36 @@ export function createResearchDispatchService(deps) {
     if (!object(input.body) || !ID.test(input.body.sessionId ?? '')) fail(400, 'research-dispatch-session-invalid');
     return deps.authorize({ sessionId: input.body.sessionId, principal: input.principal, expiresAt: input.expiresAt });
   }
-  function createPlan(verified, tasks, planId, concurrency, source) {
+  // Both entry points use the same ledger and scheduler. Only this internal
+  // objective builder may construct a one-task plan: the caller cannot choose
+  // its role, task id, concurrency or dependency shape.
+  function createDelegatedObjective(verified, body) {
+    const allowed = new Set(['sessionId', 'action', 'planId', 'task', 'stage', 'readOnly']);
+    if (Object.keys(body).some(key => !allowed.has(key))) fail(400, 'research-dispatch-unknown-field');
+    if (!string(body.task, RESEARCH_SESSION_LIMITS.maxTaskChars)) fail(400, 'research-dispatch-task-invalid');
+    if (!RESEARCH_SESSION_STAGES.includes(body.stage)) fail(400, 'research-dispatch-stage-invalid');
+    const tasks = [{ id: 'coordinator', role: 'research-coordinator', task: body.task, stage: body.stage, dependsOn: [] }];
+    return createPlanFromTasks(verified, tasks, body.planId, 1, 'tool', 'delegate', body.readOnly);
+  }
+  function createPlan(verified, tasks, planId, concurrency, source, readOnly) {
+    return createPlanFromTasks(verified, validateResearchTasks(tasks), planId, concurrency, source, 'tasks', readOnly);
+  }
+  function createPlanFromTasks(verified, normalized, planId, concurrency, source, mode, requestedReadOnly) {
     if (upstreamStopped(verified.parent)) fail(409, 'research-dispatch-upstream-terminal');
-    const normalized = validateResearchTasks(tasks);
     if (!ID.test(planId ?? '')) fail(400, 'research-dispatch-plan-id-invalid');
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > RESEARCH_DISPATCH_LIMITS.maxConcurrency) fail(400, 'research-dispatch-concurrency-invalid');
-    const fingerprint = hash(JSON.stringify([normalized, concurrency]));
+    const provenance = researchProvenanceOf(verified.parent);
+    const readOnly = requestedReadOnly === true || provenance?.readOnly === true;
+    // Preserve replay of pre-mode ordinary plans. New delegation and narrowed
+    // plans fingerprint their mode/constraint, so a retry cannot change either.
+    const fingerprint = hash(JSON.stringify(mode === 'tasks' && !readOnly ? [normalized, concurrency] : [{ mode, readOnly }, normalized, concurrency]));
     const id = 'dispatch-' + hash(JSON.stringify([verified.ownerKey, verified.cwd, verified.adoptionId, verified.charterHash, verified.parent.id, planId])).slice(0, 40);
     const existing = plans.get(id);
     if (existing) {
-      if (!scopeMatches(existing, verified) || existing.fingerprint !== fingerprint) fail(409, 'research-dispatch-idempotency-conflict');
+      if (!scopeMatches(existing, verified) || (existing.mode ?? 'tasks') !== mode || existing.fingerprint !== fingerprint) fail(409, 'research-dispatch-idempotency-conflict');
       return existing;
     }
     if (activeFor(verified.parent.id, verified).length) fail(409, 'research-dispatch-plan-already-active');
-    const provenance = researchProvenanceOf(verified.parent);
     if ((provenance?.depth ?? 0) >= 3) fail(409, 'research-session-depth-limit');
     const rootSessionId = provenance?.rootSessionId ?? verified.parent.id;
     const reserved = [...plans.values()].filter(row => row.kind === 'plan' && row.rootSessionId === rootSessionId && scopeMatches(row, verified)).reduce((sum, row) => sum + row.tasks.length, 0);
@@ -131,7 +147,7 @@ export function createResearchDispatchService(deps) {
     const plan = {
       schema: 'pi-research-dispatch.v1', kind: 'plan', id, clientPlanId: planId, parentSessionId: verified.parent.id, rootSessionId,
       cwd: verified.cwd, ownerKey: verified.ownerKey, adoptionId: verified.adoptionId, charterHash: verified.charterHash,
-      fingerprint, source, depth: provenance?.depth ?? 0, concurrency, status: 'running', createdAt: now().toISOString(),
+      fingerprint, source, mode, ...(readOnly ? { readOnly: true } : {}), depth: provenance?.depth ?? 0, concurrency, status: 'running', createdAt: now().toISOString(),
       tasks: normalized.map(task => ({ ...task, status: 'queued', requestId: 'dispatch-' + hash(id + ':' + task.id).slice(0, 40) })),
     };
     return persist(plan);
@@ -227,7 +243,7 @@ export function createResearchDispatchService(deps) {
           persist(plan); // Reserve durably before crossing the process boundary.
           try {
             const result = await deps.createSession({
-              body: { parentSessionId: plan.parentSessionId, role: task.role, task: task.task, stage: task.stage, requestId: task.requestId },
+              body: { parentSessionId: plan.parentSessionId, role: task.role, task: task.task, stage: task.stage, requestId: task.requestId, ...(plan.readOnly === true ? { readOnly: true } : {}) },
               principal: ownerPrincipal(parent), expiresAt: null,
               taskContext: { dispatchId: plan.id, taskId: task.id, prerequisiteResults: dependencies.map(row => ({ id: row.id, summary: row.summary, evidence: row.evidence ?? [] })) },
             });
@@ -266,11 +282,13 @@ export function createResearchDispatchService(deps) {
 
   async function handleInternal(input) {
     const verified = await authorize(input), body = input.body;
-    if (!['plan', 'status', 'atomic', 'report', 'cancel'].includes(body.action)) fail(400, 'research-dispatch-action-invalid');
-    const allowed = new Set(['sessionId', 'action', 'planId', 'tasks', 'concurrency', 'reason', 'status', 'summary', 'evidence']);
+    if (!['delegate', 'plan', 'status', 'atomic', 'report', 'cancel'].includes(body.action)) fail(400, 'research-dispatch-action-invalid');
+    const allowed = new Set(['sessionId', 'action', 'planId', 'task', 'stage', 'tasks', 'concurrency', 'readOnly', 'reason', 'status', 'summary', 'evidence']);
     if (Object.keys(body).some(key => !allowed.has(key))) fail(400, 'research-dispatch-unknown-field');
+    if (body.readOnly !== undefined && body.readOnly !== true) fail(400, 'research-dispatch-read-only-invalid');
     await discoverAssignments();
-    if (body.action === 'plan') createPlan(verified, body.tasks, body.planId, body.concurrency ?? 2, 'tool');
+    if (body.action === 'delegate') createDelegatedObjective(verified, body);
+    if (body.action === 'plan') createPlan(verified, body.tasks, body.planId, body.concurrency ?? 2, 'tool', body.readOnly);
     if (body.action === 'atomic') {
       if (!string(body.reason, 1000)) fail(400, 'research-dispatch-atomic-reason-required');
       if (activeFor(verified.parent.id, verified).length || researchProvenanceOf(verified.parent)?.tasks) fail(409, 'research-dispatch-declared-tasks-require-execution');
@@ -316,11 +334,15 @@ export function createResearchDispatchService(deps) {
     if (body.action === 'status') for (const saved of own) if (saved.kind === 'plan' && TERMINAL.has(saved.status) && !saved.notifiedAt) persist({ ...saved, notifiedAt: now().toISOString() });
     const visible = own.filter(plan => plan.kind === 'plan').map(publicPlan), atomic = own.find(plan => plan.kind === 'atomic');
     const collaborator = researchProvenanceOf(verified.parent);
+    // A child's exact task can be fetched on demand after its initial prompt
+    // was bounded. Never expose an obsolete adoption's task through this scope.
+    const brief = collaborator && collaborator.workflowCwd === verified.cwd && collaborator.charterHash === verified.charterHash && collaborator.adoptionId === verified.adoptionId
+      ? { task: collaborator.task, role: collaborator.role, stage: collaborator.stage, readOnly: collaborator.readOnly === true } : null;
     const assignment = collaborator ? [...plans.values()].flatMap(plan => {
       if (plan.kind !== 'plan' || !scopeMatches(plan, verified)) return [];
       return plan.tasks.filter(task => matchesTask(plan, task, verified.parent)).map(task => ({ planId: plan.id, taskId: task.id, status: task.status, error: task.error, dependencies: task.dependsOn.map(id => plan.tasks.find(row => row.id === id)).map(row => ({ id: row.id, summary: row.summary, evidence: row.evidence })) }));
     }) : [];
-    return { status: 'ok', tool: 'research_dispatch', sessionId: verified.parent.id, plans: visible, atomicReason: atomic?.reason ?? null, collaborator: !!collaborator, assignment: assignment[0] ?? null, declaredTasks: collaborator?.tasks?.length ?? 0, decisionRequired: !!collaborator && !atomic && !visible.length, childrenPending: visible.some(plan => !TERMINAL.has(plan.status)) };
+    return { status: 'ok', tool: 'research_dispatch', sessionId: verified.parent.id, plans: visible, atomicReason: atomic?.reason ?? null, collaborator: !!collaborator, brief, assignment: assignment[0] ?? null, declaredTasks: collaborator?.tasks?.length ?? 0, decisionRequired: !atomic && !visible.length, childrenPending: visible.some(plan => !TERMINAL.has(plan.status)) };
   }
 
   return {

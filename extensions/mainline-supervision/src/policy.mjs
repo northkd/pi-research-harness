@@ -99,7 +99,7 @@ const READS = new Set(['read', 'grep', 'find', 'ls', 'bg_status', 'bg_logs', 'le
   'symbol_search', 'read_symbol', 'read_enclosing', 'effective_config', 'memory_read', 'memory_search', 'subagent_supervisor']);
 const LOCAL_VIEWS = new Set(['canvas', 'scratchpad']);
 const DISPATCH_CONTROLS = new Set(['status', 'report', 'atomic', 'cancel']);
-const dispatchPlan = (name, input) => name === 'research_dispatch' && input?.action === 'plan';
+const dispatchPlan = (name, input) => name === 'research_dispatch' && ['plan', 'delegate'].includes(input?.action);
 const CONTROL_ACTIONS = new Set(['status', 'debug.run', 'children.list', 'guide', 'list', 'models', 'mission.show', 'mission.list', 'interrupt', 'stop']);
 export function humanChannel(toolName) { return HUMAN.has(toolName); }
 export function observationTool(name, input = {}) {
@@ -204,7 +204,7 @@ export function operationDecision(store, state, event) {
   }
   if (name === 'research_session' || dispatchPlan(name, input) || name === 'subagent' && !input.action) {
     if (!store.resourceGate().ok) return { allow: false, hard: true, reason: '新子任务资源门槛未满足，人工通道可用。' };
-    const taskText = dispatchPlan(name, input) ? JSON.stringify(input.tasks ?? []) : String(input.task ?? '');
+    const taskText = name === 'research_dispatch' && input.action === 'plan' ? JSON.stringify(input.tasks ?? []) : String(input.task ?? '');
     const affected = activeRestrictions(state).filter(r => r.paths.some(p => taskText.includes(p)));
     if (affected.length) return { allow: false, hard: false, reason: '该子任务直接依赖已证实偏离分支；可先用decision明确限定纠偏，其他分支不要求整个项目ON_TRACK。' };
   }

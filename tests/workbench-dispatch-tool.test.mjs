@@ -6,7 +6,7 @@ import { createResearchReceiptHandler } from '../patches/dashboard-v0.20/overlay
 const context = { cwd: '/workspace', sessionManager: { getSessionId: () => 'child-one' } };
 const joined = async () => ({ sessionId: 'child-one', researchSession: { parentSessionId: 'parent-one' } });
 const baseSnapshot = () => ({ status: 'ok', sessionId: 'child-one', collaborator: true, plans: [], assignment: { status: 'running' }, decisionRequired: true, childrenPending: false, declaredTasks: 0 });
-function fixture(initial = {}, requestOverride) {
+function fixture(initial = {}, requestOverride, readContext = joined) {
   const handlers = new Map(), calls = [], continuations = [];
   let snapshot = { ...baseSnapshot(), ...initial }, tool;
   const pi = {
@@ -15,7 +15,7 @@ function fixture(initial = {}, requestOverride) {
     sendUserMessage(...args) { continuations.push(args); },
   };
   registerWorkbenchDispatchTool(pi, {
-    readContext: joined,
+    readContext,
     request: async (_ctx, body) => { calls.push(body); return requestOverride ? requestOverride(body) : snapshot; },
   });
   return { calls, continuations, tool, set: value => { snapshot = { ...snapshot, ...value }; }, emit: (name, event = {}) => handlers.get(name)?.(event, context) };
@@ -103,6 +103,72 @@ test('unreported final turns get two reminders then a truthful blocked receipt',
   await f.emit('agent_end');
   assert.equal(f.calls.filter(row => row.action === 'report').length, 1);
   assert.equal(f.continuations.length, 2);
+});
+
+test('joined lead must decide before bulk work and cannot silently take over on service failure', async () => {
+  const root = async () => ({ sessionId: 'child-one' });
+  const f = fixture({ collaborator: false, assignment: null }, undefined, root);
+  for (let n = 0; n < 3; n++) assert.equal(await f.emit('tool_call', { toolName: 'read' }), undefined);
+  assert.equal((await f.emit('tool_call', { toolName: 'read' })).block, true);
+  assert.match((await f.emit('tool_call', { toolName: 'write' })).reason, /delegate/);
+  const unavailable = fixture({ collaborator: false, assignment: null }, async () => { throw new Error('service offline'); }, root);
+  assert.equal((await unavailable.emit('tool_call', { toolName: 'bash', input: { command: 'perform bulk work' } })).block, true);
+});
+
+test('lead stops repeated exploration while the execution coordinator is working', async () => {
+  const f = fixture({ collaborator: false, assignment: null, decisionRequired: false, childrenPending: true, plans: [{ id: 'goal', mode: 'delegate', status: 'running' }] }, undefined,
+    async () => ({ sessionId: 'child-one' }));
+  for (let n = 0; n < 3; n++) assert.equal(await f.emit('tool_call', { toolName: 'read' }), undefined);
+  const blocked = await f.emit('tool_call', { toolName: 'read' });
+  assert.equal(blocked.block, true);
+  assert.match(blocked.reason, /execution coordinator/);
+  assert.equal(await f.emit('tool_call', { toolName: 'ask_user' }), undefined);
+});
+
+test('delegate forwards the goal and inherited read-only constraint without projection controls', async () => {
+  const f = fixture({ decisionRequired: false }, undefined, async () => ({ sessionId: 'child-one', researchSession: { parentSessionId: 'root', readOnly: true } }));
+  await f.tool.execute('delegate-goal', { action: 'delegate', planId: 'goal-1', task: 'Review evidence', stage: '3-review',
+    view: 'summary', refresh: true, readOnly: false }, undefined, undefined, context);
+  assert.deepEqual(f.calls.at(-1), { action: 'delegate', planId: 'goal-1', task: 'Review evidence', stage: '3-review', readOnly: true });
+  for (const toolName of ['write', 'edit', 'bash', 'subagent']) assert.equal((await f.emit('tool_call', { toolName })).block, true);
+  assert.equal(await f.emit('tool_call', { toolName: 'read' }), undefined);
+  await f.emit('input', { source: 'user', text: 'Do not delegate' });
+  assert.equal((await f.tool.execute('forbidden', { action: 'delegate' }, undefined, undefined, context)).isError, true);
+});
+
+test('repeated status is compact, refresh is explicit and raw rows never leak through details', async () => {
+  const f = fixture({ decisionRequired: false, plans: [{ id: 'plan-one', status: 'completed', tasks: [{ id: 'task-one', status: 'completed', task: 'UNNEEDED_TASK_BODY'.repeat(300), summary: 'Verified conclusion', evidence: ['report.md'] }] }] });
+  const first = await f.tool.execute('first', { action: 'status' }, undefined, undefined, context);
+  assert.ok(Buffer.byteLength(first.content[0].text) <= 8192);
+  assert.ok(!JSON.stringify(first).includes('UNNEEDED_TASK_BODY'));
+  const repeated = await f.tool.execute('second', { action: 'status' }, undefined, undefined, context);
+  assert.equal(repeated.details.unchanged, true);
+  const refreshed = await f.tool.execute('third', { action: 'status', refresh: true }, undefined, undefined, context);
+  assert.equal(refreshed.details.plans[0].tasks[0].summary, 'Verified conclusion');
+  const detail = await f.tool.execute('detail', { action: 'status', view: 'detail', planId: 'plan-one', taskId: 'task-one' }, undefined, undefined, context);
+  assert.ok(detail.content[0].text.includes('UNNEEDED_TASK_BODY'));
+  assert.ok(Buffer.byteLength(detail.content[0].text) <= 16384);
+  assert.ok(!('view' in f.calls.at(-1)));
+});
+
+test('verified scope loss cannot bypass inherited read-only or lead coordination gates', async () => {
+  let available = true;
+  const f = fixture({}, undefined, async () => available ? { sessionId: 'child-one', researchSession: { readOnly: true } } : null);
+  assert.equal(await f.emit('tool_call', { toolName: 'read' }), undefined);
+  available = false;
+  assert.equal((await f.emit('tool_call', { toolName: 'write' })).block, true);
+  assert.equal((await f.emit('tool_call', { toolName: 'read' })).block, true);
+});
+
+test('unchanged status preserves failed and blocked assignment state', async () => {
+  for (const status of ['failed', 'blocked']) {
+    const f = fixture({ decisionRequired: false, assignment: { planId: 'parent', taskId: 'child', status, error: 'real-blocker' } });
+    await f.tool.execute('first', { action: 'status' }, undefined, undefined, context);
+    const repeated = await f.tool.execute('second', { action: 'status' }, undefined, undefined, context);
+    assert.equal(repeated.details.unchanged, true);
+    assert.equal(repeated.details.assignment.status, status);
+    assert.equal(repeated.details.assignment.error, 'real-blocker');
+  }
 });
 
 const promptId = 'research-dispatch-receipt-dispatch-' + 'a'.repeat(40);

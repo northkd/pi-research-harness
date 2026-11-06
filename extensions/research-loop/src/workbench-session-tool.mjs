@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readWorkbenchRecordContext } from './workbench-context.mjs';
+import { mergeDelegationRestrictions } from './delegation-policy.mjs';
 
 export const RESEARCH_SESSION_TOOL_NAME = 'research_session';
 export const RESEARCH_SESSION_STAGES = ['1-idea', '2-experiment', '3-review', '4-summary', '5-writing'];
@@ -32,6 +33,7 @@ export const RESEARCH_DISPATCH_TASK_SCHEMA = {
   },
 };
 const ROLE = /^[a-z][a-z0-9-]{1,39}$/;
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const ENDPOINT_PATH = '/api/res-workflow/participants/spawn';
 const LOCAL_TOKEN_HEADER = 'x-pi-local-token';
 const MAX_AUTH_BYTES = 4096;
@@ -112,24 +114,56 @@ export function readDashboardLocalAuth({ home = os.homedir() } = {}) {
   return { baseUrl: `http://${host}:${config.port}`, token };
 }
 
-/** Build the exact first prompt the child receives; metadata only, no model call. */
-export function buildResearchSessionPrompt(provenance) {
+export const RESEARCH_SESSION_INITIAL_PROMPT_BYTES = 16 * 1024;
+const promptBytes = value => new TextEncoder().encode(value).length;
+function promptPrefix(value, maximum) {
+  let used = 0, output = '';
+  for (const character of value) {
+    const bytes = promptBytes(character);
+    if (used + bytes > maximum) break;
+    output += character; used += bytes;
+  }
+  return output;
+}
+
+/** A fresh task brief, never a copy of the parent's transcript or dependency bodies. */
+export function buildResearchSessionPrompt(provenance, taskContext) {
   if (!object(provenance)) throw new Error('research-session-provenance-invalid');
-  return [
-    `You are a research collaborator with a real parent session in the confirmed res-workflow at ${provenance.workflowCwd}.`,
+  const ids = [...new Set((taskContext?.prerequisiteResults ?? []).map(row => row?.id).filter(id => typeof id === 'string' && ID.test(id)))].slice(0, 12);
+  const dispatchId = taskContext?.dispatchId ?? provenance.dispatchId;
+  const taskId = taskContext?.taskId ?? provenance.taskId;
+  const prefix = [
+    'You are a research collaborator in a fresh Pi session joined to the confirmed research workbench. No parent conversation is copied into this task.',
     `Role: ${provenance.role}`,
     `Stage: ${provenance.stage}`,
     `Parent session: ${provenance.parentSessionId}`,
     `Frozen charter: ${provenance.charterHash} (adoption ${provenance.adoptionId})`,
+    'Use the verified workbench context for the workspace, current charter, permission scope and shared budget. This assignment expands none of them.',
+    provenance.readOnly === true ? 'READ-ONLY assignment: preserve project files and external state. Do not edit, install, or run modifying experiments. Delegate only read-only work; coordination and result receipts remain available.' : '',
+    provenance.role === 'research-coordinator'
+      ? 'You are the execution coordinator: analyze the goal, decompose it into bounded tasks, schedule specialists, follow progress and blockers, arrange independent verification, and aggregate the evidence. Keep implementation and raw logs in worker contexts. Send the lead only decisions requiring attention and a short final aggregate receipt with evidence references.'
+      : 'Complete only this assigned scope. Keep analysis and raw execution details in this worker context; return a short truthful result and evidence references.',
     '',
     'Task:',
-    provenance.task,
+  ].filter(Boolean).join('\n') + '\n';
+  const suffix = [
     '',
-    'You run in a separate Pi process, but remain a child of the recorded parent. Keep the same workspace, owner, frozen charter, permission scope and shared task budget.',
-    'First call research_dispatch status. Declared structured tasks are automatically scheduled by the server; coordinate their results instead of doing them locally. For several separable work items, submit a research_dispatch plan with dependencies before bulk work. For one indivisible item, use research_dispatch atomic with a concrete reason. Controlled child delegation is allowed within the shared limits; leaf roles cannot delegate.',
-    'Use research_loop to record actual attempts and evidence. If status shows a dispatcher assignment, finish with research_dispatch report (completed, failed or blocked), a truthful summary and relative evidence paths. Wait for your own children before reporting completion. This assignment never expands the inherited permission scope, provider access, budget or workspace.',
-  ].join('\n');
+    typeof dispatchId === 'string' && ID.test(dispatchId) ? `Dispatcher plan reference: ${dispatchId}` : '',
+    typeof taskId === 'string' && ID.test(taskId) ? `Assignment task reference: ${taskId}` : '',
+    ids.length ? `Direct dependency IDs: ${ids.join(', ')}` : '',
+    'First call research_dispatch action="status". Retrieve dependency receipts with action="status", view="detail", taskId="<dependency-id>", offset=0; read further pages only as needed. Dependency summaries and evidence bodies are deliberately not copied into this prompt.',
+    'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.',
+    'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access, budget and workspace limits remain unchanged.',
+  ].filter(Boolean).join('\n');
+  const task = String(provenance.task ?? '');
+  const complete = prefix + task + '\n' + suffix;
+  if (promptBytes(complete) < RESEARCH_SESSION_INITIAL_PROMPT_BYTES) return complete;
+  const notice = '\n[Task brief truncated to fit the startup budget. The complete original task is preserved in the verified session record. Before ANY execution, call research_dispatch action="status", view="detail", taskId="self", offset=0 and read every task page. Apply all original goals and constraints; do not infer that omitted text grants permission.]';
+  const available = RESEARCH_SESSION_INITIAL_PROMPT_BYTES - 1 - promptBytes(prefix + notice + '\n' + suffix);
+  if (available < 0) throw new Error('research-session-prompt-metadata-too-large');
+  return prefix + promptPrefix(task, available) + notice + '\n' + suffix;
 }
+
 
 function blocked(error, extra = {}) {
   const result = { status: 'blocked', tool: RESEARCH_SESSION_TOOL_NAME, error, ...extra };
@@ -145,6 +179,19 @@ export function createResearchSessionTool(pi, options = {}) {
   const maxTotal = options.maxTotal ?? 4;
   const timeoutMs = options.timeoutMs ?? 30_000;
   const inFlight = new Map();
+  const restrictions = new Map();
+  const rememberRestrictions = (event, ctx, input = false) => {
+    if (input ? event?.source !== 'user' : event?.messageType === 'custom') return;
+    const id = ctx?.sessionManager?.getSessionId?.(), text = input ? event?.text : event?.prompt;
+    if (!id || typeof text !== 'string') return;
+    if (!restrictions.has(id) && restrictions.size >= 128) restrictions.delete(restrictions.keys().next().value);
+    restrictions.set(id, mergeDelegationRestrictions(restrictions.get(id), text));
+  };
+  if (typeof pi?.on === 'function') {
+    pi.on('before_agent_start', (event, ctx) => rememberRestrictions(event, ctx));
+    pi.on('input', (event, ctx) => rememberRestrictions(event, ctx, true));
+    pi.on('session_shutdown', () => restrictions.clear());
+  }
 
   async function execute(_id, params, signal, _update, ctx) {
     const sessionId = ctx?.sessionManager?.getSessionId?.();
@@ -154,6 +201,7 @@ export function createResearchSessionTool(pi, options = {}) {
     if (!ROLE.test(params?.role ?? '')) return blocked('research-session-role-invalid');
     if (!text(params?.task, RESEARCH_SESSION_LIMITS.maxTaskChars)) return blocked('research-session-task-invalid');
     if (!RESEARCH_SESSION_STAGES.includes(params?.stage)) return blocked('research-session-stage-invalid');
+    if (params?.readOnly !== undefined && params.readOnly !== true) return blocked('research-session-readonly-invalid');
 
     let context;
     try {
@@ -186,6 +234,7 @@ export function createResearchSessionTool(pi, options = {}) {
         stage: params.stage,
         requestId: requestId(),
         ...(params.tasks === undefined ? {} : { tasks: params.tasks }),
+        ...((params.readOnly === true || context.researchSession?.readOnly === true || restrictions.get(sessionId)?.readOnly === true) ? { readOnly: true } : {}),
       };
       const timeout = AbortSignal.timeout(timeoutMs);
       const combined = signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout;
@@ -216,7 +265,10 @@ export function createResearchSessionTool(pi, options = {}) {
         workflowCwd: reply.workflowCwd,
         registration: reply.registration ?? 'pending',
         initialPromptQueued: reply.initialPromptQueued === true,
-        provenance: reply.provenance,
+        ...(ID.test(reply.rootSessionId ?? '') ? { rootSessionId: reply.rootSessionId } : {}),
+        ...(ID.test(reply.sessionId ?? '') ? { sessionId: reply.sessionId } : {}),
+        ...(Number.isSafeInteger(reply.depth) && reply.depth >= 1 && reply.depth <= 3 ? { depth: reply.depth } : {}),
+        ...(reply.readOnly === true ? { readOnly: true } : {}),
       };
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result };
     } catch (error) {
@@ -244,7 +296,8 @@ export function createResearchSessionTool(pi, options = {}) {
       type: 'object', additionalProperties: false, required: ['role', 'task', 'stage'],
       properties: {
         role: { type: 'string', minLength: 2, maxLength: RESEARCH_SESSION_LIMITS.maxRoleChars, pattern: '^[a-z][a-z0-9-]{1,39}$', description: 'Bounded collaborator role, for example literature or experiment.' },
-        task: { type: 'string', minLength: 1, maxLength: RESEARCH_SESSION_LIMITS.maxTaskChars, description: 'Concrete task for the collaborator; delivered once as its initial prompt.' },
+        task: { type: 'string', minLength: 1, maxLength: RESEARCH_SESSION_LIMITS.maxTaskChars, description: 'Concrete task stored unchanged in verified metadata. Startup uses a bounded brief; if truncated, the worker must retrieve the complete task with research_dispatch status detail/self before execution.' },
+        readOnly: { type: 'boolean', const: true, description: 'Narrow this assignment to read-only work. Inherited user/parent read-only restrictions are always preserved and cannot be cleared by tool arguments.' },
         stage: { type: 'string', enum: RESEARCH_SESSION_STAGES, description: 'Current res-workflow stage for this collaborator.' },
         tasks: { type: 'array', minItems: 2, maxItems: 12, items: RESEARCH_DISPATCH_TASK_SCHEMA, description: 'Optional declared jobs for this coordinator. Automatically dispatched after its real session registers; dependsOn declares prerequisite task ids.' },
       },

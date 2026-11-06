@@ -81,7 +81,9 @@ test('soft-confirmation scope permits computation and delegation, excludes publi
   assert.equal(op('bash', { command: 'python run_experiment.py' }), true);
   assert.equal(op('research_session', { action: 'spawn' }), true);
   assert.equal(op('research_dispatch', { action: 'plan', tasks: [] }), true);
+  assert.equal(op('research_dispatch', { action: 'delegate', task: 'Inspect the approved project' }), true);
   assert.equal(taskPermissionAllowsOperation({ ...grant, capabilities: { ...grant.capabilities, delegation: false } }, { toolName: 'research_dispatch', input: { action: 'plan' } }), false);
+  assert.equal(taskPermissionAllowsOperation({ ...grant, capabilities: { ...grant.capabilities, delegation: false } }, { toolName: 'research_dispatch', input: { action: 'delegate' } }), false);
   for (const action of ['status', 'report', 'atomic', 'cancel']) assert.equal(taskPermissionAllowsOperation({ ...grant, capabilities: { ...grant.capabilities, delegation: false } }, { toolName: 'research_dispatch', input: { action } }), true);
   assert.equal(op('web_search', { query: 'public dataset' }), true);
   for (const name of ['feynman_review', 'hf_jobs', 'send_email', 'mainline_supervision']) assert.equal(op(name, {}), false, name);
