@@ -28,6 +28,15 @@
 .research-main-agent-composer { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .research-main-agent-composer textarea { flex: 1 1 280px; min-width: 0; resize: vertical; border: 1px solid var(--border-primary); border-radius: 6px; padding: 9px 10px; background: var(--bg-primary); color: var(--text-primary); font-size: 12px; }
 .research-main-agent-controls > [role="alert"] { margin-top: 8px; font-size: 12px; }
+.research-charter-binding { margin-top: 8px; font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.research-charter-binding-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.research-charter-binding-row p { margin: 0; }
+.research-charter-binding-row .research-workspace-action { min-height: 26px; padding: 3px 7px; font-size: 11px; }
+.research-charter-binding > [role="alert"] { margin: 6px 0 0; }
+.research-charter-binding-preview { margin-top: 6px; }
+.research-charter-binding-preview summary { width: fit-content; cursor: pointer; color: var(--text-tertiary); }
+.research-charter-binding-preview p, .research-charter-binding-preview ul { margin: 7px 0; }
+.research-charter-binding-preview ul { padding-left: 18px; }
 .research-workspace-layout { display: flex; min-height: 0; flex: 1; position: relative; }
 .research-workspace-main { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 24px 28px; }
 .research-workspace-main > * + * { margin-top: 20px; }

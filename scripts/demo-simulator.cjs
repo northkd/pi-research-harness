@@ -206,6 +206,14 @@
       }
       if (url.pathname === '/api/res-workflow/research-budget' && isDemo) return json(budget());
       if (url.pathname === '/api/res-workflow/access-mode' && isDemo) return json(accessMode());
+      // DEMO: conversations have no native membership or private adoption proof.
+      // Never read a real owner's binding and display it as a simulated session's.
+      if (url.pathname === '/api/res-workflow/charter-binding' && isDemo) return json({
+        schema: 'pi-research-charter-binding.v1', cwd, adopted: false, adoptionId: null,
+        status: 'unavailable', bindingRevision: 0, boundCharterHash: null, boundCharterRevision: null,
+        currentCharterHash: null, currentCharterRevision: null, currentObjective: null,
+        canRebind: false, updatedAt: null, error: 'demo-session-has-no-native-binding',
+      });
       if (url.pathname === '/api/sessions') return json(sessions);
       if (url.pathname === '/api/res-workflow/workbench-sync' && isDemo) {
         if (!state.charter) {

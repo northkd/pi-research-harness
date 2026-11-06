@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { buildDelegationGuidance, mergeDelegationRestrictions } from './delegation-policy.mjs';
+import { readResearchCharterBinding } from './charter-binding.mjs';
 
 export const WORKBENCH_CONTEXT_SECTION = 'res_workflow_records';
 /** Covers the complete memory block, including source references and omission
@@ -15,7 +17,6 @@ const MEMORY_END = '【Research Memory end】';
 const STAGES = new Set(['1-idea', '2-experiment', '3-review', '4-summary', '5-writing']);
 const HASH = /^sha256:[a-f0-9]{64}$/;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
-const ADOPTION_ID = /^adopt-[a-f0-9]{24}$/;
 const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const digest = value => createHash('sha256').update(value).digest('hex');
 const charterDigest = value => 'sha256:' + digest(JSON.stringify(value));
@@ -70,19 +71,6 @@ function joined(value, cwd) {
   return object(value) && value.canonicalCwd === cwd && typeof value.joinedAt === 'string' && Number.isFinite(Date.parse(value.joinedAt)) && ['manual', 'adoption', 'spawn'].includes(value.via);
 }
 
-function confirmedOwnerAdoption(privateDir, cwd, ownerKey, hash) {
-  try {
-    const scope = path.join(privateDir, digest(ownerKey), digest(cwd));
-    const adopted = readJson(path.join(scope, 'adopted.json'));
-    if (adopted.confirmed !== true || !ADOPTION_ID.test(adopted.id ?? '') || !HASH.test(adopted.confirmationHash ?? '')) return null;
-    const operation = readJson(path.join(scope, adopted.id + '.json'), 8 * 1024 * 1024);
-    if (operation.schema !== 'pi-res-workflow-operation.v1' || operation.ownerKey !== ownerKey || operation.cwd !== cwd || operation.detachedAt || operation.adoption?.id !== adopted.id || operation.adoption.cwd !== cwd || operation.adoption.status !== 'confirmed') return null;
-    const receipt = readJson(path.join(cwd, '.pi', 'research-loop', 'adoptions', adopted.id, 'confirmation.json'));
-    if (receipt.schema !== 'pi-research-adoption-confirmation.v1' || receipt.adoptionId !== adopted.id || receipt.confirmationHash !== adopted.confirmationHash || receipt.charterHash !== hash || receipt.autoRun !== false) return null;
-    return adopted.id;
-  } catch { return null; }
-}
-
 /** History is only a small lead-session preview, never a full ledger read. */
 function readRecentFindings(cwd) {
   let fd;
@@ -117,34 +105,55 @@ function readRecentFindings(cwd) {
   finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-/** The hook authorizes only this session's exact persisted membership and owner scope. */
-export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.homedir(), '.pi', 'dashboard', 'res-workflow'), env = process.env } = {}) {
+/** Diagnose membership separately from charter proof. Only ready returns authority. */
+export function inspectWorkbenchRecordContext(ctx, options = {}) {
+  try { return inspectContext(ctx, options); }
+  catch { return { status: 'unavailable', error: 'research-workbench-proof-unavailable' }; }
+}
+
+function inspectContext(ctx, { privateDir = path.join(os.homedir(), '.pi', 'dashboard', 'res-workflow'), env = process.env, expectedOwnerKey } = {}) {
+  const notJoined = { status: 'not-joined', error: 'research-workbench-session-not-joined' };
   const cwd = canonical(ctx?.cwd);
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   const sessionFile = ctx?.sessionManager?.getSessionFile?.();
-  if (!ID.test(sessionId ?? '') || typeof sessionFile !== 'string' || !sessionFile.endsWith('.jsonl')) return null;
-  const header = sessionHeader(sessionFile);
-  if (header.id !== sessionId || header.cwd !== cwd) return null;
+  if (!ID.test(sessionId ?? '') || typeof sessionFile !== 'string' || !path.isAbsolute(sessionFile) || path.resolve(sessionFile) !== sessionFile || !sessionFile.endsWith('.jsonl')) return notJoined;
+  let header;
+  try { header = sessionHeader(sessionFile); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    // Pi delays JSONL persistence until its first assistant response. The SDK's
+    // own in-memory header can prove identity; prompt/body fields cannot.
+    canonical(path.dirname(sessionFile));
+    header = ctx.sessionManager.getHeader?.();
+    if (header === undefined || header === null) return { status: 'unavailable', error: 'research-workbench-proof-unavailable' };
+  }
+  if (!object(header) || header.type !== 'session' || header.id !== sessionId || header.cwd !== cwd) return notJoined;
   const meta = readJson(sessionFile.slice(0, -6) + '.meta.json');
-  if (meta.cwd !== undefined && meta.cwd !== cwd || meta.originDeviceId || meta.pluginHidden === true || meta.archiveOnEnd === true || meta.driver && meta.driver !== 'pi') return null;
+  if (meta.id !== undefined && meta.id !== sessionId || meta.cwd !== undefined && meta.cwd !== cwd || meta.originDeviceId || meta.pluginHidden === true || meta.archiveOnEnd === true || meta.driver && meta.driver !== 'pi') return notJoined;
   const persisted = meta.pluginRefs?.['res-workflow']?.resWorkflow;
-  if (meta.resWorkflow !== undefined && !joined(meta.resWorkflow, cwd) || persisted !== undefined && !joined(persisted, cwd)) return null;
-  if (!joined(persisted ?? meta.resWorkflow, cwd)) return null;
-  if (persisted && meta.resWorkflow && JSON.stringify(persisted) !== JSON.stringify(meta.resWorkflow)) return null;
+  if (meta.resWorkflow !== undefined && !joined(meta.resWorkflow, cwd) || persisted !== undefined && !joined(persisted, cwd)) return notJoined;
+  if (!joined(persisted ?? meta.resWorkflow, cwd)) return notJoined;
+  if (persisted && meta.resWorkflow && !isDeepStrictEqual(persisted, meta.resWorkflow)) return notJoined;
   const principal = meta.principalOwner;
-  if (principal !== undefined && (!object(principal) || typeof principal.iss !== 'string' || !principal.iss || typeof principal.sub !== 'string' || !principal.sub)) return null;
-  const state = readJson(path.join(cwd, '.pi', 'research-loop', 'state.json'), 256 * 1024);
-  if (!object(state.charter) || !Number.isSafeInteger(state.charter.revision) || state.charter.revision < 1 || typeof state.charter.objective !== 'string' || !Array.isArray(state.charter.successCriteria) || !state.charter.successCriteria.length) return null;
-  const hash = charterDigest(state.charter);
+  if (principal !== undefined && (!object(principal) || typeof principal.iss !== 'string' || !principal.iss || typeof principal.sub !== 'string' || !principal.sub)) return notJoined;
   // Unowned local Pi sessions can belong to either historical host-local realm.
   // Both require complete host-private proof; a named principal never falls back.
-  const owners = principal ? [[principal.iss, principal.sub]] : [['host', 'inert-operator'], ['urn:pi-dashboard:local-operator', 'local-operator']];
-  const root = canonical(privateDir);
-  const candidates = owners.map(owner => confirmedOwnerAdoption(root, cwd, JSON.stringify(owner), hash)).filter(Boolean);
-  if (candidates.length !== 1) return null;
-  const adoptionId = candidates[0];
+  const owners = (principal ? [[principal.iss, principal.sub]] : [['host', 'inert-operator'], ['urn:pi-dashboard:local-operator', 'local-operator']]).map(owner => JSON.stringify(owner));
+  if (expectedOwnerKey !== undefined && !owners.includes(expectedOwnerKey)) return notJoined;
+  const results = owners.filter(ownerKey => expectedOwnerKey === undefined || expectedOwnerKey === ownerKey).map(ownerKey => ({ ownerKey, binding: readResearchCharterBinding({ privateDir, cwd, ownerKey }) }));
+  const candidates = results.filter(result => ['current', 'stale'].includes(result.binding.status));
+  if (candidates.length !== 1 || results.some(result => result.binding.status === 'unavailable')) return { status: 'unavailable', membership: true, error: 'research-workbench-proof-unavailable' };
+  const { binding, ownerKey } = candidates[0];
+  const adoptionId = binding.adoptionId, hash = binding.currentCharterHash;
   const researchSession = meta.researchSession ?? meta.pluginRefs?.['res-workflow']?.researchSession;
-  const collaborator = object(researchSession) && researchSession.schema === 'pi-research-session.v1' && researchSession.workflowCwd === cwd && researchSession.charterHash === hash && researchSession.adoptionId === adoptionId && ID.test(researchSession.parentSessionId ?? '');
+  const persistedSession = meta.pluginRefs?.['res-workflow']?.researchSession;
+  const collaborator = object(researchSession) && researchSession.schema === 'pi-research-session.v1' && researchSession.workflowCwd === cwd && researchSession.charterHash === hash && researchSession.adoptionId === adoptionId && ID.test(researchSession.parentSessionId ?? '') && (researchSession.readOnly === undefined || researchSession.readOnly === true);
+  // A stale/malformed child is not a lead. In particular its read-only assignment
+  // must never disappear just because the workspace binding has been renewed.
+  if (researchSession !== undefined && (!collaborator || meta.researchSession && persistedSession && !isDeepStrictEqual(meta.researchSession, persistedSession))) return { status: 'assignment-stale', membership: true, error: 'research-workbench-assignment-stale', binding };
+  if (binding.status === 'stale') return { status: 'charter-stale', membership: true, error: 'research-workbench-charter-binding-stale', binding };
+  const state = readJson(path.join(cwd, '.pi', 'research-loop', 'state.json'), 256 * 1024);
+  if (charterDigest(state.charter) !== hash) return { status: 'unavailable', membership: true, error: 'research-workbench-proof-unavailable' };
   const includeHistory = !collaborator && env?.PI_SUBAGENT_CHILD !== '1';
   const memory = {
     objective: state.charter?.objective,
@@ -156,7 +165,19 @@ export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.home
     recentFindings: includeHistory ? readRecentFindings(cwd) : '',
     historyPolicy: includeHistory ? 'bounded-lead-preview' : 'references-only',
   };
-  return { ...(collaborator ? { researchSession: { parentSessionId: researchSession.parentSessionId, spawnToken: researchSession.spawnToken, depth: researchSession.depth, role: researchSession.role, readOnly: researchSession.readOnly === true, declaredTasks: researchSession.tasks?.length ?? 0 } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, memory };
+  const context = { ...(collaborator ? { researchSession: { parentSessionId: researchSession.parentSessionId, spawnToken: researchSession.spawnToken, depth: researchSession.depth, role: researchSession.role, readOnly: researchSession.readOnly === true, declaredTasks: researchSession.tasks?.length ?? 0 } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, memory };
+  return { status: 'ready', context, binding, ownerKey };
+}
+
+/** Compatibility for readers that only consume verified execution context. */
+export function readWorkbenchRecordContext(ctx, options = {}) {
+  return inspectWorkbenchRecordContext(ctx, options).context ?? null;
+}
+
+export function requireWorkbenchRecordContext(ctx, options = {}, notJoinedCode = 'research-workbench-session-not-joined') {
+  const result = inspectWorkbenchRecordContext(ctx, options);
+  if (result.status === 'ready') return result.context;
+  throw new Error(result.status === 'not-joined' ? notJoinedCode : result.error);
 }
 
 function utf8Prefix(value, maximum) {
@@ -293,8 +314,15 @@ export function registerWorkbenchContext(pi, options = {}) {
     if (object(opts.sections)) delete opts.sections[WORKBENCH_CONTEXT_SECTION];
     if (opts.cwd !== undefined && opts.cwd !== ctx?.cwd) return undefined;
     try {
-      const context = readWorkbenchRecordContext(ctx, options);
-      if (!context) return undefined;
+      const inspection = inspectWorkbenchRecordContext(ctx, options);
+      const context = inspection.context;
+      if (!context) {
+        if (['charter-stale', 'assignment-stale'].includes(inspection.status)) {
+          if (!object(opts.sections)) opts.sections = {};
+          opts.sections[WORKBENCH_CONTEXT_SECTION] = `Research workbench membership is present, but execution is blocked: ${inspection.error}. The dashboard's main-session selection does not change target binding or child assignments. Preserve all workflow/scientific records; do not recreate the workflow or edit hashes. ${inspection.status === 'charter-stale' ? 'Use the dashboard target-binding action to explicitly continue this existing workflow at the current charter; then re-read research_dispatch status.' : 'This child belongs to an older assignment. Do not resume its research or convert it into a lead; a fresh assignment under the current target is required.'}`;
+        }
+        return undefined;
+      }
       const { memory, ...restContext } = context;
       if (!object(opts.sections)) opts.sections = {};
       opts.sections[WORKBENCH_CONTEXT_SECTION] = buildWorkbenchRecordProtocol(restContext, memory, {

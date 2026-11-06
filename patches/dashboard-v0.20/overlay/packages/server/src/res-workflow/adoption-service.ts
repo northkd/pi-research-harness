@@ -25,6 +25,7 @@ import { prepareFullHistoryMaterial, readFullHistoryPlan, readFullHistoryBatch, 
 import { runFullHistoryReview, type FullHistoryReviewCheckpoint, type FullHistoryReviewTerminalCandidate } from "./full-history-review.js";
 import { runFullHistoryAgent, FULL_HISTORY_AGENT_PROMPT_SCHEMA_HASH } from "./full-history-agent.js";
 import { createFullHistoryAgentStore, type FullHistoryAgentLease } from "./full-history-agent-store.js";
+import { isResearchCharterBinding, isResearchCharterBindingUpdate, type ResearchCharterBinding, type ResearchCharterBindingUpdate } from "@blackbelt-technology/pi-dashboard-shared/research-charter-binding.js";
 
 export class ResWorkflowError extends Error {
   readonly statusCode: number;
@@ -196,6 +197,16 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
   })();
   const scope = (access: ResWorkflowAccess) => `${hash(access.ownerKey)}:${hash(access.cwd)}`;
   const directory = (access: ResWorkflowAccess) => path.join(deps.privateDir, hash(access.ownerKey), hash(access.cwd));
+  let bindingBackendPromise: Promise<any> | undefined;
+  const bindingBackend = () => bindingBackendPromise ??= (async () => {
+    const root = deps.researchLoopRoot ?? await resolveInstalledResearchLoopRoot();
+    const [binding, context] = await Promise.all([
+      import(pathToFileURL(path.join(root, "src", "charter-binding.mjs")).href),
+      import(pathToFileURL(path.join(root, "src", "workbench-context.mjs")).href),
+    ]);
+    if (typeof binding.readResearchCharterBinding !== "function" || typeof binding.updateResearchCharterBinding !== "function" || typeof context.inspectWorkbenchRecordContext !== "function") throw new ResWorkflowError(503, "research-charter-binding-unavailable");
+    return { ...binding, inspect: context.inspectWorkbenchRecordContext };
+  })().catch(error => { bindingBackendPromise = undefined; throw error; });
   const fileFor = (access: ResWorkflowAccess, id: string) => path.join(directory(access), `${id}.json`);
   const publicAdoption = (operation: PrivateOperation): ResWorkflowAdoption => {
     const adoption = copy(operation.adoption);
@@ -929,6 +940,58 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
   }
 
   const service = {
+    async charterBinding(access: ResWorkflowAccess, sessionId?: string): Promise<ResearchCharterBinding> {
+      if (sessionId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) throw new ResWorkflowError(400, "research-charter-binding-invalid-request");
+      return locked(access, async () => {
+        await access.revalidate();
+        const native = await bindingBackend();
+        await access.revalidate();
+        let result = native.readResearchCharterBinding({ cwd: access.cwd, ownerKey: access.ownerKey, privateDir: deps.privateDir });
+        if (sessionId) {
+          // Active and ended registered sessions are eligible. Never discover a
+          // different owner's identity from the filesystem for a query parameter.
+          const eligible = (row: HistoryCandidate) => row.id === sessionId && row.cwd === access.cwd && !!row.sessionFile && !row.originDeviceId && !row.pluginHidden && !row.archiveOnEnd &&
+            (!row.principalOwner || JSON.stringify([row.principalOwner.iss, row.principalOwner.sub]) === access.ownerKey);
+          const row = deps.history().find(eligible);
+          let session: ResearchCharterBinding['session'] = { sessionId, status: 'not-joined', error: 'research-workbench-session-not-joined' };
+          if (row && (!access.canReadHistory || await access.canReadHistory(row))) {
+            await access.revalidate();
+            const current = deps.history().find(candidate => eligible(candidate) && candidate.sessionFile === row.sessionFile);
+            if (current) {
+              const inspection = native.inspect({ cwd: access.cwd, sessionManager: { getSessionId: () => sessionId, getSessionFile: () => current.sessionFile } }, { privateDir: deps.privateDir, expectedOwnerKey: access.ownerKey });
+              if (inspection.binding) result = inspection.binding;
+              session = { sessionId, status: inspection.status === 'ready' || inspection.status === 'charter-stale' ? 'joined' : inspection.status === 'assignment-stale' ? 'assignment-stale' : inspection.status === 'not-joined' ? 'not-joined' : 'unavailable', ...(inspection.error ? { error: inspection.error } : {}) };
+            }
+          }
+          result = { ...result, session };
+        }
+        if (!isResearchCharterBinding(result) || result.cwd !== access.cwd) throw new ResWorkflowError(503, "research-charter-binding-unavailable");
+        return result;
+      });
+    },
+
+    async updateCharterBinding(access: ResWorkflowAccess, request: ResearchCharterBindingUpdate): Promise<ResearchCharterBinding> {
+      if (access.write !== true) throw new ResWorkflowError(403, "research-charter-binding-write-required");
+      if (!isResearchCharterBindingUpdate(request) || request.cwd !== access.cwd) throw new ResWorkflowError(400, "research-charter-binding-invalid-request");
+      // Shares the adoption/reconnect owner lock; the native scientific-record
+      // lock additionally serializes this CAS with concurrent charter configure.
+      return locked(access, async () => {
+        await access.revalidate();
+        const native = await bindingBackend();
+        await access.revalidate();
+        if (disposed) throw new ResWorkflowError(503, "adoption-service-stopped");
+        try {
+          const result = native.updateResearchCharterBinding({ ...request, cwd: access.cwd, ownerKey: access.ownerKey, privateDir: deps.privateDir, write: true });
+          if (!isResearchCharterBinding(result) || result.cwd !== access.cwd) throw new Error('invalid binding projection');
+          return result;
+        } catch (error) {
+          const failure = error as { code?: string; statusCode?: number };
+          if (typeof failure.code === 'string' && /^research-charter-binding-[a-z-]+$/.test(failure.code)) throw new ResWorkflowError([400, 403, 409, 503].includes(failure.statusCode ?? 0) ? failure.statusCode! : 409, failure.code);
+          throw new ResWorkflowError(503, 'research-charter-binding-unavailable');
+        }
+      });
+    },
+
     async connection(access: ResWorkflowAccess): Promise<ResWorkflowConnection> {
       // Participant association calls this while holding the owner/cwd write lock.
       const context = transaction.getStore();

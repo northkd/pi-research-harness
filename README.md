@@ -12,6 +12,11 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 > **当前为 0.20.0 开发源码。** 本分支恢复主 Agent 指定和五阶段独立启动，使用“默认权限 / 完全访问”替代长任务授权，移除常规研究启动的预算前置。试用请检出 `feat/autonomous-collaboration-20261106`；[当前控制与验证说明](docs/workflow-controls/implementation.md)记录实际范围。递归分发执行器、协作层级画布和计费性能面板继续保留。完整自动研究、Science 和部分后端集成仍需本机配置，见[可用范围](#可用范围与已知问题)。
 
+当前修复区分主 Agent 选择、工作流接入与目标版本绑定。
+旧确认回执通过平台追加版本衔接，保留原 workflow 和研究记录。
+原生子代理保持指定的具体模型，发送前核验自动路由接管。
+操作入口、错误码、模型兼容边界见[目标绑定与子代理模型说明](docs/charter-binding-models/README.md)。
+
 ![项目实际运行结构：操作入口、Pi 执行、研究记录、观测回流与独立 Science 查看通道](docs/images/project-illustration.png)
 
 *以上是按当前源码绘制的运行结构图。全部流程图提供 [SVG 与绘图脚本](docs/images/README.md)，节点、箭头及适用条件见[源码对应表](docs/images/workflow-source-map.md)。图中的外部能力需要本机配置；图本身不表示真实研究任务已经运行。*
@@ -445,13 +450,22 @@ node scripts/ui-preview/launcher.mjs run \
 
 同日跟进增加目标委托、有限回执与记忆、只读继承和首次提示登记屏障：Harness 308 项、监督离线 64 项、原生提示/授权/事件接线 9 项通过；重新构建、原生服务部署和浏览器 29 项通过，627 个覆盖层文件校验一致。完整类型检查仍有 61 条既有诊断，本次新增 0 条。合成状态文本测量及完整范围见[减负验证结果](docs/autonomous-collaboration/context-offload-validation.json)。两轮均未运行真实模型或连续十几个小时的作业。
 
-当前主 Agent、阶段入口与完全访问修改：Harness 346 项、监督离线 64 项、实际 TypeScript adapter 28 项通过。
+上一轮主 Agent、阶段入口与完全访问修改：Harness 346 项、监督离线 64 项、实际 TypeScript adapter 28 项通过。
 客户端 40 项、服务端权限 13 项、文件门控 47 项通过；各组有重叠，不相加为总数。
-pnpm 生产构建和 642 项覆盖层核对通过。
-全量 TypeScript 保留 61 条既有诊断，相比 `d951322` 新增 0、消除 0。
-当前范围与部署结果见[工作流控制说明](docs/workflow-controls/implementation.md)。
-隔离真实服务部署与浏览器 35 项通过；访问权限使用实际服务保存及刷新，主 Agent 投递与阶段创建使用明确标注的模拟，0 模型请求。
-本轮未修改用户生产机器；[完整验证清单](docs/workflow-controls/validation.json)保留执行范围与截图。
+该轮 pnpm 生产构建和 642 项覆盖层核对通过。
+该轮全量 TypeScript 保留 61 条既有诊断，相比 `d951322` 新增 0、消除 0。
+上一轮范围与部署结果见[工作流控制说明](docs/workflow-controls/implementation.md)。
+该轮隔离真实服务部署与浏览器 35 项通过；访问权限使用实际服务保存及刷新，主 Agent 投递与阶段创建使用明确标注的模拟，0 模型请求。
+该轮未修改用户生产机器；[完整验证清单](docs/workflow-controls/validation.json)保留执行范围与截图。
+
+本轮目标绑定与模型保持：Harness 375 项、监督离线 64 项、客户端 39 项、新 binding server 7 项通过。
+实际 SDK / native driver 检查 16 项通过，网络请求 0 次。
+生产前端构建成功，648 项覆盖层核对一致。
+隔离真实服务与浏览器 39 项通过，绑定衔接保留 6 个原记录文件 hash。
+TypeScript 仍有 61 条既有诊断，新增 0 条。
+扩展 server 回归 21 项通过、13 项失败，失败与同布局基线逐项一致。
+本轮未调用真实 LLM，未操作用户生产数据或服务器。
+升级步骤、两张新增截图与实测证据见[目标绑定与子代理模型说明](docs/charter-binding-models/README.md)。
 
 ## 可用范围与已知问题
 
@@ -459,7 +473,7 @@ pnpm 生产构建和 642 项覆盖层核对通过。
 |---|---|
 | 自动研究角色与模型 | 自动流程引用的 explorer、strategist 和阶段映射中的 reframer 未附带角色模板；具体模型 ID 和原生 subagents 服务需本地核对。不能承诺全新安装后一键完成科研 |
 | 同步代理 | workbench-sync 代理已有的工作区访问/身份转发缺口仍未在本分支完成验收。原先独立的研究后端 resolver 路径不匹配已修复并通过定向回归 |
-| 全仓类型检查 | 最终检查有 61 条既有诊断，位于五个服务端文件；相比 `d951322` 新增 0 条、消除 0 条。详见[诊断对比](docs/workflow-controls/evidence/typescript-comparison.json)，全仓 typecheck 尚未通过 |
+| 全仓类型检查 | 当前仍有 61 条既有诊断；与上一轮记录相比新增 0 条、消除 0 条。详见[诊断对比](docs/charter-binding-models/evidence/typescript-comparison.json)，全仓 typecheck 尚未通过 |
 | Science | 已保存查看、通信和产物跟随源码；通用 host、项目授权绑定和实际环境需另配，真实端到端未验证 |
 | 平台与资源 | Linux 是主要验证环境；macOS 能构建和展示，但部分并行/监督准入依赖 `/proc/meminfo`。Windows 原生和 WSL2 全流程未在本分支验收 |
 | 外部服务 | UI 验证没有运行真实付费模型、活跃 Pi bridge、远程 PTY 终止、Browser takeover 或所有插件的真实任务 |
@@ -476,6 +490,7 @@ pnpm 生产构建和 642 项覆盖层核对通过。
 
 - [0.20 开发、安装与服务器部署](docs/RELEASE-0.20.md)
 - [主 Agent、五阶段启动、访问权限与当前验证](docs/workflow-controls/implementation.md)
+- [目标版本绑定、旧工作流衔接与子代理模型保持](docs/charter-binding-models/README.md)
 - [递归执行器、协作画布与旧授权模式历史记录](docs/autonomous-collaboration/implementation.md)
 - [模型速度：原生计时、CC Switch 参考口径与验证](docs/model-speed/implementation.md)
 - [UI 改版：实现、截图、测试与已知失败](docs/ui-redesign/implementation.md)

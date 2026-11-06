@@ -1,9 +1,8 @@
 {
   "package": "pi-subagents",
   "version": "0.79.2",
-  "license": "MIT",
-  "patch": "patches/subagents/0002-research-budget-0792.patch",
-  "patchSha256": "84edbd4590c2a68939c7f9d7051b9606ee6c48865feca0afb34be4e96955019b",
+  "patch": "patches/subagents/0003-research-model-selection-0792.patch",
+  "patchSha256": "50ca33efa9fe284851d5a7e2ea20650dca968af5fa31f9d3e3b3514a771eb364",
   "files": {
     "src/extension/rpc.js": {
       "beforeSha256": "f1ccc4ffbc3d59058fbaed1c3e6777402e1e048c40ac31068611743fe48f0b2e",
@@ -11,7 +10,38 @@
     },
     "src/runs/shared/child-session.js": {
       "beforeSha256": "7e4f6bd53b6d09668b70738e69537db12b34292f2481dcc215e87db69895d1b3",
-      "afterSha256": "b7ca8b7046208bb8d51c696d18c301af1334aa035b5c3f123dfc93b567312787"
+      "afterSha256": "378404c121c7ba9b6351da16c1fbb04ec149500ca00f120c446309d76cda1bbc"
+    },
+    "src/runs/shared/research-model-selection.mjs": {
+      "beforeSha256": null,
+      "afterSha256": "3e5ac3eeb2e5ad1372a57e65889513e9aff928051afbe3df732ca65c57660524"
+    },
+    "src/runs/foreground/execution.js": {
+      "beforeSha256": "c3a9b57532cf25da486ef0af8fea140ee381568daded9ae1128920e93b0717f3",
+      "afterSha256": "742de41b22e8b5a69a8db5dfb81c657dd33aa2a32ba6d486a3f337d5a0c1af35"
+    },
+    "src/runs/background/run-child-session.js": {
+      "beforeSha256": "0674574a66c9869299769a9f9ffe216b3540d4a2a9fe7772928a34e6635098dc",
+      "afterSha256": "ad73e8a8ec7652f49d73f649cb662f06b97a67e61b5d693d3db768fa6106ac5d"
+    },
+    "src/runs/shared/child-session.d.ts": {
+      "beforeSha256": "4be27ba7072996f30032f45e5611fdaa4dc7179c0c87673d81e3635017b980db",
+      "afterSha256": "481d3ce0717e025d4b7a32923ff1aea6aabbed7c80030eac1e651380542d0423"
     }
-  }
+  },
+  "upgrades": [
+    {
+      "patch": "patches/subagents/0004-research-model-selection-upgrade-0792.patch",
+      "patchSha256": "9fe37c98e2db34bd690c9aafff8bfb91e0a08be18feb812a354ca158378ae887",
+      "files": {
+        "src/extension/rpc.js": "2a4f20c9ec25c025f963c6d45719ead62cb7cb39499531d4c6e473dea51e2f03",
+        "src/runs/shared/child-session.js": "b7ca8b7046208bb8d51c696d18c301af1334aa035b5c3f123dfc93b567312787",
+        "src/runs/shared/research-model-selection.mjs": null,
+        "src/runs/foreground/execution.js": "c3a9b57532cf25da486ef0af8fea140ee381568daded9ae1128920e93b0717f3",
+        "src/runs/background/run-child-session.js": "0674574a66c9869299769a9f9ffe216b3540d4a2a9fe7772928a34e6635098dc",
+        "src/runs/shared/child-session.d.ts": "4be27ba7072996f30032f45e5611fdaa4dc7179c0c87673d81e3635017b980db"
+      }
+    }
+  ],
+  "license": "MIT"
 }

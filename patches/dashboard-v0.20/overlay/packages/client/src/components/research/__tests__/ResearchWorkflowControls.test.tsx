@@ -26,6 +26,14 @@ function api(post?: (url: string, init: RequestInit) => Promise<Response>, optio
   const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "POST") return post ? post(String(url), init) : response({ success: true, transmitted: true, promptId: "prompt-one" });
     if (String(url).endsWith("/api/sessions")) return response({ data: options.sessions ?? sessions });
+    if (String(url).includes("/api/res-workflow/charter-binding?")) {
+      const query = new URL(String(url), "http://fixture.invalid").searchParams;
+      return response({ schema: "pi-research-charter-binding.v1", cwd: query.get("cwd"), adopted: false, adoptionId: null,
+        status: "not-adopted", bindingRevision: 0, boundCharterHash: null, boundCharterRevision: null,
+        currentCharterHash: null, currentCharterRevision: null, currentObjective: null, canRebind: false, updatedAt: null,
+        ...(query.get("sessionId") ? { session: { sessionId: query.get("sessionId"), status: "not-joined" } } : {}),
+      });
+    }
     if (String(url).includes("/api/res-workflow/connection?")) {
       const cwd = new URL(String(url), "http://fixture.invalid").searchParams.get("cwd")!;
       return options.connection?.(cwd) ?? response({ cwd, adopted: false });

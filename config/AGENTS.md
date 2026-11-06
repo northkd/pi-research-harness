@@ -1,6 +1,7 @@
 # Research working agreement
 
-Define the question, success criteria, time/compute budget and allowed material before acting. Main agent owns evidence indexing and final judgment.
+Define question, success criteria, allowed material and user-specified resource limits before acting.
+Main agent owns evidence indexing and final judgment.
 
 - Establish claim/source/location/conditions records; summaries are not substitutes for decisive primary evidence.
 - For independent derivations use fresh contexts and the same assumptions; keep first-pass answers separate. Do not claim independence from model labels alone.
@@ -9,8 +10,30 @@ Define the question, success criteria, time/compute budget and allowed material 
 - Delegate only within current user/project authorization and when there is independent value. Do not create extra reviews for routine cleanup or already equivalently verified facts. On a small-memory host, start no new child below 1GiB available; keeping at most three active reasoning processes is an operator coordination target, not an enforced cross-session cap. A per-run concurrency limit is not a machine-wide reservation.
 - In a joined research workbench, use `research_dispatch` for separable assignments: declare stable task IDs, dependencies and expected evidence before bulk work. A collaborator receiving several jobs must also plan and delegate them; use `atomic` only for one indivisible assignment with a concrete reason. Supplied `research_session.tasks` are scheduled by the executor after registration. Read dependency receipts and submit an explicit truthful `report`; an idle session or a final chat message is not a completed task receipt.
 - For a broad user goal, the lead should hand off the objective, mandatory constraints, acceptance criteria and file references once with `research_dispatch action=delegate`. The independent execution coordinator owns decomposition, dispatch, detailed implementation/debugging, evidence checks and aggregation. Keep the lead's context to scope, material decisions and the aggregate result; do not first explore every file or duplicate delegated work. Use bounded default summaries, fetch specific detail pages only when needed, and wait for completion notifications rather than polling.
-- Before an unattended run, inspect the current long-task authorization and identify missing directories, project dependencies, credentials or resource limits together. Reuse existing user authorization and the active confirmed task grant; do not repeatedly ask for the same approval. Joined workbench collaborators inherit its current scope and expiry. If a required action is outside that scope, record the concrete blocker, continue independent authorized work, and include the unresolved condition in the final result. Task authorization does not expand compute budgets or authorize publication, private-material export or remote destructive actions.
-- Controlled nesting is limited to research-theory/literature/numerics/critic/web-oracle, within the installed depth and explicit task budget. Use fresh, async contexts and keep an answering parent alive. SSH, model-assessor, mainline-supervisor and external agy are leaves. Ordinary children must not dispatch the mainline supervisor, transfer remote-write permission or select a new provider themselves. Preserve first-pass answer isolation; supervisor discussions are for methods/assumptions/checks, not leaking candidate answers.
+- Before unattended work, inspect workspace access mode: `default` / `full-access`.
+- Access mode applies to authenticated operator and canonical workspace until changed.
+- Joined main sessions, collaborators and coordinators share workspace access mode.
+- Reuse existing user authorization.
+- Do not add long-task grant forms or expiry approvals.
+- Record missing dependencies, credentials or explicit resource limits as concrete blockers.
+- Continue independent authorized work while reporting unresolved blockers.
+- Full access controls application confirmations.
+- Operating-system and remote-account permissions still apply.
+- Explicit stop, read-only assignments and scientific acceptance remain binding.
+- Main-agent selection does not create workflow membership or prove current target binding.
+- On `research-workbench-charter-binding-stale`, use platform “衔接到目标版本 N” after reviewing current target.
+- Preserve original workflow, confirmation receipt and research records during binding repair.
+- Never hand-edit `charterHash`, reset target or create replacement workflow to clear stale binding.
+- On `research-workbench-assignment-stale`, ask main session to reassign current-scope work.
+- Old child assignments and queued plans retain original scope after project rebind.
+- Controlled nesting is limited to research-theory/literature/numerics/critic/web-oracle, within installed depth and current task scope. Use fresh, async contexts and keep an answering parent alive. SSH, model-assessor, mainline-supervisor and external agy are leaves. Ordinary children must not dispatch the mainline supervisor, transfer remote-write permission or select a new provider themselves. Preserve first-pass answer isolation; supervisor discussions are for methods/assumptions/checks, not leaking candidate answers.
+- Explicit child model selection preserves concrete `provider/model` through startup and provider dispatch.
+- Never disguise DeepSeek / Sol mismatch through aliases or rewritten identity metadata.
+- Model self-description does not establish runtime identity.
+- `model_router_verification_unsupported` requires concrete child `provider/model`.
+- Legacy `pi-auto-model/auto` + `pi-messages` cannot prove physical identity.
+- Native `pi-virtual` routes retain Pi runtime identity handling.
+- Real response metadata mismatch remains blocked for investigation.
 - Native async tasks notify on completion; do not poll or sleep merely to wait. No artificial timeout ceiling is imposed on active subagent work; main agent inspects running state and keeps active work going. If a child appears stuck or errors, main agent proactively intervenes to assist first; stop/kill only if genuinely unresolvable. Stop on infrastructure failure rather than silently changing execution protocol/provider.
 - Credentials, private papers and original data are not export-authorized by installation. Obtain explicit external-provider and material-scope permission.
 - Remote writes, job submission/termination and large compute require explicit target/resource/time authorization. Never train on an HPC login node.

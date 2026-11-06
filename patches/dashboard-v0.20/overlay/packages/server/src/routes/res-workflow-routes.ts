@@ -19,6 +19,7 @@ import { isResearchTaskPermissionUpdate } from "@blackbelt-technology/pi-dashboa
 import { createResWorkflowTaskPermissionService } from "../res-workflow/task-permission-service.js";
 import { isResearchAccessModeUpdate } from "@blackbelt-technology/pi-dashboard-shared/research-access-mode.js";
 import { createResWorkflowAccessModeService } from "../res-workflow/access-mode-service.js";
+import { isResearchCharterBindingUpdate } from "@blackbelt-technology/pi-dashboard-shared/research-charter-binding.js";
 
 export interface ResWorkflowRouteDeps extends Omit<ResWorkflowServiceDeps, "privateDir" | "historyRoots"> {
   networkGuard: NetworkGuard;
@@ -275,6 +276,20 @@ export function registerResWorkflowRoutes(fastify: FastifyInstance, deps: ResWor
     return { success: false, error: "workbench-sync-unavailable" };
   });
   read("/api/res-workflow/connection", access => service.connection(access));
+  fastify.get('/api/res-workflow/charter-binding', guarded, async (request, reply) => {
+    if (!shape(request.query, ['cwd', 'sessionId']) || request.query.sessionId !== undefined && (typeof request.query.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(request.query.sessionId))) {
+      reply.code(400); return { success: false, error: 'research-charter-binding-invalid-request', code: 'research-charter-binding-invalid-request' };
+    }
+    const value = request.query;
+    return execute(request, reply, value.cwd, access => service.charterBinding(access, value.sessionId as string | undefined));
+  });
+  fastify.post('/api/res-workflow/charter-binding', guarded, async (request, reply) => {
+    if (!isResearchCharterBindingUpdate(request.body)) {
+      reply.code(400); return { success: false, error: 'research-charter-binding-invalid-request', code: 'research-charter-binding-invalid-request' };
+    }
+    const value = request.body;
+    return execute(request, reply, value.cwd, access => service.updateCharterBinding(access, { ...value, cwd: access.cwd }));
+  });
   read("/api/res-workflow/access-mode", access => accessMode.read(access));
   fastify.post("/api/res-workflow/access-mode", guarded, async (request, reply) => {
     if (!isResearchAccessModeUpdate(request.body)) {

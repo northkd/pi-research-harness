@@ -9,6 +9,7 @@ import {
   WORKBENCH_MEMORY_MAX_BYTES,
   buildWorkbenchMemory,
   buildWorkbenchRecordProtocol,
+  inspectWorkbenchRecordContext,
   readWorkbenchRecordContext,
   registerWorkbenchContext,
 } from '../extensions/research-loop/src/workbench-context.mjs';
@@ -170,7 +171,52 @@ test('verified children retain charter and read-only scope without loading unrel
   assert.ok(Buffer.byteLength(buildWorkbenchMemory(context)) <= WORKBENCH_MEMORY_MAX_BYTES);
   meta.researchSession.charterHash = 'sha256:' + 'f'.repeat(64);
   writeJson(metaFile, meta);
-  assert.equal(readWorkbenchRecordContext(ctx, { privateDir }).researchSession, undefined, 'mismatched provenance must not be promoted into verified child scope');
+  assert.equal(readWorkbenchRecordContext(ctx, { privateDir }), null, 'mismatched child provenance must not be promoted into a lead context');
+});
+
+test('core and plugin membership records compare by fields rather than serialization key order', t => {
+  const f = joinedFixture(t), file = f.sessionFile.slice(0, -6) + '.meta.json';
+  const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+  meta.pluginRefs = { 'res-workflow': { resWorkflow: {
+    via: meta.resWorkflow.via, joinedAt: meta.resWorkflow.joinedAt, canonicalCwd: meta.resWorkflow.canonicalCwd,
+  } } };
+  assert.notEqual(JSON.stringify(meta.resWorkflow), JSON.stringify(meta.pluginRefs['res-workflow'].resWorkflow));
+  writeJson(file, meta);
+  const inspected = inspectWorkbenchRecordContext(f.ctx, { privateDir: f.privateDir });
+  assert.equal(inspected.status, 'ready');
+  assert.equal(inspected.context.charterHash, f.charterHash, 'charter hashing is unchanged');
+  meta.pluginRefs['res-workflow'].resWorkflow.via = 'manual';
+  writeJson(file, meta);
+  assert.equal(inspectWorkbenchRecordContext(f.ctx, { privateDir: f.privateDir }).status, 'not-joined', 'different membership fields remain a conflict');
+});
+
+test('child provenance ignores object key order while retaining read-only scope and ordered tasks', t => {
+  const f = joinedFixture(t), file = f.sessionFile.slice(0, -6) + '.meta.json';
+  const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const reorder = value => Array.isArray(value) ? value.map(reorder) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reorder(item)])) : value;
+  meta.researchSession = {
+    schema: 'pi-research-session.v1', workflowCwd: f.cwd, charterHash: f.charterHash, adoptionId: f.adoptionId,
+    parentSessionId: 'lead-session', role: 'reviewer', depth: 1, readOnly: true,
+    tasks: [
+      { id: 'first', role: 'reviewer', task: 'Review the baseline', stage: '3-review', dependsOn: [] },
+      { id: 'second', role: 'reviewer', task: 'Check the evidence', stage: '3-review', dependsOn: ['first'] },
+    ],
+  };
+  meta.pluginRefs = { 'res-workflow': { researchSession: reorder(meta.researchSession) } };
+  assert.notEqual(JSON.stringify(meta.researchSession), JSON.stringify(meta.pluginRefs['res-workflow'].researchSession));
+  writeJson(file, meta);
+  const inspected = inspectWorkbenchRecordContext(f.ctx, { privateDir: f.privateDir });
+  assert.equal(inspected.status, 'ready');
+  assert.equal(inspected.context.researchSession.role, 'reviewer');
+  assert.equal(inspected.context.researchSession.readOnly, true);
+  assert.equal(inspected.context.researchSession.declaredTasks, 2);
+  meta.pluginRefs['res-workflow'].researchSession.tasks[0].task = 'A different assignment';
+  writeJson(file, meta);
+  assert.equal(inspectWorkbenchRecordContext(f.ctx, { privateDir: f.privateDir }).status, 'assignment-stale');
+  meta.pluginRefs['res-workflow'].researchSession = reorder(meta.researchSession);
+  meta.pluginRefs['res-workflow'].researchSession.tasks.reverse();
+  writeJson(file, meta);
+  assert.equal(inspectWorkbenchRecordContext(f.ctx, { privateDir: f.privateDir }).status, 'assignment-stale', 'array order is part of the assignment');
 });
 
 test('native child mode omits history, while a lead reads only a bounded tail', t => {

@@ -1,0 +1,336 @@
+{
+  "checks": [
+    {
+      "name": "native authentication, matched build and research API",
+      "passed": true
+    },
+    {
+      "name": "legacy research deep link opens new workbench",
+      "passed": true
+    },
+    {
+      "name": "joined historical session exposes stale charter separately from missing membership",
+      "passed": true
+    },
+    {
+      "name": "one explicit platform transition restores native context and preserves original research records",
+      "passed": true
+    },
+    {
+      "name": "binding survives reload and rejects an outdated compare-and-swap request",
+      "passed": true
+    },
+    {
+      "name": "main-agent selection alone does not mark a different conversation as joined",
+      "passed": true
+    },
+    {
+      "name": "one access-mode selection persists through the real authenticated service without task setup",
+      "passed": true
+    },
+    {
+      "name": "unsent folder draft survives all primary views",
+      "passed": true
+    },
+    {
+      "name": "empty files navigation retains research tab and visible tree",
+      "passed": true
+    },
+    {
+      "name": "file tree opens a real project document",
+      "passed": true
+    },
+    {
+      "name": "unsaved Markdown edit survives primary views without writing disk",
+      "passed": true
+    },
+    {
+      "name": "no-session Science has an explicit unavailable state",
+      "passed": true
+    },
+    {
+      "name": "real ended transcript stays readable",
+      "passed": true
+    },
+    {
+      "name": "current usage is accessible from workbench",
+      "passed": true
+    },
+    {
+      "name": "source timing excludes first-output wait and persistence delay in the actual performance panel",
+      "passed": true
+    },
+    {
+      "name": "SDK-only and legacy timing stay explicit estimates without invented first-output times",
+      "passed": true
+    },
+    {
+      "name": "legacy folder editor route keeps workspace navigation and return",
+      "passed": true
+    },
+    {
+      "name": "demo data is explicitly identified",
+      "passed": true
+    },
+    {
+      "name": "recorded multi-agent creators form a three-level canvas hierarchy",
+      "passed": true
+    },
+    {
+      "name": "stacked subagents animate and spread within the canvas without a dialog",
+      "passed": true
+    },
+    {
+      "name": "narrow canvas retains nested collaborators and inline execution cards",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary overview stays reachable",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary claims stays reachable",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary audit stays reachable",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary all stays reachable",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary workflow stays reachable",
+      "passed": true
+    },
+    {
+      "name": "research overview shows usage without budget configuration or task-grant forms",
+      "passed": true
+    },
+    {
+      "name": "main-agent selection survives reload and routes a simulated task to the selected session",
+      "passed": true
+    },
+    {
+      "name": "all five stage cards can launch independently while execution records stay collapsed",
+      "passed": true
+    },
+    {
+      "name": "simulated access choice survives switching views and can return to default",
+      "passed": true
+    },
+    {
+      "name": "intake drawer retains its page and closes with Escape",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 1920px",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 1440px",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 1100px",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 768px",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 360px",
+      "passed": true
+    },
+    {
+      "name": "dark theme preserves workspace navigation",
+      "passed": true
+    },
+    {
+      "name": "dark layout no document overflow",
+      "passed": true
+    },
+    {
+      "name": "no unexpected API failures",
+      "passed": true
+    }
+  ],
+  "errors": [],
+  "cancellations": [
+    {
+      "message": "Canceled",
+      "name": "Canceled",
+      "stack": "Canceled: Canceled\n    at $r.cancel (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:20:160056)\n    at $r.dispose (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:20:160186)\n    at Wt (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:18:1625)\n    at dI.clear (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:18:2133)\n    at dI.dispose (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:18:2043)\n    at dh.dispose (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:760:102288)\n    at HN.value (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:760:102769)\n    at P._deliver (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:20:3078)\n    at P._deliverQueue (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:20:3169)\n    at P.fire (http://127.0.0.1:43613/assets/monaco-KUyAB1eK.js:20:3553)",
+      "phase": "unsaved Markdown edit survives primary views without writing disk"
+    }
+  ],
+  "requests": [
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/session/33d6ba9b-7c53-4d66-a859-25a18871eb34/vault-bindings",
+      "status": 404,
+      "sessionId": null,
+      "error": "session-unknown"
+    },
+    {
+      "path": "/api/plugins/flows/files",
+      "status": 404,
+      "sessionId": "33d6ba9b-7c53-4d66-a859-25a18871eb34",
+      "error": "session not found"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/session/5d60bb6c-daaf-4719-883d-0655fda05705/vault-bindings",
+      "status": 404,
+      "sessionId": null,
+      "error": "session-unknown"
+    },
+    {
+      "path": "/api/plugins/flows/files",
+      "status": 404,
+      "sessionId": "5d60bb6c-daaf-4719-883d-0655fda05705",
+      "error": "session not found"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/session/97779f0d-439f-4772-b146-5f524fe19e50/vault-bindings",
+      "status": 404,
+      "sessionId": null,
+      "error": "session-unknown"
+    },
+    {
+      "path": "/api/plugins/flows/files",
+      "status": 404,
+      "sessionId": "97779f0d-439f-4772-b146-5f524fe19e50",
+      "error": "session not found"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    }
+  ],
+  "screenshots": [
+    "22-charter-binding-stale-1440.png",
+    "23-charter-binding-current-1440.png",
+    "17-full-access-1440.png",
+    "01-real-workbench-1440.png",
+    "02-conversation-1440.png",
+    "03-files-1440.png",
+    "04-science-1440.png",
+    "10-session-chat-1440.png",
+    "11-usage-drawer-1440.png",
+    "15-speed-measured-1440.png",
+    "16-speed-sdk-estimate-1440.png",
+    "05-workbench-demo-1440.png",
+    "06-agents-demo-1440.png",
+    "12-subagents-spread-1440.png",
+    "13-subagents-spread-360.png",
+    "18-research-overview-1440.png",
+    "19-main-agent-selection-1440.png",
+    "20-independent-stage-editor-1440.png",
+    "21-workflow-stage-actions-1440.png",
+    "07-intake-drawer-1440.png",
+    "08-workbench-light-1920.png",
+    "08-workbench-light-1440.png",
+    "08-workbench-light-1100.png",
+    "08-workbench-light-768.png",
+    "08-workbench-light-360.png",
+    "09-workbench-dark-1440.png"
+  ],
+  "browser": "141.0.7390.37",
+  "syntheticData": true,
+  "browserPlugin": {
+    "enabled": false,
+    "loaded": false,
+    "unavailableRouteVerified": true
+  },
+  "charterBinding": {
+    "originalAdoptionPreserved": true,
+    "preservedFiles": 6,
+    "nativeBefore": "charter-stale",
+    "nativeAfter": "ready",
+    "currentRevision": 2,
+    "bindingRevision": 1,
+    "modelRequests": 0
+  },
+  "finishedAt": "2026-11-06T13:29:28.156Z",
+  "passed": 39,
+  "failed": 0
+}

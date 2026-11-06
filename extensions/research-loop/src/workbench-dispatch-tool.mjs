@@ -1,5 +1,5 @@
 /** Native bounded DAG execution and the collaborator plan-first runtime gate. */
-import { readWorkbenchRecordContext } from './workbench-context.mjs';
+import { inspectWorkbenchRecordContext, requireWorkbenchRecordContext } from './workbench-context.mjs';
 import { readBoundedJson, readDashboardLocalAuth, RESEARCH_DISPATCH_TASK_SCHEMA, RESEARCH_SESSION_STAGES } from './workbench-session-tool.mjs';
 import { mergeDelegationRestrictions } from './delegation-policy.mjs';
 import { projectDispatchContext } from './dispatch-context.mjs';
@@ -16,7 +16,7 @@ const result = (value, error = false) => ({ content: [{ type: 'text', text: JSON
 const blocked = code => result({ status: 'blocked', tool: 'research_dispatch', error: code }, true);
 
 export function createResearchDispatchClient(options = {}) {
-  const readContext = options.readContext ?? readWorkbenchRecordContext;
+  const readContext = options.readContext ?? (ctx => requireWorkbenchRecordContext(ctx, options.contextOptions, 'research-dispatch-session-not-joined'));
   return async (ctx, params, signal) => {
     const sessionId = ctx?.sessionManager?.getSessionId?.();
     const joined = await readContext(ctx);
@@ -41,7 +41,7 @@ export function createResearchDispatchClient(options = {}) {
 
 export function registerWorkbenchDispatchTool(pi, options = {}) {
   const request = options.request ?? createResearchDispatchClient(options);
-  const readContext = options.readContext ?? readWorkbenchRecordContext;
+  const readContext = options.readContext ?? (ctx => requireWorkbenchRecordContext(ctx, options.contextOptions, 'research-dispatch-session-not-joined'));
   const states = new Map();
   function state(ctx) {
     const id = ctx?.sessionManager?.getSessionId?.();
@@ -128,6 +128,12 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
   });
   pi.on('tool_call', async (event, ctx) => {
     if (!event?.toolName || event.toolName === 'research_dispatch') return;
+    if (!options.readContext) {
+      const inspection = inspectWorkbenchRecordContext(ctx, options.contextOptions);
+      if (inspection.membership === true && inspection.status !== 'ready' && !SAFE_READS.has(event.toolName) && !COORDINATION.has(event.toolName) && !(event.toolName === 'research_loop' && event.input?.action === 'status')) {
+        return { block: true, reason: `${inspection.error}: preserve this session's existing assignment and records. Resolve the target binding in the workbench, or create a fresh assignment for an old child, before research execution.` };
+      }
+    }
     const local = state(ctx);
     if (!local) return;
     let joined;

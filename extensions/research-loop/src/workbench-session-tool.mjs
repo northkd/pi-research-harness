@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { readWorkbenchRecordContext } from './workbench-context.mjs';
+import { requireWorkbenchRecordContext } from './workbench-context.mjs';
 import { mergeDelegationRestrictions } from './delegation-policy.mjs';
 
 export const RESEARCH_SESSION_TOOL_NAME = 'research_session';
@@ -171,7 +171,7 @@ function blocked(error, extra = {}) {
 }
 
 export function createResearchSessionTool(pi, options = {}) {
-  const readContext = options.readContext ?? readWorkbenchRecordContext;
+  const readContext = options.readContext ?? ((ctx, contextOptions) => requireWorkbenchRecordContext(ctx, contextOptions, 'research-session-parent-not-joined'));
   const resolveAuth = options.resolveAuth ?? (() => readDashboardLocalAuth(options.authOptions));
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const requestId = options.requestId ?? randomUUID;
@@ -206,8 +206,8 @@ export function createResearchSessionTool(pi, options = {}) {
     let context;
     try {
       context = await readContext(ctx, options.contextOptions);
-    } catch {
-      return blocked('research-session-parent-not-joined');
+    } catch (error) {
+      return blocked(/^research-workbench-[a-z-]+$/.test(error?.message ?? '') ? error.message : 'research-session-parent-not-joined');
     }
     if (!context || context.sessionId !== sessionId || typeof context.charterHash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(context.charterHash)) {
       return blocked('research-session-parent-not-joined');

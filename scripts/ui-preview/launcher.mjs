@@ -1,12 +1,14 @@
 /** Reproducible UI QA against a prepared Dashboard runtime and synthetic data. */
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { registerDashboardExtras } from '../register-dashboard-extras.mjs';
+import { charterBindingFixture } from '../../tests/fixtures/charter-binding.mjs';
+import { configureResearch } from '../../extensions/research-loop/src/adoption.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(directory, '../..');
@@ -115,9 +117,43 @@ function seedEndedTranscripts(previewHome) {
     fs.writeFileSync(filename.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ cwd: project, source: 'tui', status: 'ended', hidden: false, archived: false,
       name: item.name, nameSource: 'user', firstMessage: item.request, startedAt, endedAt, tags: ['demo'] }, null, 2), { mode: 0o600 });
     fs.utimesSync(filename, new Date(endedAt), new Date(endedAt));
-    return { id, name: item.name, status: 'ended', synthetic: true,
+    return { id, name: item.name, status: 'ended', synthetic: true, sessionFile: filename,
       timingScenario: index === 0 ? 'pi-stream' : index === 1 ? 'sdk-duration' : 'legacy-timestamps' };
   });
+}
+
+function seedStaleCharterBinding(previewHome, session) {
+  const fixture = charterBindingFixture(null, {
+    root: previewHome, cwd: project, privateDir: path.join(previewHome, '.pi/dashboard/res-workflow'),
+    // This isolated server has no identity resolver. Native browser login proves
+    // local access while resWorkflowAccess retains the inert host owner realm.
+    ownerKey: JSON.stringify(['host', 'inert-operator']),
+    sessionFile: session.sessionFile, sessionId: session.id, preserveExistingSession: true, revise: false,
+  });
+  const state = JSON.parse(fs.readFileSync(fixture.currentStatePath, 'utf8'));
+  // Exercise the same platform revision path as a real user. Original receipt,
+  // claims and workflow history remain intact; no hand-edited hash is involved.
+  configureResearch(project, {
+    ...state.charter, objective: '【演示】修订后的合成研究目标：核对新范围，保留旧证据',
+    successCriteria: ['【演示】旧主张保持原始验收记录', '【演示】新目标单独核对'],
+    constraints: ['【演示】源数据只读'], nonGoals: ['【演示】不发布真实结论'], autoRun: false,
+  }, { expectedCharterHash: fixture.receipt.charterHash });
+  const files = [];
+  function collect(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) collect(file);
+      else if (entry.isFile()) files.push(file);
+      else throw new Error('Unexpected non-regular synthetic fixture');
+    }
+  }
+  collect(path.join(project, '.pi/research-loop'));
+  for (const file of [fixture.privateOperationPath, fixture.adoptedPointerPath, path.join(project, 'ledger.jsonl')]) {
+    if (fs.existsSync(file)) files.push(file);
+  }
+  const originalFiles = [...new Set(files)].map(file => ({ file, hash: createHash('sha256').update(fs.readFileSync(file)).digest('hex') }));
+  return { cwd: project, privateDir: fixture.privateDir, ownerKey: fixture.ownerKey, adoptionId: fixture.adoptionId,
+    sessionId: session.id, sessionFile: session.sessionFile, originalFiles };
 }
 
 function isolatedEnvironment(previewHome) {
@@ -302,6 +338,7 @@ try {
   if (created.status !== 0) throw new Error(`Could not create the synthetic demo: ${redact(created.stderr ?? '')}`);
   registerDashboardExtras(runtime);
   const syntheticSessions = seedEndedTranscripts(previewHome);
+  const bindingFixture = seedStaleCharterBinding(previewHome, syntheticSessions[0]);
   const port = await availablePort();
   const configDir = path.join(previewHome, '.pi/dashboard');
   fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
@@ -338,6 +375,7 @@ try {
     PI_UI_PREVIEW_URL: state.url,
     PI_UI_DEMO_CWD: project,
     PI_UI_DEMO_SESSIONS: JSON.stringify(syntheticSessions),
+    PI_UI_BINDING_FIXTURE: JSON.stringify(bindingFixture),
     PI_UI_QA_OUTPUT: output,
     PI_UI_LOGIN_URL: handoff,
   });

@@ -679,6 +679,10 @@
       "sha256": "67d251f985a3864a81d19cad4fb7c58822a3e4428417a8053756e7b5c84dba5e",
       "baseBlob": null
     },
+    "packages/client/src/components/research/ResearchCharterBindingControls.tsx": {
+      "sha256": "a4d599d536c8483babf3f0175d60491da14dc3fb90fa26f9b0e2d38e4d4700c6",
+      "baseBlob": null
+    },
     "packages/client/src/components/research/ResearchClaimPanels.tsx": {
       "sha256": "f16ca1686242ba73b3250148d581e4d6d150423574ddc6e546fddadca5830711",
       "baseBlob": null
@@ -688,7 +692,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchMainAgentControls.tsx": {
-      "sha256": "e648d22bcf44a6dfd4fabf6cc30a910b19b2f238d0d72b30eb6876aa984dae10",
+      "sha256": "3d066dc531f0a8e489b8fa7d1c610084862cbeccea538462172c15c3da78ffff",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchOverviewAndBudget.tsx": {
@@ -700,7 +704,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchPipelinePage.tsx": {
-      "sha256": "64a3a8cf6cb34aa3377e5d22ba2767f25649009d6c0b63e61b666df98916fb4c",
+      "sha256": "688d35b61b94294b52636cf9b00fcc5469811f9ea5e8ea29bb1c22ec66b51c1e",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchSourceViewer.tsx": {
@@ -775,6 +779,10 @@
       "sha256": "0244df8d278994b739c0ed2886305a468b4a8ff3663886202d22e801824df310",
       "baseBlob": null
     },
+    "packages/client/src/components/research/__tests__/ResearchCharterBindingControls.test.tsx": {
+      "sha256": "4b346b19ca76e42a588b545093b04b616cee3eb7514ab54596863ab07cbf73ee",
+      "baseBlob": null
+    },
     "packages/client/src/components/research/__tests__/ResearchOverview.usage.test.tsx": {
       "sha256": "c22297a75ea1d247bdbecb0e781218663d8392cef5d41fabedebf0ed5f7ccac3",
       "baseBlob": null
@@ -788,7 +796,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchWorkflowControls.test.tsx": {
-      "sha256": "9be4a581a6ed8dc48489da2048a3b241b8392455b56a8df6ca3dae6cb5f6d064",
+      "sha256": "eb30b286ed4430da4d54ddfd18b820f3dab2fff43b9bb3f29b7ec10e033cd0d3",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchWorkspaceSurface.test.tsx": {
@@ -844,7 +852,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/research-workspace.css": {
-      "sha256": "4b3de86649cbfabf3af26dfd9a801eb09f0b838a35c42d17a7d243444132ccde",
+      "sha256": "a22b12e246fc9d3d3d61955578408a33a77231865d990992aa7f56368712cea3",
       "baseBlob": null
     },
     "packages/client/src/components/research/use-research-loop-live.ts": {
@@ -1099,6 +1107,10 @@
       "sha256": "2d947bd8e29b16bbc19e2cbdf44b81d24205a5e81504b9aed0bcde6c33853768",
       "baseBlob": null
     },
+    "packages/client/src/lib/api/__tests__/research-charter-binding-api.test.ts": {
+      "sha256": "b08d5a185021e8e7920f91ded9fe78f82f6a0f2df47613702c5ee1b096cae976",
+      "baseBlob": null
+    },
     "packages/client/src/lib/api/browse-api.ts": {
       "sha256": "4dd5626316650733b3764984a61a7c9e7f8a5e81e47caf7206b602b620b85332",
       "baseBlob": "58b833fd362094725d5e1ab071b1cc97a274d25f"
@@ -1113,6 +1125,10 @@
     },
     "packages/client/src/lib/api/research-access-mode-api.ts": {
       "sha256": "254ec37fd47fe6891843329696664407698d6aa26f9be67ab449786cf4b431e2",
+      "baseBlob": null
+    },
+    "packages/client/src/lib/api/research-charter-binding-api.ts": {
+      "sha256": "4c0c66bc618e9e679a17abbe546925414bae0a42789b6a07680d40a246afb94b",
       "baseBlob": null
     },
     "packages/client/src/lib/api/research-task-permissions-api.ts": {
@@ -1815,6 +1831,10 @@
       "sha256": "b49cefbfb867b41504fc66d43a02583f28d9e8e61a33e4901df4165c5d27ff99",
       "baseBlob": null
     },
+    "packages/server/src/__tests__/research-charter-binding.test.ts": {
+      "sha256": "fd94d51551f080970b788c4f04cd3f73369b315cd5939c64d0c9fe230b0ed493",
+      "baseBlob": null
+    },
     "packages/server/src/__tests__/research-session-context-budget.test.ts": {
       "sha256": "0b3291b441afec5cb40db7a1938a432d249e82babc4a3b1d10787632928d2381",
       "baseBlob": null
@@ -2112,7 +2132,7 @@
       "baseBlob": null
     },
     "packages/server/src/res-workflow/adoption-service.ts": {
-      "sha256": "c9b9c07dd31b5d3332c6559b8c5a6cbdd8bd6a762867bba1cffaaf33186ab771",
+      "sha256": "30298796db5cb04bfbb9c4299d4964427f9446f545c2b71e40796a9f76e77740",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/analysis-agent.ts": {
@@ -2288,11 +2308,11 @@
       "baseBlob": "ffefb6ae35b9cc75d44e5582a74b754a0cac5ad5"
     },
     "packages/server/src/routes/res-workflow-research-session-routes.ts": {
-      "sha256": "5c688273aa8ad1bc52cf9ad9bbc18ec090970b8bfc7fe974808731d9ece74166",
+      "sha256": "dad89200bd2ee95cc62f4165bcec668956934da07fc6ef910c1a4a2a0a2bf16c",
       "baseBlob": null
     },
     "packages/server/src/routes/res-workflow-routes.ts": {
-      "sha256": "a5a4dc4d7ae1df53ab1c96d5f843c5a430c6bb82c5ab496623c53453da252338",
+      "sha256": "cbd40dd733171563359dc288f488c93fb5c0692a3b16c57bdc75b1a931de2e17",
       "baseBlob": null
     },
     "packages/server/src/routes/science-instances-routes.ts": {
@@ -2485,6 +2505,10 @@
     },
     "packages/shared/src/research-budget.ts": {
       "sha256": "374115056d5c5828424984b2ef0f5ab693487982c8dd328851a70d9a5fe3c959",
+      "baseBlob": null
+    },
+    "packages/shared/src/research-charter-binding.ts": {
+      "sha256": "e954b259e4aebcd8f36a857a7327041e944109adccb87cf924c6cb917e9aaf4d",
       "baseBlob": null
     },
     "packages/shared/src/research-session.ts": {

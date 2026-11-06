@@ -11,6 +11,24 @@ const shared = path.resolve('patches/dashboard-v0.20/overlay/packages/shared/src
 const cwd = '/tmp/demo-project';
 const charter = { objective: '【演示】样例', successCriteria: ['仅模拟'], revision: 1 };
 
+test('demo sessions never borrow real charter-binding proof or mutate its audit chain', async () => {
+  const sim = require(implementation);
+  const calls = [];
+  const runtime = sim.createDemoRuntime({ cwd, origin: 'http://127.0.0.1:8000',
+    upstream: async (...args) => { calls.push(args); throw new Error('Synthetic session reached the real binding API'); }, notify() {} });
+  const endpoint = '/api/res-workflow/charter-binding';
+  const response = await runtime.fetch(endpoint + '?cwd=' + encodeURIComponent(cwd) + '&sessionId=DEMO%3Amain');
+  assert.equal(response.status, 200);
+  const binding = await response.json();
+  const { isResearchCharterBinding } = await import(pathToFileURL(path.resolve('patches/dashboard-v0.20/overlay/packages/shared/src/research-charter-binding.ts')).href);
+  assert.equal(isResearchCharterBinding(binding), true);
+  assert.equal(binding.status, 'unavailable');
+  assert.equal(binding.canRebind, false);
+  assert.equal(binding.session, undefined);
+  assert.equal((await runtime.fetch(endpoint, { method: 'POST', body: JSON.stringify({ cwd }) })).status, 403);
+  assert.deepEqual(calls, []);
+});
+
 test('the simulated collaboration graph satisfies the dashboard contract', async () => {
   assert.ok(fs.existsSync(implementation), 'demo simulator has not been created');
   const sim = require(implementation);

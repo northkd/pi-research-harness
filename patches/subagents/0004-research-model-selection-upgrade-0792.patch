@@ -1,0 +1,182 @@
+--- a/src/runs/shared/child-session.js
++++ b/src/runs/shared/child-session.js
+@@ -19,6 +19,7 @@
+ import * as path from "node:path";
+ import { pathToFileURL } from "node:url";
+ import { CHILD_COMMAND_TOOL, createChildCommandRuntime } from "./child-commands.js";
++import { protectChildModelSelection } from "./research-model-selection.mjs";
+ import { supervisorChannelDir } from "./child-tool-plan.js";
+ import { pinChildCacheRetention } from "../../shared/child-cache-retention.js";
+ import { getAgentDir, PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.js";
+@@ -475,6 +476,8 @@
+                     : undefined;
+                 if (resolvedModel?.error)
+                     throw new Error(resolvedModel.error);
++                if (launch.model && !resolvedModel?.model)
++                    throw new Error(`model_selection_unavailable: native Pi could not resolve requested child model '${launch.model}'.`);
+                 let requestModelRuntime = modelRuntime;
+                 const budgetExtensions = (launch.requiredExtensions ?? []).filter((entry) => entry.id === "research-budget-v1");
+                 if (budgetExtensions.length > 1)
+@@ -499,6 +502,14 @@
+                     sessionStartEvent: { type: "session_start", reason: "startup" },
+                 });
+                 pinChildCacheRetention(session.agent);
++                let modelSelection;
++                try {
++                    modelSelection = protectChildModelSelection(session, resolvedModel?.model);
++                }
++                catch (error) {
++                    session.dispose();
++                    throw error;
++                }
+                 // Pi reports handler failures through onError instead of throwing, so required startup failures must be collected here.
+                 const requiredStartupErrors = [];
+                 let binding = true;
+@@ -524,11 +535,18 @@
+                     await shutdownSession(session);
+                     throw new Error(`Required child extension failed during startup: ${requiredStartupErrors.join("; ")}`);
+                 }
+-                return session;
++                try {
++                    await modelSelection.restore();
++                }
++                catch (error) {
++                    await shutdownSession(session);
++                    throw error;
++                }
++                return { session, modelSelection };
+             };
+             const opened = loading.catch(() => { }).then(open);
+             loading = opened;
+-            const session = await opened;
++            const { session, modelSelection } = await opened;
+             let pending;
+             const shutdown = () => shutdownSession(session);
+             // Outside the launch lock: MCP servers connect after `session_start` without reading the per-launch env.
+@@ -583,6 +601,7 @@
+                 get sessionFile() { return session.sessionFile; },
+                 get sessionId() { return session.sessionId; },
+                 get modelId() { return session.model ? `${session.model.provider}/${session.model.id}` : undefined; },
++                get modelSelectionFailure() { return modelSelection.failure; },
+                 get inheritedProvider() { return session.model && inheritedProviders.has(session.model.provider) ? session.model.provider : undefined; },
+                 get virtualModelId() { return session.model?.api === "pi-virtual" ? `${session.model.provider}/${session.model.id}` : undefined; },
+                 get contextWindow() { return session.model?.contextWindow; },
+--- /dev/null
++++ b/src/runs/shared/research-model-selection.mjs
+@@ -0,0 +1,77 @@
++/**
++ * Child sessions own a launch model. Ambient extensions may observe that model,
++ * but they must not replace the parent's concrete choice during startup or a
++ * later tool loop. This guard is scoped to one AgentSession and its stream.
++ */
++function identity(model) {
++  return typeof model?.provider === 'string' && model.provider
++    && typeof model?.id === 'string' && model.id
++    ? `${model.provider}/${model.id}` : undefined;
++}
++
++function selectionError(expected, observed) {
++  const error = new Error(`model_selection_changed: native Pi child was launched with '${expected}' but selected '${observed ?? '(missing model)'}'. The provider request was blocked before dispatch. Child extensions must preserve the launch model; start a new child to request a different model.`);
++  error.code = 'model_selection_changed';
++  error.expectedModel = expected;
++  error.observedModel = observed;
++  return error;
++}
++
++/** Install before extension startup, then restore once all startup hooks finish. */
++export function protectChildModelSelection(session, model) {
++  if (!model) return { restore: async () => {} };
++  const expected = identity(model);
++  // pi-auto-model 0.8.x implements its router as a legacy pi-messages provider:
++  // replies carry a different physical model, without a Pi virtual route receipt.
++  // It cannot satisfy native child identity verification. Stop before spending a
++  // request, including when the parent model was inherited by the child.
++  if (model.provider === 'pi-auto-model' && model.id === 'auto' && model.api === 'pi-messages') {
++    const error = new Error(`model_router_verification_unsupported: '${expected}' uses a legacy pi-messages router without a native virtual-model identity receipt. Specify a concrete provider/model for this child. Native pi-virtual models remain supported.`);
++    error.code = 'model_router_verification_unsupported';
++    error.expectedModel = expected;
++    throw error;
++  }
++  if (!expected || typeof session?.agent?.streamFunction !== 'function'
++      || typeof session.setModel !== 'function') {
++    throw new Error('model_selection_guard_unavailable: the native Pi child cannot enforce its launch model.');
++  }
++  // Pi resolves a native virtual selection in prepareRequest before calling
++  // streamFunction with the physical model. Preserve that routing contract while
++  // requiring the session itself to keep the requested virtual selection.
++  const virtual = model.api === 'pi-virtual';
++  let failure;
++  const reject = observed => {
++    const error = selectionError(expected, observed);
++    failure = error.message;
++    throw error;
++  };
++  const originalStream = session.agent.streamFunction;
++  session.agent.streamFunction = (selected, context, options) => {
++    const selection = identity(session.model);
++    if (selection !== expected || (virtual && session.model?.api !== 'pi-virtual')) {
++      reject(selection);
++    }
++    const observed = identity(selected);
++    if (!virtual && observed !== expected) reject(observed);
++    // A later permitted request must never inherit an earlier local failure.
++    failure = undefined;
++    return originalStream(selected, context, options);
++  };
++  const initialThinking = session.thinkingLevel;
++  return {
++    get failure() { return failure; },
++    async restore() {
++      if (identity(session.model) !== expected) {
++        // setModel emits this session's model_select event. Routers such as
++        // pi-auto-model suspend themselves on that explicit concrete selection.
++        // Do not persist: the parent session and global defaults are independent.
++        await session.setModel(model);
++        if (initialThinking !== undefined && typeof session.setThinkingLevel === 'function') {
++          session.setThinkingLevel(initialThinking);
++        }
++      }
++      const observed = identity(session.model);
++      if (observed !== expected) throw selectionError(expected, observed);
++    },
++  };
++}
+--- a/src/runs/foreground/execution.js
++++ b/src/runs/foreground/execution.js
+@@ -1050,7 +1050,10 @@
+                         if (!result.model)
+                             result.model = observedModel;
+                         if (expectedModelForVerification && !hasToolCall) {
+-                            const modelVerificationError = formatSubagentModelVerificationError(expectedModelForVerification, evt.message.model, options.availableModels, options.modelResponseAliases, session?.virtualModelId);
++                            // A local pre-dispatch guard error is not a provider's model identity report.
++                            const modelVerificationError = evt.message.stopReason === "error" && session?.modelSelectionFailure && evt.message.errorMessage === session.modelSelectionFailure
++                                ? evt.message.errorMessage
++                                : formatSubagentModelVerificationError(expectedModelForVerification, evt.message.model, options.availableModels, options.modelResponseAliases, session?.virtualModelId);
+                             if (modelVerificationError && !result.error)
+                                 result.error = modelVerificationError;
+                         }
+--- a/src/runs/background/run-child-session.js
++++ b/src/runs/background/run-child-session.js
+@@ -403,7 +403,10 @@
+                 if (event.message.model) {
+                     model = qualifyModelWithProvider(event.message.model, event.message.provider, input.modelVerificationRegistry) ?? event.message.model;
+                     if (input.expectedModelForVerification && !hasToolCall) {
+-                        const modelVerificationError = formatSubagentModelVerificationError(input.expectedModelForVerification, event.message.model, input.modelVerificationRegistry, input.modelResponseAliases, session?.virtualModelId);
++                        // A local pre-dispatch guard error is not a provider's model identity report.
++                        const modelVerificationError = event.message.stopReason === "error" && session?.modelSelectionFailure && event.message.errorMessage === session.modelSelectionFailure
++                            ? event.message.errorMessage
++                            : formatSubagentModelVerificationError(input.expectedModelForVerification, event.message.model, input.modelVerificationRegistry, input.modelResponseAliases, session?.virtualModelId);
+                         if (modelVerificationError && !error)
+                             error = modelVerificationError;
+                     }
+--- a/src/runs/shared/child-session.d.ts
++++ b/src/runs/shared/child-session.d.ts
+@@ -101,6 +101,8 @@
+     readonly sessionFile: string | undefined;
+     readonly sessionId: string;
+     readonly modelId: string | undefined;
++    /** Last locally blocked request, cleared before any provider dispatch. */
++    readonly modelSelectionFailure?: string;
+     /** Provider id of the selected model when this child inherited that provider from the parent's registry instead of loading its extension. */
+     readonly inheritedProvider?: string;
+     /** Live provider/id of the selected model when Pi marks it virtual (`api === "pi-virtual"`); assistant messages then name the dispatched physical model. */

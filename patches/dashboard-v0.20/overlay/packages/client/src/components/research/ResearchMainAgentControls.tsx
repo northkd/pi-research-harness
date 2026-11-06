@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { inferPlatform, pathKey } from "@blackbelt-technology/pi-dashboard-shared/session-group-path.js";
 import { useApiBase } from "../../lib/api/api-context.js";
+import { ResearchCharterBindingControls } from "./ResearchCharterBindingControls.js";
 
 interface MainAgentSession {
   id: string;
@@ -108,7 +109,14 @@ export function useResearchMainAgent({ cwd, activeSessionId, visible, connection
   return { scope, selectedId, session: current.sessions.find(session => session.id === selectedId), sessions: current.sessions, loading: !current.loaded, error: current.error, select };
 }
 
-export function ResearchMainAgentControls({ controller }: { controller: ReturnType<typeof useResearchMainAgent> }) {
+export function ResearchMainAgentControls({ controller, cwd, visible, connectionGeneration, refreshSignal, onRebound }: {
+  controller: ReturnType<typeof useResearchMainAgent>;
+  cwd: string;
+  visible?: boolean;
+  connectionGeneration?: number;
+  refreshSignal?: string;
+  onRebound?: () => void;
+}) {
   const apiBase = useApiBase();
   const { selectedId, session, sessions, loading, error, select } = controller;
   const [composing, setComposing] = useState(false);
@@ -162,6 +170,7 @@ export function ResearchMainAgentControls({ controller }: { controller: ReturnTy
       <button type="button" data-testid="research-main-agent-compose" className="research-workspace-action" aria-expanded={composing} onClick={() => setComposing(open => !open)}>发送任务</button>
     </div>
     <p className="research-main-agent-caption">{error ? `会话状态未同步：${error}` : session?.status === "ended" ? "该会话已结束；请打开主对话恢复会话后再发送。" : selectedId && !session ? "所选会话不在当前可用列表中，请重新选择。" : session ? `任务发送到此会话${session.model ? ` · ${session.model}` : ""}` : "选择后，打开主对话和发送任务均使用该会话。"}</p>
+    <ResearchCharterBindingControls cwd={cwd} sessionId={selectedId} visible={visible} connectionGeneration={connectionGeneration} refreshSignal={refreshSignal} onRebound={onRebound} />
     {composing && <form className="research-main-agent-composer" onSubmit={event => { event.preventDefault(); void send(); }}>
       <textarea data-testid="research-main-agent-prompt" aria-label="给主 Agent 的任务" rows={3} value={draft} disabled={sending} onChange={event => setDraft(event.target.value)} placeholder="描述目标、已有资料和需要交付的结果…" />
       <button data-testid="research-main-agent-send" type="submit" className="research-workspace-action primary" disabled={!canSend || sending || !draft.trim()}>{sending ? "正在提交…" : "提交给主 Agent"}</button>

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash, randomUUID } from 'node:crypto';
+import { inspectWorkbenchRecordContext } from '../../extensions/research-loop/src/workbench-context.mjs';
 const runtime = process.env.PI_UI_PREVIEW_RUNTIME;
 const base = process.env.PI_UI_PREVIEW_URL;
 const cwd = process.env.PI_UI_DEMO_CWD;
@@ -10,6 +12,7 @@ const output = process.env.PI_UI_QA_OUTPUT;
 if (!runtime || !base || !cwd || !output || !process.env.PI_UI_LOGIN_URL) throw new Error('Run this check through scripts/ui-preview/launcher.mjs.');
 const documentName = 'README-演示.md';
 const fixtureSessions = JSON.parse(process.env.PI_UI_DEMO_SESSIONS || '[]');
+const bindingFixture = JSON.parse(process.env.PI_UI_BINDING_FIXTURE || 'null');
 const endedIds = new Set(fixtureSessions.filter(row => row.status === 'ended' && row.synthetic).map(row => row.id));
 const require = createRequire(path.join(runtime, 'package.json'));
 const { chromium } = require('playwright');
@@ -107,6 +110,78 @@ try {
   await check('legacy research deep link opens new workbench', async () => {
     await page.getByTestId('research-pipeline').waitFor();
     assert.equal(await page.getByTestId('workspace-view-workbench').getAttribute('aria-selected'), 'true');
+  });
+  let staleBinding;
+  const bindingEndpoint = `${base}/api/res-workflow/charter-binding`;
+  const bindingQuery = bindingFixture && `?cwd=${encodeURIComponent(cwd)}&sessionId=${encodeURIComponent(bindingFixture.sessionId)}`;
+  const nativeContext = () => inspectWorkbenchRecordContext({ cwd, sessionManager: {
+    getSessionId: () => bindingFixture.sessionId, getSessionFile: () => bindingFixture.sessionFile,
+  } }, { privateDir: bindingFixture.privateDir, expectedOwnerKey: bindingFixture.ownerKey });
+  await check('joined historical session exposes stale charter separately from missing membership', async () => {
+    assert.ok(bindingFixture, 'launcher must create a legitimate stale adoption fixture');
+    const response = await context.request.get(bindingEndpoint + bindingQuery);
+    assert.equal(response.status(), 200);
+    staleBinding = await response.json();
+    assert.equal(staleBinding.status, 'stale');
+    assert.equal(staleBinding.session?.status, 'joined');
+    assert.equal(staleBinding.currentCharterRevision, 2);
+    assert.notEqual(staleBinding.boundCharterHash, staleBinding.currentCharterHash);
+    const inspected = nativeContext();
+    assert.equal(inspected.status, 'charter-stale');
+    assert.equal(inspected.error, 'research-workbench-charter-binding-stale');
+    await page.getByTestId('research-main-agent-select').selectOption(bindingFixture.sessionId);
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-charter-binding-status"]')?.textContent === '会话已接入 · 目标绑定已过期（当前版本 2）');
+    const preview = page.getByTestId('research-charter-binding-preview');
+    await preview.locator('summary').click();
+    assert.match(await preview.textContent(), /源数据只读/);
+    assert.match(await preview.textContent(), /不发布真实结论/);
+    await screenshot('22-charter-binding-stale-1440');
+    await preview.locator('summary').click();
+  });
+  await check('one explicit platform transition restores native context and preserves original research records', async () => {
+    assert.equal(staleBinding?.status, 'stale');
+    const reply = page.waitForResponse(response => response.url() === bindingEndpoint && response.request().method() === 'POST');
+    await page.getByTestId('research-charter-binding-rebind').click();
+    const response = await reply;
+    assert.equal(response.status(), 200);
+    const receipt = await response.json();
+    assert.equal(receipt.adoptionId, staleBinding.adoptionId);
+    assert.equal(receipt.boundCharterHash, staleBinding.currentCharterHash);
+    assert.equal(receipt.bindingRevision, staleBinding.bindingRevision + 1);
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-charter-binding-status"]')?.textContent === '会话已接入 · 目标版本 2 已绑定');
+    const inspected = nativeContext();
+    assert.equal(inspected.status, 'ready');
+    assert.equal(inspected.context.adoptionId, staleBinding.adoptionId);
+    assert.equal(inspected.context.charterHash, staleBinding.currentCharterHash);
+    assert.equal(inspected.context.charterRevision, 2);
+    for (const original of bindingFixture.originalFiles) {
+      assert.equal(createHash('sha256').update(fs.readFileSync(original.file)).digest('hex'), original.hash, `Repair rewrote ${path.basename(original.file)}`);
+    }
+    report.charterBinding = { originalAdoptionPreserved: true, preservedFiles: bindingFixture.originalFiles.length,
+      nativeBefore: 'charter-stale', nativeAfter: 'ready', currentRevision: 2, bindingRevision: receipt.bindingRevision,
+      modelRequests: 0 };
+    await screenshot('23-charter-binding-current-1440');
+  });
+  await check('binding survives reload and rejects an outdated compare-and-swap request', async () => {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await ready();
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-charter-binding-status"]')?.textContent === '会话已接入 · 目标版本 2 已绑定');
+    assert.equal(await page.getByTestId('research-charter-binding-rebind').count(), 0);
+    const outdated = await context.request.post(bindingEndpoint, { data: {
+      cwd, adoptionId: staleBinding.adoptionId, expectedBindingRevision: staleBinding.bindingRevision,
+      expectedBoundCharterHash: staleBinding.boundCharterHash, expectedCharterHash: staleBinding.currentCharterHash,
+      requestId: randomUUID(),
+    } });
+    assert.equal(outdated.status(), 409);
+    assert.equal(nativeContext().status, 'ready');
+    const fresh = await (await context.request.get(bindingEndpoint + bindingQuery)).json();
+    assert.equal(fresh.bindingRevision, 1);
+  });
+  await check('main-agent selection alone does not mark a different conversation as joined', async () => {
+    await page.getByTestId('research-main-agent-select').selectOption(fixtureSessions[1].id);
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-charter-binding-status"]')?.textContent === '会话未接入 · 目标版本 2 已绑定');
+    await page.getByTestId('research-main-agent-select').selectOption(bindingFixture.sessionId);
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-charter-binding-status"]')?.textContent === '会话已接入 · 目标版本 2 已绑定');
   });
   await check('one access-mode selection persists through the real authenticated service without task setup', async () => {
     const select = page.getByTestId('research-access-select');

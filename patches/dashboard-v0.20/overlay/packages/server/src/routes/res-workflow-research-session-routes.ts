@@ -8,7 +8,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getDashboardConfigDir } from "@blackbelt-technology/pi-dashboard-shared/dashboard-paths.js";
@@ -50,39 +49,8 @@ export interface ResearchSessionRouteDeps {
   subscribeReceiptAcks?(handler: (sessionId: string, promptId: string) => void): () => void;
 }
 
-const hash = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
-const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-
-function readBoundedJson(file: string): Record<string, unknown> | null {
-  try {
-    const info = fs.lstatSync(file);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 128 * 1024) return null;
-    const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-    return object(value) ? value : null;
-  } catch { return null; }
-}
-
 function sameOwner(a: { iss: string; sub: string } | null | undefined, b: { iss: string; sub: string } | null | undefined): boolean {
   return !!a && !!b && a.iss === b.iss && a.sub === b.sub;
-}
-
-function ownerKeyFor(cwd: string, adoptionId: string, principalOwner: { iss: string; sub: string } | undefined, privateDir: string): string {
-  if (principalOwner) return JSON.stringify([principalOwner.iss, principalOwner.sub]);
-  const candidates = [
-    JSON.stringify(["host", "inert-operator"]),
-    JSON.stringify(["urn:pi-dashboard:local-operator", "local-operator"]),
-  ];
-  const matches = candidates.filter(ownerKey => {
-    const scope = path.join(privateDir, hash(ownerKey), hash(cwd));
-    const adopted = readBoundedJson(path.join(scope, "adopted.json"));
-    const operation = readBoundedJson(path.join(scope, `${adoptionId}.json`));
-    return adopted?.confirmed === true && adopted.id === adoptionId &&
-      operation?.schema === "pi-res-workflow-operation.v1" && operation.cwd === cwd &&
-      operation.adoption && typeof operation.adoption === "object" &&
-      (operation.adoption as Record<string, unknown>).id === adoptionId;
-  });
-  if (matches.length !== 1) throw new ResearchSessionError(404, "research-session-parent-not-joined");
-  return matches[0]!;
 }
 
 /** Default verifier: the same persisted membership/adoption/charter proof the hook uses. */
@@ -102,22 +70,33 @@ export function createDefaultResearchSessionVerifier(deps: Pick<ResearchSessionR
     }
     const root = deps.researchLoopRoot ?? await resolveInstalledResearchLoopRoot();
     const module = await import(pathToFileURL(path.join(root, "src", "workbench-context.mjs")).href);
-    if (typeof module.readWorkbenchRecordContext !== "function") throw new ResearchSessionError(503, "research-session-verifier-unavailable");
-    let context: any;
+    if (typeof module.inspectWorkbenchRecordContext !== "function") throw new ResearchSessionError(503, "research-session-verifier-unavailable");
+    let inspection: any;
     try {
-      context = module.readWorkbenchRecordContext({
+      const live = deps.sessionManager.get(parent.id);
+      const registered = live === parent && ['active', 'idle', 'streaming'].includes(parent.status);
+      inspection = module.inspectWorkbenchRecordContext({
         cwd,
         sessionManager: {
           getSessionId: () => parent.id,
           getSessionFile: () => parent.sessionFile,
+          // The authenticated gateway registration owns these fields before Pi
+          // flushes its first JSONL. The persisted owner/membership is still read
+          // and checked by the native verifier; corrupt existing files fail.
+          ...(registered ? { getHeader: () => ({ type: 'session', id: parent.id, cwd: parent.cwd }) } : {}),
         },
-      }, { privateDir });
+      }, { privateDir, ...(parent.principalOwner ? { expectedOwnerKey: JSON.stringify([parent.principalOwner.iss, parent.principalOwner.sub]) } : {}) });
     } catch {
-      throw new ResearchSessionError(404, "research-session-parent-not-joined");
+      throw new ResearchSessionError(503, "research-workbench-proof-unavailable");
     }
+    if (inspection.status !== 'ready') {
+      if (inspection.status === 'not-joined') throw new ResearchSessionError(404, 'research-session-parent-not-joined');
+      const code = /^research-workbench-[a-z-]+$/.test(inspection.error ?? '') ? inspection.error : 'research-workbench-proof-unavailable';
+      throw new ResearchSessionError(inspection.status === 'unavailable' ? 503 : 409, code);
+    }
+    const context = inspection.context;
     if (!context || context.sessionId !== parent.id) throw new ResearchSessionError(404, "research-session-parent-not-joined");
-    const ownerKey = ownerKeyFor(cwd, context.adoptionId, parent.principalOwner, privateDir);
-    return { cwd, charterHash: context.charterHash, adoptionId: context.adoptionId, ownerKey };
+    return { cwd, charterHash: context.charterHash, adoptionId: context.adoptionId, ownerKey: inspection.ownerKey };
   };
 }
 

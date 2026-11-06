@@ -422,7 +422,7 @@ export function ResearchPipelinePage({
       <div className={surface === "legacy" ? "contents" : "research-workspace-layout"}>
       <div className={surface === "legacy" ? "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-5" : "research-workspace-main"}>
         <div className="research-execution-controls">
-          <ResearchMainAgentControls key={mainAgent.scope} controller={mainAgent} />
+          <ResearchMainAgentControls key={mainAgent.scope} controller={mainAgent} cwd={cwd} visible={visible} connectionGeneration={connectionGeneration} refreshSignal={refreshSignal} onRebound={refresh} />
           <ResearchAccessControls cwd={cwd} connectionGeneration={connectionGeneration} />
         </div>
         {surface === "workbench" && !adopted && <div className="research-intake-hint"><div><strong>接入已有研究资料</strong><p>选择目录资料与历史会话，核对来源后确认接入。</p></div><button type="button" className="research-workspace-action" onClick={openIntake}>开始接入</button></div>}

@@ -1,5 +1,26 @@
 # Changelog
 
+## 目标绑定衔接与子代理模型保持 — 2026-11-06
+
+- 主 Agent 区域区分会话选择、工作流接入、当前目标绑定。
+- `research_dispatch` 区分未接入、旧目标绑定、旧子任务、证明不可用。
+- “衔接到目标版本 N”通过原 adoption 的私有追加链更新有效绑定。
+- owner / canonical cwd / CAS 核验限制衔接范围。
+- 原 confirmation、workflow、研究记录保留原内容。
+- 旧子任务与 queued plan 保留原目标范围。
+- `pi-auto-model 0.8.4` startup 接管后，原生子代理恢复指定的具体模型。
+- provider 请求前核验子会话模型选择。
+- 原生 `pi-virtual` 保留路由支持。
+- legacy `pi-auto-model/auto` + `pi-messages` 在请求前要求具体 `provider/model`。
+- 实际 response metadata mismatch 继续拒绝。
+- Harness 375 项、监督 64 项、client 39 项、新 binding server 7 项通过。
+- 实际 SDK / native driver 检查 16 项通过，网络请求 0 次。
+- 生产前端构建成功，648 项 overlay 核对一致。
+- 隔离真实服务与浏览器 39 项通过，6 个原记录文件 hash 保留。
+- TypeScript 保留 61 条既有诊断，新增 0 条。
+- 扩展 server 回归 21 项通过、13 项失败，失败与同布局基线逐项一致。
+- 操作入口、源码与实测证据见[目标绑定与模型说明](docs/charter-binding-models/README.md)。
+
 ## 主 Agent、阶段入口与完全访问 — 2026-11-06
 
 - 恢复工作台主 Agent 选择、“打开主对话”和向指定会话发送任务。
