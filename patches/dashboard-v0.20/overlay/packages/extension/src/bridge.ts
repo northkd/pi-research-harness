@@ -56,6 +56,7 @@ import { createMcpDashboardRegistrar, type McpRegistrationApi, } from "./mcp-tok
 import { createPluginRequestClient, installPluginRequest } from "./plugin-request-client.js";
 import { COALESCE_WINDOW_MS, MessageUpdateCoalescer } from "./message-update-coalescer.js";
 import { observeNativeSubagents } from "./native-subagent-observer.js";
+import { createResearchReceiptHandler, isResearchDispatchReceiptId } from "./research-dispatch-receipts.mjs";
 import { registerThinkingTranslationBridge } from "./thinking-translation-bridge.js";
 import { resetReconnectCaches as _resetReconnectCaches, sendCwdMissingIfChanged as _sendCwdMissingIfChanged, sendModelUpdateIfChanged as _sendModelUpdateIfChanged, sendPiVersionIfChanged as _sendPiVersionIfChanged, sendSessionNameIfChanged as _sendSessionNameIfChanged } from "./model-tracker.js";
 import { createPathGate } from "./path-gate/index.js";
@@ -1464,7 +1465,10 @@ function initBridge(pi: ExtensionAPI) {
     isIdle: () => {
       try { return inst.cachedCtx?.isIdle?.() ?? false; } catch { return false; }
     },
-    eventSink: (msg) => inst.connection.send(msg),
+    eventSink: (msg) => {
+      if (msg.type === "prompt_received" && isResearchDispatchReceiptId(msg.promptId)) return;
+      inst.connection.send(msg);
+    },
     compact: (opts) => {
       if (inst.cachedCtx?.compact) {
         inst.cachedCtx.compact(opts);
@@ -1592,6 +1596,14 @@ function initBridge(pi: ExtensionAPI) {
     // See change: replace-dashboard-retry-command-with-protocol-message.
     disarmRetryChain: () => retryTracker.noteExplicitRun(inst.sessionId),
   });
+  const handleCommand = commandHandler.handle.bind(commandHandler);
+  const handleResearchReceipt = createResearchReceiptHandler({
+    handle: handleCommand,
+    getSessionId: () => inst.sessionId,
+    readHistory: () => inst.cachedCtx?.sessionManager?.getBranch?.() ?? [],
+    sendAck: message => inst.connection.send(message),
+  });
+  commandHandler.handle = async message => await handleResearchReceipt(message);
   inst.commandHandler = commandHandler;
 
   // Reload support: only a command handler's ctx has `reload()`. The bridge

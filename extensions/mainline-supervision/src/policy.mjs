@@ -98,9 +98,12 @@ const HUMAN = new Set(['ask_user', 'mainline_supervision']);
 const READS = new Set(['read', 'grep', 'find', 'ls', 'bg_status', 'bg_logs', 'lens_diagnostics', 'project_report', 'module_report',
   'symbol_search', 'read_symbol', 'read_enclosing', 'effective_config', 'memory_read', 'memory_search', 'subagent_supervisor']);
 const LOCAL_VIEWS = new Set(['canvas', 'scratchpad']);
+const DISPATCH_CONTROLS = new Set(['status', 'report', 'atomic', 'cancel']);
+const dispatchPlan = (name, input) => name === 'research_dispatch' && input?.action === 'plan';
 const CONTROL_ACTIONS = new Set(['status', 'debug.run', 'children.list', 'guide', 'list', 'models', 'mission.show', 'mission.list', 'interrupt', 'stop']);
 export function humanChannel(toolName) { return HUMAN.has(toolName); }
 export function observationTool(name, input = {}) {
+  if (name === 'research_dispatch') return DISPATCH_CONTROLS.has(input.action);
   if (name === 'subagent_supervisor') return ['list', 'pending', 'status'].includes(input.action);
   return HUMAN.has(name) || READS.has(name) || LOCAL_VIEWS.has(name) ||
     (name === 'subagent' && ['status', 'debug.run', 'children.list', 'guide', 'list', 'models', 'mission.show', 'mission.list'].includes(input.action));
@@ -132,7 +135,7 @@ export function permissionSnapshot(store, state, event) {
 }
 export function needsResource(leaf) {
   return ['bash', 'bg_run', 'ctx_execute', 'ctx_execute_file', 'ctx_batch_execute'].includes(leaf.toolName) ||
-    /^(?:fusion_|bg_delegate|bg_run_pi)/.test(leaf.toolName) || leaf.toolName === 'research_session' || (leaf.toolName === 'subagent' && !CONTROL_ACTIONS.has(leaf.input?.action));
+    /^(?:fusion_|bg_delegate|bg_run_pi)/.test(leaf.toolName) || leaf.toolName === 'research_session' || dispatchPlan(leaf.toolName, leaf.input) || (leaf.toolName === 'subagent' && !CONTROL_ACTIONS.has(leaf.input?.action));
 }
 export function developmentPath(store, value) {
   if (typeof value !== 'string') return null;
@@ -153,7 +156,7 @@ export function operationDecision(store, state, event) {
     if (refused) return { ...refused, reason: `组合调用中的相关动作仍遵守同一门禁：${refused.reason}` };
     return { allow: true, kind: 'each-batched-operation-checked' };
   }
-  if (humanChannel(name) || READS.has(name) || (name === 'subagent' && CONTROL_ACTIONS.has(input.action))) return { allow: true, kind: 'control-or-observation' };
+  if (humanChannel(name) || READS.has(name) || (name === 'research_dispatch' && DISPATCH_CONTROLS.has(input.action)) || (name === 'subagent' && CONTROL_ACTIONS.has(input.action))) return { allow: true, kind: 'control-or-observation' };
   if (!state.enabled) return { allow: true, kind: 'supervision-disabled; underlying task permissions still apply' };
   const limited = state.pendingChanges === true || state.blocked === true || state.captureFailure === true ||
     state.omittedEvents > 0 || state.migrationUnverifiedTail || state.lastVerdict && state.lastVerdict !== 'ON_TRACK' || state.reviewHealth?.status === 'BLIND_SPOT';
@@ -199,14 +202,15 @@ export function operationDecision(store, state, event) {
     if (branch && !grant.repair) return { allow: false, hard: false, reason: '仅该测试依赖的已证实偏离分支暂停；其他分支及经人工确认的限定repair验证不受影响。' };
     return { allow: true, kind: 'human-authorized-bounded-local-check', grantId: grant.id };
   }
-  if (name === 'research_session' || name === 'subagent' && !input.action) {
+  if (name === 'research_session' || dispatchPlan(name, input) || name === 'subagent' && !input.action) {
     if (!store.resourceGate().ok) return { allow: false, hard: true, reason: '新子任务资源门槛未满足，人工通道可用。' };
-    const affected = activeRestrictions(state).filter(r => r.paths.some(p => String(input.task ?? '').includes(p)));
+    const taskText = dispatchPlan(name, input) ? JSON.stringify(input.tasks ?? []) : String(input.task ?? '');
+    const affected = activeRestrictions(state).filter(r => r.paths.some(p => taskText.includes(p)));
     if (affected.length) return { allow: false, hard: false, reason: '该子任务直接依赖已证实偏离分支；可先用decision明确限定纠偏，其他分支不要求整个项目ON_TRACK。' };
   }
   // Do not create a second global permissions system: native tool/task grants still apply.
   // Known egress/publication/remote changes need explicit human confirmation, not a direction verdict.
-  if (limited && (/^(?:web_search|fetch_content|source_check|hf_|feynman_|ssh-|fusion_|bg_delegate|bg_run_pi|mcp|ctx_execute|ctx_batch_execute|ctx_fetch_and_index|pi_research_fusion)/.test(name) || name === 'research_session' || name === 'subagent' && !CONTROL_ACTIONS.has(input.action)))
+  if (limited && (/^(?:web_search|fetch_content|source_check|hf_|feynman_|ssh-|fusion_|bg_delegate|bg_run_pi|mcp|ctx_execute|ctx_batch_execute|ctx_fetch_and_index|pi_research_fusion)/.test(name) || name === 'research_session' || dispatchPlan(name, input) || name === 'subagent' && !CONTROL_ACTIONS.has(input.action)))
     return { allow: false, confirmable: true, reason: '外发/远程/模型权限独立于主线方向和科学验收；确认本次工具的目标与已有授权范围，不能发布未经支持的结论。' };
   return { allow: true, kind: 'no-scoped-supervision-restriction; original task permissions still apply' };
 }

@@ -160,17 +160,20 @@ test('local exports and generic sends never clear an external-model restriction'
   assert.equal(mergeDelegationRestrictions(restrictions, '允许发送给外部模型').exportLimited, false);
 });
 
-test('a top-level session tool alone does not imply subordinate delegation is available', () => {
-  assert.equal(detectDelegationTools(['read', 'research_session']).available, false);
-  assert.equal(buildDelegationNudge(6, { selectedTools: ['read', 'research_session'] }), '');
+test('native session or task executor tools enable controlled subordinate delegation', () => {
+  for (const tool of ['research_session', 'research_dispatch']) {
+    assert.equal(detectDelegationTools(['read', tool]).available, true);
+    assert.match(buildDelegationNudge(6, { selectedTools: ['read', tool] }), /Delegation nudge/);
+  }
 });
 
-test('child sessions and explicit env opt-outs disable guidance and nudges', () => {
-  assert.equal(delegationPolicyDisabled({ PI_SUBAGENT_CHILD: '1' }), true);
+test('children retain controlled guidance while explicit env opt-outs still win', () => {
+  assert.equal(delegationPolicyDisabled({ PI_SUBAGENT_CHILD: '1' }), false);
   assert.equal(delegationPolicyDisabled({ PI_RESEARCH_DISABLE_DELEGATION: '1' }), true);
   assert.equal(delegationPolicyDisabled({ PI_RESEARCH_DELEGATION_POLICY: 'off' }), true);
   assert.equal(delegationPolicyDisabled({}), false);
-  assert.equal(buildDelegationGuidance({ selectedTools: ['subagent'], env: { PI_SUBAGENT_CHILD: '1' } }), '');
+  assert.match(buildDelegationGuidance({ selectedTools: ['subagent'], env: { PI_SUBAGENT_CHILD: '1' } }), /delegat/i);
+  assert.equal(buildDelegationGuidance({ selectedTools: ['subagent'], env: { PI_RESEARCH_DISABLE_DELEGATION: '1' } }), '');
 });
 
 test('repeated bulk reads trigger one nudge when delegation is active', () => {
@@ -219,12 +222,13 @@ test('user opt-out prevents nudges even after repeated bulk reads', () => {
   assert.equal(pi.emit('context', { messages: [] }), undefined);
 });
 
-test('child env guard prevents nudges after repeated bulk reads', () => {
+test('joined children receive a bounded nudge after repeated bulk reads', () => {
   const pi = mockPi();
   registerDelegationPolicy(pi, { bulkThreshold: 2, env: { PI_SUBAGENT_CHILD: '1' }, isJoined: joined });
   pi.emit('before_agent_start', startEvent('Analyze this repository', ['read', 'subagent']));
   pi.emit('tool_execution_end', readEnd());
   pi.emit('tool_execution_end', readEnd());
+  assert.match(pi.emit('context', { messages: [] }).messages[0].content, /Delegation nudge/);
   assert.equal(pi.emit('context', { messages: [] }), undefined);
 });
 

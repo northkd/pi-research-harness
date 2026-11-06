@@ -1,11 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Icon } from "@mdi/react";
-import { mdiAccountGroup, mdiArrowLeft, mdiArrowExpandAll, mdiClose, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew } from "@mdi/js";
+import { mdiAccountGroup, mdiArrowLeft, mdiArrowExpandAll, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew } from "@mdi/js";
 import type { ConfiguredRole, ResearchExecution, ResearchExecutionOriginKind } from "./research-projection.js";
 import type { ResearchWorkbenchRelation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
 import { getMemberArt, leadArt } from "./agent-teams-artwork.js";
-import { fitGraph, layoutFocusedSession, layoutOverview, zoomGraphAt, type CanvasNode, type CanvasView } from "./research-agent-canvas-layout.js";
-import { Dialog } from "@blackbelt-technology/pi-dashboard-client-utils/Dialog";
+import { fitGraph, layoutFocusedSession, layoutSessionHierarchy, resolveSessionParents, zoomGraphAt, type CanvasNode, type CanvasView } from "./research-agent-canvas-layout.js";
 
 export interface CanvasRoleGroup {
   roleName: string;
@@ -45,7 +44,7 @@ const originTint = (origin?: ResearchExecutionOriginKind) =>
     ? "border-amber-500/40 bg-amber-500/10 text-[var(--text-secondary)]"
     : "border-sky-500/40 bg-sky-500/10 text-[var(--text-secondary)]";
 const originGlyph = (origin?: ResearchExecutionOriginKind) =>
-  origin === "lead-agent-created" ? "🧭 Lead 创建" : origin === "workflow-created" ? "⚡ 工作流创建" : "👤 我创建的";
+  origin === "lead-agent-created" ? "🧭 Agent 创建" : origin === "workflow-created" ? "⚡ 工作流创建" : "👤 我创建的";
 
 const nodeStyle = (node: CanvasNode) => ({ position: "absolute" as const, left: node.x, top: node.y, width: node.width, height: node.height });
 const curve = (fromX: number, fromY: number, toX: number, toY: number) => {
@@ -59,11 +58,13 @@ const isLive = (status: string) => ["streaming", "started", "running"].includes(
 /** A read-only map of recorded sessions and their observed child roles. */
 export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, statusLabel, roleLabel, visible = true }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const roleButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const canvasId = useId().replaceAll(":", "");
+  const executionGroupId = (roleName: string) => `${canvasId}-rounds-${encodeURIComponent(roleName)}`;
   const dragRef = useRef<{ pointerId: number; x: number; y: number; startX: number; startY: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [expandedGroupKey, setExpandedGroupKey] = useState<{ sessionId: string; roleName: string } | null>(null);
-  const expandedRoleGroup = expandedGroupKey ? clusters.find(cluster => cluster.sessionExec.id === expandedGroupKey.sessionId)?.childRoleGroups.find(group => group.roleName === expandedGroupKey.roleName) : undefined;
   const [query, setQuery] = useState("");
   const [rolePage, setRolePage] = useState(0);
   const [size, setSize] = useState({ width: 800, height: 520 });
@@ -78,10 +79,34 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
   const pageCount = Math.max(1, Math.ceil((focused?.childRoleGroups.length ?? 0) / pageSize));
   const page = Math.min(rolePage, pageCount - 1);
   const visibleRoles = focused?.childRoleGroups.slice(page * pageSize, (page + 1) * pageSize) ?? [];
-  const overview = useMemo(() => layoutOverview(filteredClusters.map(cluster => cluster.sessionExec.id), size.width), [filteredClusters, size.width]);
-  const detail = useMemo(() => focused ? layoutFocusedSession(focused.sessionExec.id, visibleRoles.map(group => group.roleName), size.width) : null, [focused, page, size.width]);
+  const expandedRoleGroup = focused?.sessionExec.id === expandedGroupKey?.sessionId
+    ? visibleRoles.find(group => group.roleName === expandedGroupKey?.roleName) : undefined;
+  const sessionParents = useMemo(() => resolveSessionParents(clusters.map(cluster => cluster.sessionExec.id), [
+    ...relations,
+    ...clusters.flatMap(cluster => cluster.sessionExec.parentExecutionId
+      ? [{ fromExecutionId: cluster.sessionExec.parentExecutionId, toExecutionId: cluster.sessionExec.id, kind: "dispatch" }] : []),
+  ]), [clusters, relations]);
+  const clusterById = useMemo(() => new Map(clusters.map(cluster => [cluster.sessionExec.id, cluster])), [clusters]);
+  const overview = useMemo(() => layoutSessionHierarchy(filteredClusters.map(cluster => cluster.sessionExec.id), sessionParents, size.width), [filteredClusters, sessionParents, size.width]);
+  const detail = useMemo(() => focused ? layoutFocusedSession(focused.sessionExec.id, visibleRoles.map(group => group.roleName), size.width,
+    expandedRoleGroup ? { roleId: expandedRoleGroup.roleName, executionIds: expandedRoleGroup.executions.map(execution => execution.id) } : undefined)
+    : null, [focused, page, size.width, expandedRoleGroup]);
   const scene = detail ?? overview;
-  const sceneKey = JSON.stringify([focused?.sessionExec.id ?? null, filteredClusters.map(c => c.sessionExec.id), visibleRoles.map(g => g.roleName)]);
+  const sceneKey = JSON.stringify([focused?.sessionExec.id ?? null, filteredClusters.map(c => c.sessionExec.id), [...sessionParents], visibleRoles.map(g => g.roleName), expandedRoleGroup?.executions.map(execution => execution.id)]);
+  const creator = focused && clusterById.get(sessionParents.get(focused.sessionExec.id) ?? "");
+  const delegatedSessions = focused ? clusters.filter(cluster => sessionParents.get(cluster.sessionExec.id) === focused.sessionExec.id) : [];
+  const focusSession = (id: string | null) => { setFocusedId(id); setRolePage(0); setExpandedGroupKey(null); };
+  const collapseExpansion = () => {
+    if (expandedGroupKey) roleButtonRefs.current.get(expandedGroupKey.roleName)?.focus({ preventScroll: true });
+    setExpandedGroupKey(null);
+  };
+  const revealNode = (node: CanvasNode) => setView(previous => {
+    const left = previous.x + node.x * previous.scale, top = previous.y + node.y * previous.scale;
+    const right = left + node.width * previous.scale, bottom = top + node.height * previous.scale;
+    const dx = left < 16 ? 16 - left : right > size.width - 16 ? size.width - 16 - right : 0;
+    const dy = top < 16 ? 16 - top : bottom > size.height - 16 ? size.height - 16 - bottom : 0;
+    return dx || dy ? { ...previous, x: previous.x + dx, y: previous.y + dy } : previous;
+  });
 
   useEffect(() => {
     if (focusedId && !clusters.some(cluster => cluster.sessionExec.id === focusedId)) setFocusedId(null);
@@ -129,6 +154,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
   const zoom = (factor: number) => setView(previous => zoomGraphAt(previous, { x: size.width / 2, y: size.height / 2 }, factor));
   const fit = () => setView(fitGraph(scene, size));
   const onCanvasKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape" && expandedRoleGroup) { event.preventDefault(); event.stopPropagation(); collapseExpansion(); return; }
     if (event.target !== event.currentTarget) return;
     const delta: Record<string, [number, number]> = { ArrowLeft: [70, 0], ArrowRight: [-70, 0], ArrowUp: [0, 70], ArrowDown: [0, -70] };
     if (delta[event.key]) {
@@ -160,13 +186,23 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
   const parentNode = (node: CanvasNode, cluster: CanvasSessionCluster, inFocus: boolean) => {
     const row = cluster.sessionExec;
     const liveNode = !(stale && row.source === "observation") && isLive(row.status);
+    const parentId = sessionParents.get(row.id);
+    const parent = parentId && clusterById.get(parentId);
+    const recordedCreator = !!row.parentExecutionId || relations.some(relation => relation.kind === "dispatch" && relation.toExecutionId === row.id);
+    const isAgentCreated = !!parentId || recordedCreator || cluster.origin === "lead-agent-created";
+    const creatorLabel = parent ? parent.title : isAgentCreated
+      ? (cluster.creatorLabel && !["用户", "父会话", "主agent"].includes(cluster.creatorLabel) ? `${cluster.creatorLabel}（未载入）` : "父会话未载入")
+      : cluster.creatorLabel;
+    let depth = 0, ancestor = parentId;
+    while (ancestor) { depth += 1; ancestor = sessionParents.get(ancestor); }
     return (
       <button
-        key={node.id} type="button" data-testid="canvas-session-node"
+        key={node.id} type="button" data-testid="canvas-session-node" data-parent-id={parentId ?? undefined} data-depth={depth}
         aria-label={inFocus ? `查看 ${cluster.title} 会话详情` : `聚焦${cluster.title}`}
-        onClick={() => { if (inFocus) onAgent(cluster.roleObj, row); else { setRolePage(0); setFocusedId(row.id); } }}
+        onClick={() => { if (inFocus) onAgent(cluster.roleObj, row); else focusSession(row.id); }}
+        onFocus={() => revealNode(node)}
         style={nodeStyle(node)}
-        className={`win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
+        className={`research-canvas-position win11-card-interactive focus-ring flex cursor-pointer flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm transition-all ${
           liveNode
             ? "border-l-[var(--accent-green)]"
             : cluster.isCaptain
@@ -182,10 +218,10 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
             <span className="block truncate text-[12px] font-bold text-[var(--text-primary)]" title={cluster.title}>{cluster.title}</span>
             <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px]">
               <span className={`font-semibold ${cluster.isCaptain ? "text-[var(--accent-orange)]" : "text-[var(--accent-blue)]"}`}>
-                {cluster.isCaptain ? "当前交互入口" : "独立协同会话"}
+                {cluster.isCaptain ? (depth ? `当前入口 · 第 ${depth} 层` : "当前交互入口") : parentId ? `第 ${depth} 层协作` : isAgentCreated ? "派生协作会话" : "协作会话"}
               </span>
-              <span className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${originTint(cluster.origin)}`}>
-                {originGlyph(cluster.origin)}
+              <span className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${originTint(isAgentCreated ? "lead-agent-created" : cluster.origin)}`}>
+                {originGlyph(isAgentCreated ? "lead-agent-created" : cluster.origin)}
               </span>
               {cluster.assignedRole && (
                 <span className="rounded px-1.5 py-0.2 border border-[var(--border-primary)] text-[9.5px] text-[var(--text-secondary)]">
@@ -195,8 +231,8 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
             </div>
           </span>
         </span>
-        <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={[cluster.creatorLabel && `创建者：${cluster.creatorLabel}`, cluster.workflowDuty].filter(Boolean).join(" · ") || cluster.title}>
-          {cluster.origin === "lead-agent-created" && cluster.creatorLabel ? `创建者：${cluster.creatorLabel} · ` : ""}
+        <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={[creatorLabel && `创建者：${creatorLabel}`, cluster.workflowDuty].filter(Boolean).join(" · ") || cluster.title}>
+          {creatorLabel && isAgentCreated ? `创建者：${creatorLabel} · ` : ""}
           {cluster.workflowDuty ?? "暂无已记录的任务职责"}
         </span>
         <span className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
@@ -223,7 +259,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
   };
 
   return (
-    <section className="overflow-hidden rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]" aria-label="智能体协作画布">
+    <section className="research-agent-canvas overflow-hidden rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]" aria-label="智能体协作画布">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-primary)] px-3 py-2.5">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-[var(--text-primary)]">
@@ -234,14 +270,16 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
           <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">拖动空白处平移 · Ctrl / ⌘ + 滚轮缩放 · 点击会话查看下属角色</p>
         </div>
         {!focused && <input type="search" aria-label="搜索会话" placeholder="搜索会话或任务" value={query}
-          onChange={event => { setQuery(event.target.value); setFocusedId(null); setRolePage(0); }}
+          onChange={event => { setQuery(event.target.value); focusSession(null); }}
           className="min-w-[120px] flex-1 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)] sm:max-w-[180px]" />}
         <div className="flex flex-wrap items-center gap-1">
-          {focused && <button type="button" onClick={() => { setFocusedId(null); setQuery(""); setRolePage(0); }} className="win11-btn px-2 py-1 text-[11px]" aria-label="返回全部会话"><Icon path={mdiArrowLeft} size={0.55} /><span>全部会话</span></button>}
+          {focused && <button type="button" onClick={() => { focusSession(null); setQuery(""); }} className="win11-btn px-2 py-1 text-[11px]" aria-label="返回全部会话"><Icon path={mdiArrowLeft} size={0.55} /><span>全部会话</span></button>}
+          {creator && <button type="button" onClick={() => { setQuery(""); focusSession(creator.sessionExec.id); }} className="win11-btn max-w-[240px] px-2 py-1 text-[11px]" aria-label={`返回创建者 ${creator.title}`}><Icon path={mdiArrowLeft} size={0.55} /><span className="truncate">创建者：{creator.title}</span></button>}
+          {expandedRoleGroup && <button type="button" onClick={collapseExpansion} className="win11-btn px-2 py-1 text-[11px]" aria-label="收起执行卡片">收起执行卡片</button>}
           {focused && pageCount > 1 && <div className="inline-flex items-center gap-1 rounded-md border border-[var(--border-primary)] px-1 py-0.5 text-[10px] text-[var(--text-secondary)]">
-            <button type="button" aria-label="上一组角色" disabled={page === 0} onClick={() => setRolePage(page - 1)} className="rounded px-1.5 py-1 hover:bg-[var(--bg-hover)] disabled:opacity-40">‹</button>
+            <button type="button" aria-label="上一组角色" disabled={page === 0} onClick={() => { setExpandedGroupKey(null); setRolePage(page - 1); }} className="rounded px-1.5 py-1 hover:bg-[var(--bg-hover)] disabled:opacity-40">‹</button>
             <span>{page * pageSize + 1}–{Math.min((page + 1) * pageSize, focused.childRoleGroups.length)} / {focused.childRoleGroups.length}</span>
-            <button type="button" aria-label="下一组角色" disabled={page >= pageCount - 1} onClick={() => setRolePage(page + 1)} className="rounded px-1.5 py-1 hover:bg-[var(--bg-hover)] disabled:opacity-40">›</button>
+            <button type="button" aria-label="下一组角色" disabled={page >= pageCount - 1} onClick={() => { setExpandedGroupKey(null); setRolePage(page + 1); }} className="rounded px-1.5 py-1 hover:bg-[var(--bg-hover)] disabled:opacity-40">›</button>
           </div>}
           <button type="button" onClick={() => zoom(1 / 1.25)} className="win11-btn p-1.5" aria-label="缩小画布" title="缩小"><Icon path={mdiMagnifyMinusOutline} size={0.65} /></button>
           <span className="w-10 text-center font-mono text-[10px] text-[var(--text-secondary)]" aria-label={`缩放 ${Math.round(view.scale * 100)}%`}>{Math.round(view.scale * 100)}%</span>
@@ -256,27 +294,36 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
         className={`relative h-[480px] overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)] sm:h-[520px] ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
         style={{ touchAction: "none", backgroundColor: "var(--bg-primary)", backgroundImage: "radial-gradient(var(--border-secondary) 1px, transparent 1px)", backgroundSize: "20px 20px" }}
       >
-        <div style={{ position: "absolute", left: 0, top: 0, width: scene.width, height: scene.height, transformOrigin: "0 0", transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}>
+        <div className="research-canvas-scene" style={{ transition: dragging ? "none" : undefined, position: "absolute", left: 0, top: 0, width: scene.width, height: scene.height, transformOrigin: "0 0", transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}>
           <svg aria-hidden="true" width={scene.width} height={scene.height} className="pointer-events-none absolute inset-0 overflow-visible">
+            <defs><marker id={`${canvasId}-arrow`} markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M 0 0 L 7 3.5 L 0 7" fill="none" stroke="var(--accent-purple)" strokeWidth="1.2" /></marker></defs>
             {detail && focused ? detail.children.map(child => (
               <path key={child.id} d={detail.direction === "vertical"
                 ? verticalBranch(detail.parent, child)
                 : curve(detail.parent.x + detail.parent.width, detail.parent.y + detail.parent.height / 2, child.x, child.y + child.height / 2)} fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinejoin="round" opacity="0.55" />
-            )) : overview.nodes.map(node => (
+            )) : overview.nodes.filter(node => !node.parentId).map(node => (
               <path key={node.id} d={curve(overview.hub.x + overview.hub.width / 2, overview.hub.y + overview.hub.height, node.x + node.width / 2, node.y)} fill="none" stroke="var(--text-tertiary)" strokeWidth="1.5" strokeDasharray="5 6" opacity="0.32" />
             ))}
-            {!detail && relations.map(relation => {
+            {!detail && overview.nodes.filter(node => node.parentId).map(node => {
+              const parent = overview.nodes.find(candidate => candidate.id === node.parentId)!;
+              return <g key={`parent-${node.id}`} data-testid="canvas-parent-edge">
+                <path data-testid="canvas-relation-edge" d={`M ${parent.x + 12} ${parent.y + parent.height} V ${node.y + node.height / 2} H ${node.x - 3}`}
+                  fill="none" stroke="var(--accent-purple)" strokeWidth="2" strokeLinejoin="round" markerEnd={`url(#${canvasId}-arrow)`} opacity="0.8" />
+              </g>;
+            })}
+            {!detail && relations.filter(relation => relation.kind === "handoff" || sessionParents.get(relation.toExecutionId) !== relation.fromExecutionId).map(relation => {
               const from = overview.nodes.find(node => node.id === relation.fromExecutionId);
               const to = overview.nodes.find(node => node.id === relation.toExecutionId);
               if (!from || !to) return null;
-              return (
-                <path
-                  key={relation.id}
-                  data-testid="canvas-relation-edge"
-                  d={curve(from.x + from.width / 2, from.y + from.height, to.x + to.width / 2, to.y)}
-                  fill="none" stroke="var(--accent-purple)" strokeWidth="2" strokeDasharray="4 5" opacity="0.7"
-                />
-              );
+              return <path key={relation.id} data-testid="canvas-relation-edge"
+                d={curve(from.x + from.width, from.y + from.height / 2, to.x + to.width, to.y + to.height / 2)}
+                fill="none" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4 5" opacity="0.55" />;
+            })}
+            {detail && expandedRoleGroup && detail.executions.map(node => {
+              const source = detail.children.find(child => child.id === expandedRoleGroup.roleName)!;
+              return <path key={`run-${node.id}`} d={detail.direction === "vertical" ? verticalBranch(source, node)
+                : curve(source.x + source.width, source.y + source.height / 2, node.x, node.y + node.height / 2)}
+                fill="none" stroke="var(--accent-purple)" strokeWidth="1.5" opacity="0.5" />;
             })}
           </svg>
           {!detail && (
@@ -285,18 +332,19 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
               <span className="mt-1 text-[10px] text-[var(--text-tertiary)]">{filteredClusters.length} 个已记录会话</span>
             </div>
           )}
-          {detail && focused ? parentNode(detail.parent, focused, true) : overview.nodes.map((node, index) => parentNode(node, filteredClusters[index], false))}
+          {detail && focused ? parentNode(detail.parent, focused, true) : overview.nodes.map(node => parentNode(node, clusterById.get(node.id)!, false))}
           {detail && focused && detail.children.map((node, index) => {
             const group = visibleRoles[index];
             const current = group.latest;
             const summary = (current.prompt ?? current.summary ?? "").replace(/\s+/g, " ").trim();
             const hasMultiple = group.executions.length > 1;
+            const isExpanded = expandedRoleGroup?.roleName === group.roleName;
             const roleLive = group.executions.some(ex => !(stale && ex.source === "observation") && isLive(ex.status));
 
             return (
-              <div key={node.id} style={nodeStyle(node)} className="relative group">
+              <div key={node.id} style={nodeStyle(node)} className="research-canvas-position relative group">
                 {/* 3D Overlapping back layers when multiple executions exist */}
-                {hasMultiple && (
+                {hasMultiple && !isExpanded && (
                   <>
                     {group.executions.length > 2 && (
                       <div
@@ -315,10 +363,14 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                 <button
                   type="button"
                   data-testid="canvas-role-node"
-                  aria-label={`查看 ${roleLabel(group.roleName)} 详情`}
+                  ref={element => { if (element) roleButtonRefs.current.set(group.roleName, element); else roleButtonRefs.current.delete(group.roleName); }}
+                  aria-label={hasMultiple ? `${isExpanded ? "收起" : "展开"} ${roleLabel(group.roleName)} 的 ${group.executions.length} 轮执行` : `查看 ${roleLabel(group.roleName)} 详情`}
+                  aria-expanded={hasMultiple ? isExpanded : undefined}
+                  aria-controls={hasMultiple ? executionGroupId(group.roleName) : undefined}
+                  onFocus={() => revealNode(node)}
                   onClick={() => {
                     if (hasMultiple) {
-                      setExpandedGroupKey({ sessionId: focused.sessionExec.id, roleName: group.roleName });
+                      setExpandedGroupKey(isExpanded ? null : { sessionId: focused.sessionExec.id, roleName: group.roleName });
                     } else {
                       onAgent(group.roleObj, current);
                     }
@@ -345,10 +397,10 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                     </span>
                     {hasMultiple ? (
                       <span
-                        className="shrink-0 rounded-full bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[10px] font-semibold text-purple-300 shadow-xs"
-                        title={`共 ${group.executions.length} 轮独立执行，点击平铺展开各轮卡片`}
+                        className="shrink-0 rounded-full bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[10px] font-semibold text-[var(--accent-purple-text)] shadow-xs"
+                        title={`共 ${group.executions.length} 轮执行，${isExpanded ? "点击收起" : "点击在画布中展开"}`}
                       >
-                        📚 叠 {group.executions.length} 轮
+                        {isExpanded ? "展开" : "叠"} {group.executions.length} 轮
                       </span>
                     ) : (
                       <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--accent-text)]">
@@ -376,13 +428,41 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                     )}
                     {hasMultiple && (
                       <span className="text-[10px] text-[var(--accent-purple)] font-semibold group-hover:underline flex items-center gap-0.5">
-                        点击平铺展开 ▾
+                        {isExpanded ? "点击收起 ▴" : "在画布中展开 ▾"}
                       </span>
                     )}
                   </span>
                 </button>
               </div>
             );
+          })}
+          {detail && focused && visibleRoles.filter(group => group.executions.length > 1).map(group => {
+            const isExpanded = expandedRoleGroup?.roleName === group.roleName;
+            const source = detail.children.find(node => node.id === group.roleName)!;
+            return <div key={`rounds-${group.roleName}`} id={executionGroupId(group.roleName)} aria-hidden={!isExpanded}>
+              {group.executions.map((execution, roundIndex) => {
+                const destination = isExpanded ? detail.executions.find(node => node.id === execution.id) : undefined;
+                const node = destination ?? { ...source, id: execution.id, height: 154 };
+                const round = group.executions.length - roundIndex;
+                const live = !(stale && execution.source === "observation") && isLive(execution.status);
+                const task = (execution.prompt ?? execution.summary ?? execution.output ?? "").replace(/^Task:\s*/i, "").replace(/\s+/g, " ").trim();
+                return <button key={execution.id} type="button" data-testid="canvas-execution-node" data-expanded={isExpanded}
+                  aria-label={`查看 ${roleLabel(group.roleName)} 第 ${round} 轮详情`} tabIndex={isExpanded ? 0 : -1}
+                  style={nodeStyle(node)} onFocus={() => revealNode(node)} onClick={() => onAgent(group.roleObj, execution)}
+                  className={`research-canvas-execution win11-card-interactive focus-ring flex flex-col justify-between overflow-hidden border-l-[3px] p-3 text-left shadow-sm ${live ? "border-l-[var(--accent-green)]" : "border-l-[var(--accent-purple)]"}`}>
+                  <span className="flex items-center justify-between gap-1">
+                    <span className="text-[11px] font-bold text-[var(--text-primary)]">第 {round} 轮{roundIndex === 0 ? " · 最新" : ""}</span>
+                    <span className={`truncate text-[10px] ${live ? "font-semibold text-[var(--accent-green-text)]" : "text-[var(--text-secondary)]"}`}>{stale && execution.source === "observation" ? "观测已过期" : statusLabel(execution.status)}</span>
+                  </span>
+                  {execution.observedModel && <span className="truncate font-mono text-[9px] text-[var(--text-tertiary)]" title={execution.observedModel}>{execution.observedModel}</span>}
+                  <span className="line-clamp-3 text-[11px] leading-relaxed text-[var(--text-secondary)]" title={task}>{task || "暂无任务描述，查看详情可访问执行日志与结果"}</span>
+                  <span className="flex items-center justify-between gap-2 border-t border-[var(--border-secondary)] pt-1.5 text-[10px]">
+                    <span className="text-[var(--text-tertiary)]">{execution.startedAt ? new Date(execution.startedAt).toLocaleTimeString() : "未记录时间"}</span>
+                    <span className="font-medium text-[var(--accent-text)]">查看详情 →</span>
+                  </span>
+                </button>;
+              })}
+            </div>;
           })}
         </div>
         {!focused && filteredClusters.length === 0 && <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--text-tertiary)]">没有匹配的会话</div>}
@@ -394,126 +474,19 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
         {!focused && (
           <div aria-label="连线图例" className="flex items-center gap-3">
             <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t border-dashed border-[var(--text-tertiary)]" />会话分组</span>
-            {relations.length > 0 && <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t-2 border-dashed border-[var(--accent-purple)]" />已记录的派发 / 交接关系</span>}
+            {sessionParents.size > 0 && <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t-2 border-[var(--accent-purple)]" />父会话 → 创建的协作会话</span>}
+            {relations.some(relation => relation.kind === "handoff") && <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-4 border-t border-dashed border-[var(--accent-purple)]" />任务交接</span>}
           </div>
         )}
         {focused && <button type="button" onClick={() => onAgent(focused.roleObj, focused.sessionExec)} className="inline-flex items-center gap-1 font-medium text-[var(--accent-text)] hover:underline"><Icon path={mdiOpenInNew} size={0.5} />会话详情与纠偏</button>}
       </div>
 
-      {/* 铺开各轮独立执行卡片的轻量级弹层 (Spread Out Execution Cards) */}
-      {expandedRoleGroup && (
-        <Dialog open={visible} onClose={() => setExpandedGroupKey(null)} size="full" flush ariaLabel={`${roleLabel(expandedRoleGroup.roleName)} 的执行轮次`}>
-          <div
-            className="win11-card w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl border border-[var(--border-strong)] bg-[var(--bg-primary)] rounded-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-3.5 bg-[var(--bg-secondary)]">
-              <div className="flex items-center gap-3 min-w-0">
-                <img
-                  src={getMemberArt(expandedRoleGroup.roleName, false)}
-                  alt=""
-                  className="h-8 w-8 object-contain shrink-0"
-                />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">
-                      {roleLabel(expandedRoleGroup.roleName)}
-                    </h3>
-                    <span className="rounded-full bg-purple-500/20 border border-purple-500/50 px-2.5 py-0.5 text-[10.5px] font-semibold text-purple-300">
-                      已平铺展开全部 {expandedRoleGroup.executions.length} 轮独立执行
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">
-                    直接点击下方对应轮次的任务卡片，即可进入该轮的独立工作流详情与实时纠偏
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setExpandedGroupKey(null)}
-                className="win11-btn px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-1 rounded-lg"
-              >
-                <Icon path={mdiClose} size={0.7} />
-                <span>收起卡片</span>
-              </button>
-            </div>
-
-            {/* Body: Grid of all execution run cards */}
-            <div className="flex-1 overflow-y-auto p-5 grid grid-cols-1 sm:grid-cols-2 gap-3.5 bg-[var(--bg-canvas)]">
-              {expandedRoleGroup.executions.map((ex, roundIdx) => {
-                const roundNumber = expandedRoleGroup.executions.length - roundIdx;
-                const isLatest = roundIdx === 0;
-                const execLive = !(stale && ex.source === "observation") && isLive(ex.status);
-                const taskSnippet = (ex.prompt ?? ex.output ?? "")
-                  .replace(/^Task:\s*/i, "")
-                  .replace(/\s+/g, " ")
-                  .trim();
-
-                return (
-                  <button type="button"
-                    key={ex.id}
-                    onClick={() => {
-                      const targetEx = ex;
-                      setExpandedGroupKey(null);
-                      onAgent(expandedRoleGroup.roleObj, targetEx);
-                    }}
-                    className={`win11-card-interactive cursor-pointer flex flex-col justify-between p-4 rounded-xl border text-left transition-all ${
-                      execLive
-                        ? "border-[var(--accent-green)] bg-[var(--bg-primary)]"
-                        : "border-[var(--border-primary)] hover:border-[var(--accent-primary)] hover:shadow-md bg-[var(--bg-primary)]"
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs font-bold text-[var(--text-primary)]">
-                            第 {roundNumber} 轮执行{isLatest ? " (最新)" : ""}
-                          </span>
-                          {ex.id && (
-                            <span className="font-mono text-[9.5px] text-[var(--text-tertiary)] opacity-70">
-                              ({ex.id.slice(0, 8)})
-                            </span>
-                          )}
-                        </div>
-                        {execLive ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
-                            <span>⚡ 正在执行中</span>
-                          </span>
-                        ) : (
-                          <span className="rounded bg-[var(--bg-secondary)] border border-[var(--border-secondary)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">
-                            {stale && ex.source === "observation" ? "观测已过期" : statusLabel(ex.status)}
-                          </span>
-                        )}
-                      </div>
-
-                      {ex.observedModel && (
-                        <div className="text-[10px] font-mono text-[var(--text-tertiary)] mb-1.5 truncate">
-                          🤖 {ex.observedModel}
-                        </div>
-                      )}
-
-                      <div className="text-xs leading-relaxed text-[var(--text-secondary)] line-clamp-3 mb-3">
-                        {taskSnippet || "暂无具体任务描述，点击查看详细执行日志与结果"}
-                      </div>
-                    </div>
-
-                    <div className="pt-2 border-t border-[var(--border-secondary)] flex items-center justify-between text-[10.5px]">
-                      <span className="text-[var(--text-tertiary)]">
-                        {ex.startedAt ? new Date(ex.startedAt).toLocaleTimeString() : "未记录时间"}
-                      </span>
-                      <span className="font-medium text-[var(--accent-text)] flex items-center gap-1">
-                        进入此轮详情 <span>→</span>
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </Dialog>
-      )}
+      {focused && delegatedSessions.length > 0 && <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border-primary)] px-3 py-2 text-[10px] text-[var(--text-secondary)]">
+        <span>创建的协作会话：</span>{delegatedSessions.map(child => <button type="button" key={child.sessionExec.id}
+          className="max-w-[220px] truncate rounded-md border border-[var(--border-primary)] px-2 py-1 text-[var(--accent-text)] hover:bg-[var(--bg-hover)] focus-ring"
+          onClick={() => { setQuery(""); focusSession(child.sessionExec.id); }}>{child.title}</button>)}
+      </div>}
+      <span className="sr-only" aria-live="polite">{expandedRoleGroup ? `${roleLabel(expandedRoleGroup.roleName)} 的 ${expandedRoleGroup.executions.length} 轮执行已在画布展开。按 Escape 收起。` : ""}</span>
     </section>
   );
 }

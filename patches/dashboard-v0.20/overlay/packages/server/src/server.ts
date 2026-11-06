@@ -806,6 +806,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   // REST caller can tell "pi accepted it" from "a byte left the server".
   // See change: fix-spawn-correlation-ttl-coupling (D7).
   const pendingPromptAcks = createPendingPromptAcks();
+  const dispatchReceiptAcks = new Set<(sessionId: string, promptId: string) => void>();
 
   // Worktree-init progress registry: maps requestId -> originating ws
   // so `worktree_init_*` events stream only to the dialog that
@@ -1838,6 +1839,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     ...(pushService ? { pushDispatcher: pushService.dispatcher } : {}),
     pendingClientCorrelations,
     pendingPromptAcks,
+    onPromptReceived: (sessionId, promptId) => { for (const handler of dispatchReceiptAcks) handler(sessionId, promptId); },
     dispatchPluginPiMessage,
     dispatchPluginRequest,
     dispatchPluginRawEvent,
@@ -2666,6 +2668,8 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   browserGateway.setResWorkflowSpawnSupport({ prepare: resWorkflowParticipants.prepareSpawn, registry: pendingPluginRefRegistry });
   registerResWorkflowResearchSessionRoutes(fastify, {
     networkGuard, sessionManager,
+    notifyParent: (sessionId, text, promptId) => piGateway.sendToSession(sessionId, { type: "send_prompt", sessionId, text, promptId, delivery: "steer" }),
+    subscribeReceiptAcks: handler => { dispatchReceiptAcks.add(handler); return () => { dispatchReceiptAcks.delete(handler); }; },
     accessFor: (cwd, identity) => resWorkflowAccess(resWorkflowAccessDeps, identity, cwd),
     prepareSpawn: (cwd, identity, verified) => resWorkflowParticipants!.prepareSpawn(cwd, identity, verified),
     pendingPluginRefRegistry, pendingPrincipalOwnerRegistry,

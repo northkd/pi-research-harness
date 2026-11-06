@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getDashboardConfigDir } from "@blackbelt-technology/pi-dashboard-shared/dashboard-paths.js";
 import type { ResearchSessionProvenance } from "@blackbelt-technology/pi-dashboard-shared/research-session.js";
-import { isLocalOperator, sessionPrincipalOf } from "../identity/session-access.js";
+import { LOCAL_OPERATOR, isLocalOperator, sessionPrincipalOf } from "../identity/session-access.js";
 import { resolveInstalledResearchLoopRoot, type ResWorkflowAccess } from "../res-workflow/adoption-service.js";
 import type { ResWorkflowSpawnRef } from "../res-workflow/participants.js";
 import type { ResWorkflowIdentity } from "../res-workflow/access.js";
@@ -23,6 +23,8 @@ import type { SessionManager } from "../session/memory-session-manager.js";
 import type { SpawnResult } from "../spawn-process/process-manager.js";
 import type { SpawnStrategy } from "@blackbelt-technology/pi-dashboard-shared/config.js";
 import type { NetworkGuard } from "./route-deps.js";
+import { createResearchDispatchService, createResearchDispatchStore } from "../res-workflow/research-dispatch-service.mjs";
+import { assertResearchTaskDelegation } from "../res-workflow/task-permission-service.js";
 import { createResearchSessionService, ResearchSessionError } from "../res-workflow/research-session-service.mjs";
 
 export interface ResearchSessionInitialPromptRegistry {
@@ -45,6 +47,8 @@ export interface ResearchSessionRouteDeps {
   isResolverActive(): boolean;
   researchLoopRoot?: string;
   privateDir?: string;
+  notifyParent?(sessionId: string, text: string, promptId: string): boolean | Promise<boolean>;
+  subscribeReceiptAcks?(handler: (sessionId: string, promptId: string) => void): () => void;
 }
 
 const hash = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
@@ -120,6 +124,16 @@ export function createDefaultResearchSessionVerifier(deps: Pick<ResearchSessionR
 
 export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstance, deps: ResearchSessionRouteDeps) {
   const verifyParent = createDefaultResearchSessionVerifier(deps);
+  const verifyLaunch = async ({ parent }: { parent: any }) => {
+    await assertResearchTaskDelegation(parent, { researchLoopRoot: deps.researchLoopRoot });
+    // Background launches retain the exact existing mainline resource floor;
+    // an earlier successful plan call is not an enduring resource permit.
+    const root = deps.researchLoopRoot ?? await resolveInstalledResearchLoopRoot();
+    const module = await import(pathToFileURL(path.join(root, "..", "mainline-supervision", "src", "core.mjs")).href);
+    const supervision = new module.MainlineStore(parent.cwd);
+    if (!supervision.resourceGate().ok) throw new ResearchSessionError(409, "research-session-resource-budget-unavailable");
+  };
+  let dispatcher: ReturnType<typeof createResearchDispatchService> | undefined;
   const service = createResearchSessionService({
     getSession: id => deps.sessionManager.get(id),
     listSessions: () => deps.sessionManager.listAll(),
@@ -133,8 +147,47 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
       try { deps.onSpawnResult?.(cwd, result); } catch { /* watchdog/persistence is host-owned */ }
       return result;
     },
+    beforeSpawn: verifyLaunch,
     spawnStrategy: deps.spawnStrategy,
+    isCompleted: token => dispatcher?.isCompleted(token) ?? false,
+    isWaitingCoordinator: id => dispatcher?.isWaitingCoordinator(id) ?? false,
+    isRecoveringSession: session => dispatcher?.isRecoveringSession(session) ?? false,
+    unregisteredReservations: () => dispatcher?.unregisteredReservations() ?? [],
     isLocalOperator: principal => isLocalOperator(principal as { iss: string; sub: string } | null | undefined),
+  });
+
+  dispatcher = createResearchDispatchService({
+    store: createResearchDispatchStore(path.join(deps.privateDir ?? path.join(getDashboardConfigDir(), "res-workflow"), "dispatch")),
+    getSession: id => deps.sessionManager.get(id), listSessions: () => deps.sessionManager.listAll(),
+    authorize: service.authorize, createSession: service.create, releaseSession: service.release,
+    notifyParent: deps.notifyParent,
+    beforeLaunch: verifyLaunch,
+    // Host-internal execution retains the real identity sentinel for an
+    // explicitly adopted local session; never synthesize a look-alike principal.
+    principalForSession: session => session?.principalOwner ?? LOCAL_OPERATOR,
+  });
+  const unsubscribeReceipts = deps.subscribeReceiptAcks?.((sessionId, promptId) => {
+    void dispatcher!.acknowledgeReceipt(sessionId, promptId).catch(() => { /* retry durable receipt */ });
+  });
+  // Registration and process-restart reconciliation run without model turns.
+  // Actual success is still an authenticated task report, never idle status.
+  const tick = () => { void dispatcher!.tick().catch(() => { /* status remains inspectable; no speculative relaunch */ }); };
+  const timer = setInterval(tick, 2_000);
+  timer.unref?.();
+  fastify.addHook("onClose", async () => { clearInterval(timer); unsubscribeReceipts?.(); dispatcher!.dispose(); });
+  tick();
+
+  fastify.post("/api/res-workflow/dispatch", { preHandler: deps.networkGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      return await dispatcher!.handle({ body: request.body, principal: sessionPrincipalOf(request), expiresAt: (request as FastifyRequest & { principalExpiresAt?: number | null }).principalExpiresAt ?? null });
+    } catch (error) {
+      if (error instanceof ResearchSessionError) {
+        reply.code(error.statusCode);
+        return { success: false, error: error.code, code: error.code };
+      }
+      reply.code(503);
+      return { success: false, error: "research-dispatch-unavailable", code: "research-dispatch-unavailable" };
+    }
   });
 
   fastify.post("/api/res-workflow/participants/spawn", { preHandler: deps.networkGuard }, async (request: FastifyRequest, reply: FastifyReply) => {

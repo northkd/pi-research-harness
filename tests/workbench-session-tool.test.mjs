@@ -358,17 +358,48 @@ describe('research-session backend', () => {
     const rows = [];
     let number = 0;
     const f = serviceFixture({ sessions: rows, deps: {
-      maxPerParent: 2, maxTotal: 2,
+      maxPerParent: 2, maxTotal: 2, availableMemory: () => 8 * 1024 ** 3,
       mintToken: () => 'spawn-token-' + (++number),
       spawn: async (_cwd, options) => {
         rows.push({ id: 'child-' + number, status: 'idle', researchSession: { parentSessionId: 'parent-1', spawnToken: options.spawnToken } });
         return { success: true };
       },
     } });
-    assert.equal((await f.service.create(request())).status, 'spawned');
-    assert.equal((await f.service.create(request())).status, 'spawned');
-    await assert.rejects(f.service.create(request()), error => error.code === 'research-session-concurrency-limit');
+    assert.equal((await f.service.create(request({ body: { requestId: 'registered-one' } }))).status, 'spawned');
+    assert.equal((await f.service.create(request({ body: { requestId: 'registered-two' } }))).status, 'spawned');
+    await assert.rejects(f.service.create(request({ body: { requestId: 'registered-three' } })), error => error.code === 'research-session-concurrency-limit');
     assert.equal(rows.length, 2);
+  });
+
+  it('replays a stable request without launching a duplicate and rejects a changed payload', async () => {
+    const f = serviceFixture();
+    const first = await f.service.create(request());
+    const replay = await f.service.create(request());
+    assert.deepEqual(replay, first);
+    assert.equal(f.calls.spawn.length, 1);
+    await assert.rejects(f.service.create(request({ body: { task: 'A different assignment under the same key' } })), error => error.code === 'research-session-idempotency-conflict');
+    assert.equal(f.calls.spawn.length, 1);
+  });
+
+  it('rechecks permissions immediately before spawn and cleans a known preflight refusal', async () => {
+    let allowed = false, attempts = 0;
+    const f = serviceFixture({ deps: {
+      maxPerParent: 1, maxTotal: 1,
+      beforeSpawn: async ({ parent, body }) => {
+        attempts++;
+        assert.equal(parent.id, 'parent-1');
+        assert.equal(body.role, 'experiment');
+        if (!allowed) throw Object.assign(new Error('revoked'), { code: 'task-permissions-authorization-revoked' });
+      },
+    } });
+    await assert.rejects(f.service.create(request()), error => error instanceof ResearchSessionError && error.code === 'task-permissions-authorization-revoked');
+    assert.equal(f.calls.spawn.length, 0);
+    assert.equal(f.calls.enqueue.at(-1).removed, 'spawn-token-1234');
+    assert.equal(f.calls.refs.at(-1).removed, 'spawn-token-1234');
+    allowed = true;
+    assert.equal((await f.service.create(request())).status, 'spawned');
+    assert.equal(attempts, 2);
+    assert.equal(f.calls.spawn.length, 1);
   });
 
   it('cleans up its own token-bound prompt and refs when the launch fails', async () => {

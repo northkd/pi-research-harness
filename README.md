@@ -10,7 +10,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![Node](https://img.shields.io/badge/Node-22.19%2B-green)
 
-> **当前为 0.20.0 开发源码。** 当前 `main` 已包含 2026-11-05 的工作区 UI 改版与文档更新，功能核对基线为 `b79930a`。请按下方命令检出 `main`。完整自动研究、Science 和部分后端集成仍有明确的配置要求与已知缺口，见[可用范围](#可用范围与已知问题)。
+> **当前为 0.20.0 开发源码。** 本分支基于 `main` 的 `36a5540`，增加长任务授权、递归分发执行器和协作层级画布。试用本次修改请检出 `feat/autonomous-collaboration-20261106`；[实现、使用与验证记录](docs/autonomous-collaboration/implementation.md)说明实际范围。完整自动研究、Science 和部分后端集成仍有明确的配置要求与已知缺口，见[可用范围](#可用范围与已知问题)。
 
 ![项目实际运行结构：操作入口、Pi 执行、研究记录、观测回流与独立 Science 查看通道](docs/images/project-illustration.png)
 
@@ -21,6 +21,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 - [工作台能做什么](#工作台能做什么)
 - [一次研究实际怎样推进](#一次研究实际怎样推进)
 - [会话、子代理与科研角色](#会话子代理与科研角色)
+- [长任务授权与分发执行器](#长任务授权与分发执行器)
 - [证据、评审与发表授权](#证据评审与发表授权)
 - [持续推进、监督与阶段识别](#持续推进监督与阶段识别)
 - [可选服务与集成](#可选服务与集成)
@@ -38,7 +39,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 |---|---|---|
 | **对话** | 与当前 Pi 会话交互，查看思考、工具调用与结果 | 模型与思考级别、发送、队列、steering、停止、后台任务、历史定位、最后消息撤销并编辑 |
 | **研究工作台** | 围绕目标查看阶段、任务、产物、预算与证据 | 工作流进度、总览与预算、主张与评审、历史与审计、全部看板；资料接入和项目设置 |
-| **智能体** | 查看独立协作会话、原生子代理与工作流步骤 | 协作画布、列表、角色矩阵、搜索、缩放、聚焦、执行详情、原生子代理会话与文字纠偏 |
+| **智能体** | 查看协作会话的真实创建层级、原生子代理与工作流步骤 | 父子连线、创建者导航、画布内展开多轮执行、列表、角色矩阵、搜索、缩放、聚焦、执行详情与文字纠偏 |
 | **文件** | 在项目目录中阅读、编辑和比较文件 | 文件树、标签、Markdown 等编辑预览、差异、搜索、专用 viewer 与插件文件处理器 |
 | **Science** | 访问另行配置的 Science 查看服务 | 原生工作区/任务画面、产物预览、原始下载与哈希核对；实例列表从工作台总览进入 |
 
@@ -50,9 +51,11 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 ![新版研究工作台：目标、阶段、任务、产物及任务概览](docs/ui-redesign/screenshots/01-real-workbench-1440.png)
 
-![智能体协作画布：独立会话、所属子代理与执行详情入口](docs/ui-redesign/screenshots/06-agents-demo-1440.png)
+![智能体协作画布：真实创建层级、父子连线与所属子代理](docs/autonomous-collaboration/screenshots/06-agents-demo-1440.png)
 
-*截图来自本分支实际构建的 Dashboard、原生服务和认证流程，画面内容为明确标注的合成演示数据。第二张使用仓库自带协作模拟器；它不表示这些智能体正在执行真实科研任务。*
+*截图来自实际构建的 Dashboard、原生服务和认证流程，画面内容为明确标注的合成演示数据。工作台截图保留 2026-11-05 验证，协作画布更新为本分支 2026-11-06 验证；它们不表示正在执行真实科研任务。*
+
+[画布内直接展开](docs/autonomous-collaboration/screenshots/12-subagents-spread-1440.png) · [长任务授权](docs/autonomous-collaboration/screenshots/14a-task-authorization-editor-1440.png) · [窄屏展开](docs/autonomous-collaboration/screenshots/13-subagents-spread-360.png)
 
 [对话](docs/ui-redesign/screenshots/10-session-chat-1440.png) · [文件](docs/ui-redesign/screenshots/03-files-1440.png) · [费用详情](docs/ui-redesign/screenshots/11-usage-drawer-1440.png) · [Science 未连接时的入口](docs/ui-redesign/screenshots/04-science-1440.png) · [深色主题](docs/ui-redesign/screenshots/09-workbench-dark-1440.png) · [手机宽度](docs/ui-redesign/screenshots/08-workbench-light-360.png)
 
@@ -141,7 +144,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 `research_session` 从可信会话上下文核对项目、成员关系与研究约定；子任务不能通过传入任意目录或目标地址跨工作台派发。角色分工也不会自行扩大远程计算、材料外发或发表授权。见 [research_session 实现](extensions/research-loop/src/workbench-session-tool.mjs) 与 [委派策略](extensions/research-loop/src/delegation-policy.mjs)。
 
-智能体画布读取这些已有记录：分组虚线只表示同一工作区中的会话，带来源的关系才表示已记录的派发或交接。画布本身不会启动智能体。文字纠偏发往真实目标会话；“已提交”不等于已经执行，也不等于停止其进程。
+智能体画布读取真实派发来源，展示创建者、协作深度和父子连线；分组虚线只表示同一工作区，任务交接也不会被当作父子关系。聚焦会话后可以返回创建者，多轮 Subagent 卡片在当前画布中展开和收起。画布本身不会启动智能体。文字纠偏发往真实目标会话；“已提交”不等于已经执行，也不等于停止其进程。
 
 ### 已附带的角色模板
 
@@ -158,6 +161,18 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 | `research-mainline-supervisor` | 按已冻结目标与授权证据范围进行主线监督 |
 
 完整模板位于 [agents/](agents/)。独立上下文和不同角色有助于交叉检查，但不保证科学正确性；要按实际观察到的模型身份、来源和产物判断独立性。
+
+## 长任务授权与分发执行器
+
+十几个小时的工作可以在启动前集中确认授权。确认研究约定并接入项目后，打开 **研究工作台 → 总览与预算 → 长任务执行授权**，填写任务和交付要求，核对本地计算、协作分发、公开资料检索及项目依赖安装，选择 12、24、48 或 72 小时并保存。当前约定下所有已加入的研究协作会话共享授权，附加数据目录可一并列出。
+
+授权接入实际的文件访问门控及主线监督确认流程。批准范围内直接继续；普通路径遇到到期、撤销或范围不符时返回明确阻塞并记录到面板，供 agent 继续其余独立工作、最后说明未完成条件。敏感及不可授予路径仍遵守原有独立门控。授权不会扩大原有计算预算、提供外部服务凭据或自动授权材料外发与发表，也不会修改全局 Pi YOLO 设置。
+
+新的 `research_dispatch` 是持久化分发执行器。主 agent 通过 `plan` 提交有稳定 ID 和依赖关系的任务；执行器创建真实子会话、控制并发、等待结果并通知父会话。协作者收到多个可分开的工作后也要建立计划；单一不可拆分任务使用 `atomic` 说明原因。通过 `research_session.tasks` 明确提交的工作，在子会话注册后由后台自动分发。
+
+子任务须通过 `report` 提交真实状态、摘要和证据路径。idle 不等于完成，未返回的孩子与失败回执不能被上层的成功声明覆盖。语义拆分仍由模型决定；实际调度、依赖和回执由代码执行。等待中的协调者保留驻留资源统计，但不会占满可运行工作者的名额。
+
+使用步骤、工具示例、限额、恢复行为和实际验证范围见 [长任务与协作实现说明](docs/autonomous-collaboration/implementation.md)。
 
 ## 证据、评审与发表授权
 
@@ -234,7 +249,7 @@ Science 从目录工作台进入，不依赖先创建 Pi 会话。Science 主视
 | Harness | `0.20.0` 开发版 |
 | Pi | `1.3.0` |
 | pi-subagents | `0.79.2` + 仓库 v0.20 补丁 |
-| Dashboard | 上游 `v0.10.0`，固定提交 `65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0` + 610 个文件的源码覆盖层 |
+| Dashboard | 上游 `v0.10.0`，固定提交 `65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0` + [校验清单](config/dashboard-v020.json)中的源码覆盖层 |
 | 扩展依赖 | 13 个固定版本 npm 包；见 [锁文件清单](config/locks/extensions/package.json) |
 
 基础安装和维护细节见 [0.20 开发与部署](docs/RELEASE-0.20.md)；当前源码检出、认证入口和当前缺口以本 README 的说明为准。下面是创建**全新配置**的顺序；已有配置请合并所需路径，不要重复执行安装器覆盖。
@@ -242,8 +257,8 @@ Science 从目录工作台进入，不依赖先创建 Pi 会话。Science 主视
 ### 1. 克隆并检查源码
 
 ```bash
-# main 已包含已完成的工作区 UI 改版与最新文档。
-git clone --branch main \
+# 本分支包含长任务授权、执行器与协作画布修改。
+git clone --branch feat/autonomous-collaboration-20261106 \
   https://github.com/northkd/pi-research-harness.git
 cd pi-research-harness
 
@@ -316,7 +331,7 @@ pi-research-workbench-sync --dry-run
 pi-research-workbench-sync
 ```
 
-同步服务监听 `127.0.0.1:18767`，读取本地 Dashboard 认证及相同 agent 的会话目录。两个进程需使用相同 `HOME`、`PI_RESEARCH_AGENT_DIR` 与 `PI_DASHBOARD_PORT`。它只做观测，不启动模型；未启动或观测过期时，科研文件仍能显示，实时协作状态不能据此判定。当前同步代理和研究后端发现还有[已记录的问题](#可用范围与已知问题)，以上步骤不代表这些链路已全量验收。
+同步服务监听 `127.0.0.1:18767`，读取本地 Dashboard 认证及相同 agent 的会话目录。两个进程需使用相同 `HOME`、`PI_RESEARCH_AGENT_DIR` 与 `PI_DASHBOARD_PORT`。它只做观测，不启动模型；未启动或观测过期时，科研文件仍能显示，实时协作状态不能据此判定。本分支已修复研究后端定位对启动器路径的识别；同步代理的访问与身份转发仍有[已记录的问题](#可用范围与已知问题)，以上步骤不代表该链路已全量验收。
 
 ### 5. 选择项目，开始或接续研究
 
@@ -404,26 +419,29 @@ node scripts/ui-preview/launcher.mjs run \
 
 已保存的 2026-11-05 UI 验证覆盖五个主视图、未保存编辑状态、费用、接入抽屉、明暗主题与多种宽度：浏览器 25 项通过；Harness 233 项与监督离线 63 项通过；覆盖层 610 个文件完成应用与校验。各前端测试组存在重叠，不应相加成唯一测试总数。完整范围和失败项见 [validation.json](docs/ui-redesign/validation.json) 与[实施报告](docs/ui-redesign/implementation.md)。本次文档重写的检查另记于 [README 核查记录](docs/README-VERIFICATION.md)。
 
+2026-11-06 本分支完成新的原生部署与浏览器验证：29 项通过，包含协作层级、画布内动效展开与授权面板。Harness 265 项、监督离线 64 项、画布 31 项、原生路径门控 39 项及服务端门控 10 项通过；624 个覆盖层文件与部署目录一致。完整类型检查仍有 61 条既有诊断，新增 0 条。分组范围、adapter 检查、运行边界及截图见[本次实施记录](docs/autonomous-collaboration/implementation.md)和[验证结果](docs/autonomous-collaboration/validation.json)。没有运行真实模型或连续十几个小时的作业。
+
 ## 可用范围与已知问题
 
 | 项目 | 当前事实与实际影响 |
 |---|---|
 | 自动研究角色与模型 | 自动流程引用的 explorer、strategist 和阶段映射中的 reframer 未附带角色模板；具体模型 ID 和预算 bridge 需本地核对。不能承诺全新安装后一键完成科研 |
-| 后端路径发现与同步代理 | 研究后端 resolver 和安装 wrapper 路径约定存在不匹配；workbench-sync 代理存在已有工作区访问/身份转发缺口。两项路由隔离测试在原基线与 UI 分支均失败，相关链路尚未完成验收 |
-| 全仓类型检查 | 已保存检查有 65 条诊断，位于六个未改服务端文件；前端构建和 UI 定向验证通过不代表全仓 typecheck 通过 |
+| 同步代理 | workbench-sync 代理已有的工作区访问/身份转发缺口仍未在本分支完成验收。原先独立的研究后端 resolver 路径不匹配已修复并通过定向回归 |
+| 全仓类型检查 | 最终检查有 61 条既有诊断，位于五个服务端文件；相比保存的基线新增 0 条、消除 4 条。详见[诊断对比](docs/autonomous-collaboration/evidence/typescript-comparison.json)，全仓 typecheck 尚未通过 |
 | Science | 已保存查看、通信和产物跟随源码；通用 host、项目授权绑定和实际环境需另配，真实端到端未验证 |
 | 平台与资源 | Linux 是主要验证环境；macOS 能构建和展示，但部分并行/监督准入依赖 `/proc/meminfo`。Windows 原生和 WSL2 全流程未在本分支验收 |
 | 外部服务 | UI 验证没有运行真实付费模型、活跃 Pi bridge、远程 PTY 终止、Browser takeover 或所有插件的真实任务 |
 | 桌面安装包 | 保留上游 Electron 相关源码；本 README 交付的是源码和 Web 工作台说明，本次 UI 验证不代表已构建对应版本的桌面安装包 |
 | 数据与科研结论 | 代码和离线测试能验证部分行为契约，不能替代原始材料、实验、独立审查及人工发表决定 |
 
-这些问题的源码依据与验证出处见 [README 核查记录](docs/README-VERIFICATION.md) 和 [UI 功能审计](docs/ui-redesign/feature-preservation.md)。
+历史问题的源码依据见 [README 核查记录](docs/README-VERIFICATION.md) 和 [UI 功能审计](docs/ui-redesign/feature-preservation.md)；本分支的修复与当前验证结果见[长任务与协作实施记录](docs/autonomous-collaboration/implementation.md)。
 
 ## 文档与许可证
 
 ### 当前文档
 
 - [0.20 开发、安装与服务器部署](docs/RELEASE-0.20.md)
+- [长任务授权、递归执行器、协作画布与本次部署验证](docs/autonomous-collaboration/implementation.md)
 - [UI 改版：实现、截图、测试与已知失败](docs/ui-redesign/implementation.md)
 - [原功能保全审计 F01–F56](docs/ui-redesign/feature-preservation.md)
 - [主线监督](docs/SUPERVISION.md)与[空闲阶段识别](docs/IDLE-STAGE-REVIEW.md)

@@ -15,7 +15,9 @@ const require = createRequire(path.join(runtime, 'package.json'));
 const { chromium } = require('playwright');
 fs.mkdirSync(output, { recursive: true });
 const report = { checks: [], errors: [], cancellations: [], requests: [], screenshots: [], browser: '', syntheticData: true };
-const browser = await chromium.launch({ executablePath: process.env.PI_UI_BROWSER_EXECUTABLE || undefined, headless: true });
+const browser = await chromium.launch({ executablePath: process.env.PI_UI_BROWSER_EXECUTABLE || undefined, headless: true,
+  // Keep native scrollbars painted: their theme is part of the visual check.
+  ignoreDefaultArgs: ['--hide-scrollbars'] });
 report.browser = browser.version();
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1, locale: 'zh-CN', colorScheme: 'light', reducedMotion: 'reduce' });
 await context.addInitScript(() => {
@@ -198,6 +200,69 @@ try {
   await screenshot('05-workbench-demo-1440');
   await page.getByTestId('workspace-view-agents').click();
   await screenshot('06-agents-demo-1440');
+  await check('recorded multi-agent creators form a three-level canvas hierarchy', async () => {
+    const nodes = page.getByTestId('canvas-session-node');
+    assert.equal(await nodes.count(), 4);
+    assert.equal(await page.getByTestId('canvas-parent-edge').count(), 3);
+    const grandchild = page.locator('[data-testid="canvas-session-node"][data-parent-id="DEMO:experiment"]');
+    assert.equal(await grandchild.getAttribute('data-depth'), '2');
+    assert.match(await grandchild.innerText(), /创建者/);
+    await grandchild.click();
+    await page.getByRole('button', { name: /^返回创建者 / }).click();
+    assert.match(await page.getByTestId('canvas-session-node').innerText(), /实验/);
+    await page.getByRole('button', { name: '返回全部会话', exact: true }).click();
+  });
+  await check('stacked subagents animate and spread within the canvas without a dialog', async () => {
+    await page.getByTestId('canvas-session-node').filter({ hasText: '文献' }).first().click();
+    const group = page.locator('[data-testid="canvas-role-node"][aria-expanded="false"]').first();
+    await group.waitFor({ state: 'visible' });
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await group.click();
+    const cards = page.locator('[data-testid="canvas-execution-node"][data-expanded="true"]');
+    await cards.first().waitFor({ state: 'visible' });
+    assert.equal(await cards.count(), 2);
+    assert.equal(await page.getByRole('dialog').count(), 0);
+    const motion = await cards.first().evaluate(element => ({
+      duration: getComputedStyle(element).transitionDuration,
+      inCanvas: !!element.closest('[data-testid="research-canvas-viewport"]'),
+    }));
+    assert.equal(motion.inCanvas, true);
+    assert.ok(motion.duration.split(',').some(value => parseFloat(value) > 0), 'normal motion should animate the spread');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="canvas-execution-node"][data-expanded="true"]')]
+      .every(element => getComputedStyle(element).transitionDuration.split(',').every(value => parseFloat(value) === 0)));
+    const boxes = await cards.evaluateAll(elements => elements.map(element => {
+      const rect = element.getBoundingClientRect(); return { x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom };
+    }));
+    assert.ok(boxes[0].right <= boxes[1].x + 1 || boxes[1].right <= boxes[0].x + 1 || boxes[0].bottom <= boxes[1].y + 1 || boxes[1].bottom <= boxes[0].y + 1,
+      'expanded execution cards should not overlap');
+    await screenshot('12-subagents-spread-1440');
+    await cards.first().click();
+    assert.ok(await page.getByRole('dialog').count() > 0, 'explicit execution details remain available');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: '收起执行卡片', exact: true }).click();
+    assert.equal(await page.locator('[data-testid="canvas-execution-node"][data-expanded="true"]').count(), 0);
+    assert.equal(await page.getByRole('dialog').count(), 0);
+    await page.getByRole('button', { name: '返回全部会话', exact: true }).click();
+  });
+  await check('narrow canvas retains nested collaborators and inline execution cards', async () => {
+    try {
+      await page.setViewportSize({ width: 360, height: 850 });
+      // App remounts its folder route at the mobile breakpoint. Enter through
+      // the actual mobile navigation before checking the collaboration canvas.
+      await page.getByTestId('workspace-view-agents').click();
+      await page.getByTestId('canvas-session-node').filter({ hasText: '文献' }).first().click();
+      await page.locator('[data-testid="canvas-role-node"][aria-expanded="false"]').first().click();
+      assert.equal(await page.locator('[data-testid="canvas-execution-node"][data-expanded="true"]').count(), 2);
+      assert.equal(await page.getByRole('dialog').count(), 0);
+      await overflowCheck('narrow expanded collaboration');
+      await screenshot('13-subagents-spread-360');
+      await page.getByRole('button', { name: '收起执行卡片', exact: true }).click();
+      await page.getByRole('button', { name: '返回全部会话', exact: true }).click();
+    } finally {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    }
+  });
   await page.getByTestId('workspace-view-workbench').click();
   for (const tab of ['overview', 'claims', 'audit', 'all', 'workflow']) {
     await check(`workbench secondary ${tab} stays reachable`, async () => {
@@ -205,6 +270,26 @@ try {
       assert.equal(await page.getByTestId(`research-tab-${tab}`).getAttribute('aria-selected'), 'true');
     });
   }
+  await check('synthetic long-task authorization is reviewable, shared across views and revocable', async () => {
+    await page.getByTestId('research-tab-overview').click();
+    await page.getByTestId('research-permissions-edit').click();
+    await page.getByTestId('research-permissions-task').fill('完成合成样例的核对、记录未定项并整理结论；仅用于界面测试。');
+    await page.getByTestId('research-permissions-duration').selectOption('48');
+    await page.getByTestId('research-permissions').scrollIntoViewIfNeeded();
+    await screenshot('14a-task-authorization-editor-1440');
+    await page.getByTestId('research-permissions-save').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-permissions-status"]')?.textContent?.includes('生效中'));
+    assert.equal(await page.getByTestId('research-permissions-editor').count(), 0);
+    assert.match(await page.getByTestId('research-permissions').innerText(), /模拟/);
+    await page.getByTestId('research-permissions').scrollIntoViewIfNeeded();
+    await screenshot('14-task-authorization-1440');
+    await page.getByTestId('workspace-view-agents').click();
+    await page.getByTestId('workspace-view-workbench').click();
+    assert.match(await page.getByTestId('research-permissions-status').innerText(), /生效中/);
+    await page.getByTestId('research-permissions-revoke').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-permissions-status"]')?.textContent?.includes('撤销'));
+    await page.getByTestId('research-tab-workflow').click();
+  });
   await check('intake drawer retains its page and closes with Escape', async () => {
     await page.getByRole('button', { name: '资料接入与项目设置', exact: true }).click();
     await page.getByRole('dialog', { name: '资料接入与项目设置' }).waitFor();

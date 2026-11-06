@@ -85,9 +85,9 @@ export function projectExecutionOrigin(
   if (provenance) {
     return {
       kind: "lead-agent-created",
-      label: "Lead 会话创建",
+      label: "Agent 会话创建",
       creatorSessionId: provenance.creatorSessionId,
-      creatorLabel: "主agent",
+      creatorLabel: "父会话",
       role: provenance.role,
       provenance,
     };
@@ -101,6 +101,15 @@ export function projectExecutionOrigin(
       ...(workflowParentSessionId ? { creatorSessionId: workflowParentSessionId } : {}),
       creatorLabel: "工作流",
       role: row.role,
+    };
+  }
+  // A native parent execution is also direct ancestry evidence when provenance
+  // is unavailable (for example while the session metadata request is loading).
+  if (row.kind === "pi-session" && row.parentExecutionId && row.parentExecutionId !== row.id) {
+    return {
+      kind: "lead-agent-created", label: "Agent 会话创建",
+      creatorSessionId: row.parentExecutionId.startsWith("session-") ? row.parentExecutionId.slice(8) : row.parentExecutionId,
+      creatorLabel: "父会话", role: row.role,
     };
   }
   return { kind: "user-created", label: "用户创建", creatorLabel: "用户", role: row.role };

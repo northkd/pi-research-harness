@@ -246,8 +246,8 @@ test('SDK adapter registers the real hook names and unverified sessions write no
     registerTool(tool) { tools.push(tool); },
     registerCommand() {},
   });
-  for (const name of ['before_agent_start', 'tool_call', 'tool_result', 'agent_settled']) assert.ok(handlers.has(name), name);
-  assert.deepEqual(tools.map(tool => tool.name).sort(), ['research_loop', 'research_session']);
+  for (const name of ['before_agent_start', 'tool_call', 'tool_result', 'agent_settled', 'agent_end']) assert.ok(handlers.has(name), name);
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ['research_dispatch', 'research_loop', 'research_session']);
   for (const name of ['input', 'context', 'tool_execution_end']) assert.ok(handlers.has(name), name);
 
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'stage-hook-'));
@@ -261,5 +261,6 @@ test('SDK adapter registers the real hook names and unverified sessions write no
   handlers.get('tool_call')({ toolCallId: 't1', toolName: 'bash', input: { command: 'python train.py' } }, ctx);
   handlers.get('tool_result')({ toolCallId: 't1', toolName: 'bash', input: {}, isError: false }, ctx);
   await handlers.get('agent_settled')({ aborted: false }, ctx);
+  await handlers.get('agent_end')({}, ctx);
   assert.equal(fs.existsSync(path.join(root, '.pi')), false);
 });

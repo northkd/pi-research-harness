@@ -136,7 +136,9 @@ export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.home
     }
   } catch {}
 
-  return { sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, budget, memory };
+  const researchSession = meta.researchSession ?? meta.pluginRefs?.['res-workflow']?.researchSession;
+  const collaborator = object(researchSession) && researchSession.schema === 'pi-research-session.v1' && researchSession.workflowCwd === cwd && researchSession.charterHash === hash && researchSession.adoptionId === adoptionId && ID.test(researchSession.parentSessionId ?? '');
+  return { ...(collaborator ? { researchSession: { parentSessionId: researchSession.parentSessionId, spawnToken: researchSession.spawnToken, depth: researchSession.depth, role: researchSession.role, declaredTasks: researchSession.tasks?.length ?? 0 } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, budget, memory };
 }
 
 export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?? {}, options = {}) {

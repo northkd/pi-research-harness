@@ -885,7 +885,7 @@ export interface PathYoloRequestMessage {
 export interface PathYoloResultMessage {
   type: "path_yolo_result";
   requestId: string;
-  verdict: "auto-allow" | "refused" | "decline";
+  verdict: "auto-allow" | "refused" | "task-blocked" | "decline";
 }
 
 /**

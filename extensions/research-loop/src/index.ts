@@ -15,6 +15,7 @@ import { readWorkbenchRecordContext, registerWorkbenchContext } from './workbenc
 import { observeStageTurn } from './stage-observer.mjs';
 import { registerDelegationPolicy } from './delegation-policy.mjs';
 import { registerWorkbenchSessionTool } from './workbench-session-tool.mjs';
+import { registerWorkbenchDispatchTool } from './workbench-dispatch-tool.mjs';
 import { recordStageTaskSummary } from './stage-task-summary.mjs';
 import {
   buildRoundPrompt, gateReview, readMemory, readTrace, recordRound, reviewDir,
@@ -277,6 +278,7 @@ function dispatchHint(cwd: string, state: any, packet: any) {
 export default function registerResearchLoop(pi: ExtensionAPI) {
   registerWorkbenchContext(pi);
   registerWorkbenchSessionTool(pi);
+  registerWorkbenchDispatchTool(pi);
   registerDelegationPolicy(pi, { isJoined: (ctx: any) => {
     try { return Boolean(readWorkbenchRecordContext(ctx)); } catch { return false; }
   } });

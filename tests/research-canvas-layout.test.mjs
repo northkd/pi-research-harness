@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { layoutOverview, layoutFocusedSession, fitGraph, zoomGraphAt } from '../patches/dashboard-v0.20/overlay/packages/client/src/components/research/research-agent-canvas-layout.ts';
+import { layoutOverview, layoutSessionHierarchy, resolveSessionParents, layoutFocusedSession, fitGraph, zoomGraphAt } from '../patches/dashboard-v0.20/overlay/packages/client/src/components/research/research-agent-canvas-layout.ts';
 const overlap=(a,b)=>a.x<b.x+b.width&&b.x<a.x+a.width&&a.y<b.y+b.height&&b.y<a.y+a.height;
 test('large overviews retain every unique session and do not overlap',()=>{
  const ids=Array.from({length:32},(_,i)=>`session-${i}`),scene=layoutOverview(ids);
@@ -34,4 +34,37 @@ test('focused branches stack vertically in narrow split panes',()=>{
  assert.ok(scene.width<=350);
  assert.ok(scene.children.every(node=>node.y>=scene.parent.y+scene.parent.height));
  assert.equal(overlap(scene.children[0],scene.children[1]),false);
+});
+
+test('real session ancestry lays out parent, child, grandchild without turning handoffs into parentage',()=>{
+ const ids=['child','unrelated','grandchild','root'];
+ const relations=[{fromExecutionId:'root',toExecutionId:'child',kind:'dispatch'}, {fromExecutionId:'child',toExecutionId:'grandchild',kind:'dispatch'}, {fromExecutionId:'unrelated',toExecutionId:'root',kind:'handoff'}];
+ const parents=resolveSessionParents(ids,relations);
+ assert.equal(parents.get('child'),'root');assert.equal(parents.get('grandchild'),'child');assert.equal(parents.has('root'),false);
+ for(const viewport of [320,1200]) {
+  const scene=layoutSessionHierarchy(ids,parents,viewport), byId=new Map(scene.nodes.map(n=>[n.id,n]));
+  assert.equal(byId.get('root').depth,0);assert.equal(byId.get('child').depth,1);assert.equal(byId.get('grandchild').depth,2);
+  assert.ok(byId.get('root').y<byId.get('child').y&&byId.get('child').y<byId.get('grandchild').y);
+  for(let i=0;i<scene.nodes.length;i++)for(let j=i+1;j<scene.nodes.length;j++)assert.equal(overlap(scene.nodes[i],scene.nodes[j]),false);
+  assert.ok(scene.nodes.every(n=>n.x+n.width<=scene.width&&n.y+n.height<=scene.height));
+ }
+});
+test('missing, conflicting and cyclic session ancestry never invents a parent',()=>{
+ const parents=resolveSessionParents(['a','b','c','d'],[
+  {fromExecutionId:'missing',toExecutionId:'a',kind:'dispatch'},
+  {fromExecutionId:'a',toExecutionId:'b',kind:'dispatch'},
+  {fromExecutionId:'b',toExecutionId:'a',kind:'dispatch'},
+  {fromExecutionId:'a',toExecutionId:'c',kind:'dispatch'},
+  {fromExecutionId:'d',toExecutionId:'c',kind:'dispatch'},
+ ]);
+ assert.equal(parents.size,0);
+});
+test('expanded execution rounds have their own collision-free in-canvas positions on desktop and mobile',()=>{
+ for(const viewport of [320,800,1440]) {
+  const scene=layoutFocusedSession('parent',['a','b','c'],viewport,{roleId:'b',executionIds:['run-1','run-2','run-3','run-4']});
+  assert.equal(scene.executions.length,4);
+  const all=[scene.parent,...scene.children,...scene.executions];
+  for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++)assert.equal(overlap(all[i],all[j]),false);
+  assert.ok(all.every(n=>n.x+n.width<=scene.width&&n.y+n.height<=scene.height));
+ }
 });

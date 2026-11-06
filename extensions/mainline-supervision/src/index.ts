@@ -4,6 +4,8 @@ import { prepareCapture, capturePreview, publishCapture } from './capture.mjs';
 import { autoApproveDefault, autoApproveExplicitlyDisabled, readAutoApproveState, writeAutoApproveState } from './auto-approve.mjs';
 import { REVIEW_SCHEMA, validReview, operationDecision, humanChannel, validateLocalOperation, digest, operationLeaves, permissionSnapshot, needsResource, observationTool } from './policy.mjs';
 export { REVIEW_SCHEMA, validReview } from './policy.mjs';
+import { readTaskPermissionContext, recordTaskPermissionContextBlock } from '../../research-loop/src/task-permission-context.mjs';
+import { taskPermissionAllowsOperation, taskPermissionGuidance } from '../../research-loop/src/task-permissions.mjs';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -451,6 +453,25 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     const decision = operationDecision(store, s, event);
     if (!decision.allow && decision.confirmable) {
       const targetUI = callCtx?.ui ?? ctx?.ui;
+      // A confirmed task profile supersedes only repetitive supervisor confirmations.
+      // Hard policy denials above and the resource gate below remain authoritative.
+      const taskContext = (options.readTaskPermissionContext ?? readTaskPermissionContext)(callCtx ?? ctx);
+      if (taskContext?.unavailable) return deny('任务授权记录不可核实，未自动批准本次操作；请检查授权状态，继续其他独立工作。');
+      const taskProfile = taskContext?.profile;
+      if (taskProfile && taskProfile.status !== 'unconfigured') {
+        const permitted = !autoApproveExplicitlyOff && taskPermissionAllowsOperation(taskProfile, event);
+        if (!permitted) {
+          const code = autoApproveExplicitlyOff ? 'auto-approve-disabled' : taskProfile.status === 'active' ? 'operation-out-of-scope' : `authorization-${taskProfile.status}`;
+          recordTaskPermissionContextBlock(taskContext, code, event.toolName);
+          return deny(`长任务授权未覆盖本次操作（${code}）；已记录阻塞，不等待交互审批。继续可执行的独立工作，并在结果中说明需要补齐的条件。`);
+        }
+        if (operationLeaves(event).some(needsResource) && !store.resourceGate().ok) {
+          recordTaskPermissionContextBlock(taskContext, 'resource-budget-unavailable', event.toolName);
+          return deny('当前资源门槛不满足；任务授权不扩大计算预算，已记录阻塞。');
+        }
+        capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+        return undefined;
+      }
       if (autoApprove) {
         if (operationLeaves(event).some(needsResource) && !store.resourceGate().ok) return deny('当前资源门槛不满足，未启动新执行。');
         capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
@@ -510,12 +531,22 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     ctx = startCtx;
     try { ensureCwd(startCtx.cwd); update(); } catch { captureFault = true; }
     let current: any; try { current = state(); } catch { current = { enabled: true, reviewHealth: { status: 'BLIND_SPOT' } }; }
+    let taskPrompt: string | undefined;
+    try {
+      const taskContext = (options.readTaskPermissionContext ?? readTaskPermissionContext)(startCtx);
+      if (taskContext) {
+        const guidance = taskContext.unavailable ? 'Task preauthorization is unavailable. Do not assume extra access; report the precise blocker and continue independent authorized work.' : taskPermissionGuidance(taskContext.profile);
+        const blockers = taskContext.profile?.blockers ?? [];
+        taskPrompt = `${typeof event.systemPrompt === 'string' ? event.systemPrompt : ''}\n\n${guidance}\nAt task start, map the requested work to these scopes, credentials, paths and existing compute limits. Consolidate genuinely missing prerequisites into one concrete upfront request; do not request permissions already granted. Task permission changes must be saved by the operator in the dashboard, never inferred from model text. Current recorded blockers: ${JSON.stringify(blockers)}`;
+      }
+    } catch { /* A missing research context never invents task authorization. */ }
     const nextGateKey = digest({ core: current?.coreRevision, verdict: current?.lastVerdict, health: current?.reviewHealth?.kind,
       restrictions: current?.branchRestrictions?.filter((r: any) => r.active)?.map((r: any) => r.id), captureFault });
     if (current?.enabled && gateMessageKey !== nextGateKey && (current.blocked || current.pendingChanges || current.lastVerdict && current.lastVerdict !== 'ON_TRACK' || captureFault)) {
       gateMessageKey = nextGateKey;
-      return { message: { customType: 'mainline-supervision-gate', content: `主线监督方向=${current.lastVerdict ?? '未审查'}，科学验收=${current.lastScience?.status ?? 'NOT_ASSESSED'}，审查健康=${current.reviewHealth?.status ?? 'UNREVIEWED'}。不确定、缺证据或故障不冻结项目；已授权低风险研发/短测试补证可继续，保留待审。只暂停有具体证据的限制路径：${JSON.stringify(current.branchRestrictions?.filter((r: any) => r.active)?.map((r: any) => r.paths) ?? [])}；ask_user与人工decision始终可用。原数据/外发/资源/不可逆操作独立硬门禁，主线ON_TRACK不授权发表，不能发布未经支持的结论。证据在同一研究阶段内积累，不因每次改代码/测试返回/收尾而送审；只有真正新计划/方法、范围变化、阶段验收或具体偏移信号，才用checkpoint登记稳定stageId+kind，合并一轮。完成通知/补文件/账本不是新节点，不用turn/时间戳伪造阶段；主agent负责必要节点，无需用户逐次解释。无新material或新研究节点不自动复审。`, display: false, details: { mainlineSupervision: true } } };
+      return { ...(taskPrompt !== undefined ? { systemPrompt: taskPrompt } : {}), message: { customType: 'mainline-supervision-gate', content: `主线监督方向=${current.lastVerdict ?? '未审查'}，科学验收=${current.lastScience?.status ?? 'NOT_ASSESSED'}，审查健康=${current.reviewHealth?.status ?? 'UNREVIEWED'}。不确定、缺证据或故障不冻结项目；已授权低风险研发/短测试补证可继续，保留待审。只暂停有具体证据的限制路径：${JSON.stringify(current.branchRestrictions?.filter((r: any) => r.active)?.map((r: any) => r.paths) ?? [])}；ask_user与人工decision始终可用。原数据/外发/资源/不可逆操作独立硬门禁，主线ON_TRACK不授权发表，不能发布未经支持的结论。证据在同一研究阶段内积累，不因每次改代码/测试返回/收尾而送审；只有真正新计划/方法、范围变化、阶段验收或具体偏移信号，才用checkpoint登记稳定stageId+kind，合并一轮。完成通知/补文件/账本不是新节点，不用turn/时间戳伪造阶段；主agent负责必要节点，无需用户逐次解释。无新material或新研究节点不自动复审。`, display: false, details: { mainlineSupervision: true } } };
     }
+    if (taskPrompt !== undefined) return { systemPrompt: taskPrompt };
   });
   pi.on('session_shutdown', () => {
     disposed = true; clearInterval(timer); completionOff?.(); completionOff = undefined; readyOff();

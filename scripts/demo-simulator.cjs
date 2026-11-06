@@ -69,15 +69,19 @@
       ['DEMO:sub1', 'DEMO:main', 'research-mainline-supervisor', '【模拟】检查研究目标和阶段依赖。'],
       ['DEMO:sub2', 'DEMO:main', 'research-theory', '【模拟】列出假设与适用条件。'],
       ['DEMO:sub3', 'DEMO:literature', 'research-literature', '【模拟】整理虚构文献线索。'],
-      ['DEMO:sub4', 'DEMO:literature', 'research-explorer', '【模拟】比较候选方案。'],
+      ['DEMO:sub4', 'DEMO:literature', 'research-literature', '【模拟】独立核对另一组虚构文献，演示同角色叠放与铺开。'],
       ['DEMO:sub5', 'DEMO:experiment', 'research-numerics', '【模拟】检查人工生成的数据表。'],
-      ['DEMO:sub6', 'DEMO:experiment', 'research-theory', '【模拟】解释示例指标。'],
+      ['DEMO:sub6', 'DEMO:experiment', 'research-numerics', '【模拟】独立检查另一组合成指标，演示同角色叠放与铺开。'],
       ['DEMO:sub7', 'DEMO:review', 'research-critic', '【模拟】寻找反例并提出待核验问题。'],
       ['DEMO:sub8', 'DEMO:review', 'research-writer', '【模拟】整理主张与证据摘要。'],
     ];
     const active = Math.max(0, Math.min(8, Number(tick) || 0));
+    // Explicit synthetic lineage: the experiment collaborator creates the
+    // review collaborator. These records demonstrate nesting, never real runs.
+    const parentIds = { 'DEMO:literature': 'DEMO:main', 'DEMO:experiment': 'DEMO:main', 'DEMO:review': 'DEMO:experiment' };
     const parents = parentSpecs.map(([id, role, prompt], index) => ({
       id, kind: 'pi-session', role, status: index === 0 ? 'idle' : (active >= index * 2 ? 'completed' : 'waiting'),
+      ...(parentIds[id] ? { parentExecutionId: parentIds[id] } : {}),
       prompt, output: '【模拟】这是预设的展示内容，没有实际模型调用。', observedModel: 'DEMO/本地模拟（未调用）',
       startedAt: now, lastActivityAt: now,
     }));
@@ -91,7 +95,10 @@
     const relations = children.map((child, index) => ({
       id: `DEMO:edge-${index + 1}`, fromExecutionId: child.parentExecutionId, toExecutionId: child.id,
       kind: 'dispatch', evidence: { source: 'explicit-record', eventId: `DEMO:dispatch-${index + 1}` },
-    }));
+    })).concat(parents.filter(parent => parent.parentExecutionId).map((parent, index) => ({
+      id: `DEMO:collaborator-edge-${index + 1}`, fromExecutionId: parent.parentExecutionId, toExecutionId: parent.id,
+      kind: 'dispatch', evidence: { source: 'explicit-record', eventId: `DEMO:collaborator-dispatch-${index + 1}` },
+    })));
     return {
       schema: 'res-workflow.workbench-observation.v1', cwd, adoptionId: DEMO_ID,
       charterHash: await sha256(JSON.stringify(charter)), revision: 'sha256:' + 'd'.repeat(64),
@@ -110,9 +117,15 @@
         { id: 'DEMO-G2', cwd, objective: '【模拟】建立可查看的主张与证据链', status: 'achieved', criteria: [{ text: '【模拟】登记三条示例主张', done: true }], budget: { maxTurns: 6 }, autoRespawn: false, sessionIds: [], createdAt: now, updatedAt: now },
       ];
     };
-    const state = { tick: 0, charter: null, budget: { attempts: 24, modelRequests: 12 }, revision: 1, goals: initialGoals() };
+    const state = { tick: 0, charter: null, budget: { attempts: 24, modelRequests: 12 }, revision: 1, goals: initialGoals(), permissions: null };
     const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
     const budget = () => ({ cwd, revision: `DEMO-${state.revision}`, limits: { ...state.budget }, usage: { attempts: 7, modelRequests: 0, inFlight: 0, unknown: 0 }, updatedAt: new Date().toISOString(), enforcement: { attempts: false, modelRequests: false, scope: 'native-research-workflow', physicalTransport: 'sse-http' } });
+    const permissions = async () => ({
+      cwd, charterHash: await sha256(JSON.stringify(state.charter ?? {})), revision: null, status: 'unconfigured', task: '',
+      capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: false },
+      additionalRoots: [], durationHours: 24, authorizedAt: null, expiresAt: null,
+      inheritance: 'joined-workbench-descendants', blockers: [], ...(state.permissions ?? {}),
+    });
     const fakeSnapshot = async (response) => {
       if (!response.ok) return response;
       const data = await response.clone().json();
@@ -161,6 +174,20 @@
       if (method !== 'GET' && method !== 'HEAD') {
         let body = {};
         try { body = JSON.parse(typeof init.body === 'string' ? init.body : '{}'); } catch { /* fail closed */ }
+        if (url.pathname === '/api/res-workflow/task-permissions' && body.cwd === cwd && body.confirmed === true) {
+          const previous = await permissions();
+          if (body.expectedRevision !== previous.revision) return json({ code: 'task-permissions-revision-conflict' }, 409);
+          if (body.action === 'revoke') {
+            state.permissions = { ...previous, status: 'revoked', revision: globalThis.crypto.randomUUID() };
+          } else if (body.action === 'authorize' && typeof body.task === 'string' && body.task.trim()
+            && [12, 24, 48, 72].includes(body.durationHours) && body.capabilities && Array.isArray(body.additionalRoots)) {
+            state.permissions = { ...previous, status: 'active', revision: globalThis.crypto.randomUUID(),
+              task: `【模拟】${body.task.trim()}`, capabilities: body.capabilities, additionalRoots: body.additionalRoots,
+              durationHours: body.durationHours, authorizedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + body.durationHours * 3600000).toISOString() };
+          } else return json({ code: 'task-permissions-invalid' }, 400);
+          notify('已更新模拟任务授权；真实权限与运行任务没有改变。');
+          return json(await permissions());
+        }
         if (url.pathname === '/api/res-workflow/research-budget' && body.cwd === cwd
           && Number.isSafeInteger(body.limits?.attempts) && body.limits.attempts >= 0
           && Number.isSafeInteger(body.limits?.modelRequests) && body.limits.modelRequests >= 0) {
@@ -175,6 +202,7 @@
         return json({ success: false, error: '演示模式：真实操作已阻止' }, 403);
       }
       if (url.pathname === '/api/res-workflow/research-budget' && isDemo) return json(budget());
+      if (url.pathname === '/api/res-workflow/task-permissions' && isDemo) return json(await permissions());
       if (url.pathname === '/api/res-workflow/workbench-sync' && isDemo) {
         if (!state.charter) {
           const source = await upstream(`${origin}/api/res-workflow?cwd=${encodeURIComponent(cwd)}`, { method: 'GET' });
@@ -187,7 +215,7 @@
       if (url.pathname === '/api/res-workflow' && isDemo) return fakeSnapshot(response);
       return response;
     };
-    return { fetch: wrapped, state, step() { state.tick = Math.min(8, state.tick + 1); refresh(); }, reset() { state.tick = 0; state.budget = { attempts: 24, modelRequests: 12 }; state.goals = initialGoals(); state.revision++; refresh(); } };
+    return { fetch: wrapped, state, step() { state.tick = Math.min(8, state.tick + 1); refresh(); }, reset() { state.tick = 0; state.budget = { attempts: 24, modelRequests: 12 }; state.goals = initialGoals(); state.permissions = null; state.revision++; refresh(); } };
   }
 
   function parseDemoEntry(href) {

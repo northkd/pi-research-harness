@@ -32,7 +32,7 @@ export function detectDelegationTools(selectedTools) {
     return {
       known: false, available: false, families: [], selectedTools: [],
       piSubagents: false, tintinAgent: false, tintinWorkflow: false,
-      enableOnly: false, researchSession: false,
+      enableOnly: false, researchSession: false, researchDispatch: false,
     };
   }
   const has = name => names.includes(name);
@@ -40,15 +40,17 @@ export function detectDelegationTools(selectedTools) {
   const tintinAgent = has('Agent');
   const tintinWorkflow = has('SubagentWorkflow');
   const researchSession = has('research_session');
+  const researchDispatch = has('research_dispatch');
   const families = [];
   if (piSubagents) families.push('pi-subagents');
   if (tintinAgent) families.push('tintinweb-agent');
   if (tintinWorkflow) families.push('tintinweb-workflow');
   if (researchSession) families.push('research-session');
+  if (researchDispatch) families.push('research-dispatch');
   const enableOnly = families.length === 0 && has('subagents_enable');
   return {
     known: true,
-    available: piSubagents || tintinAgent || tintinWorkflow,
+    available: piSubagents || tintinAgent || tintinWorkflow || researchSession || researchDispatch,
     families,
     selectedTools: names,
     piSubagents,
@@ -56,6 +58,7 @@ export function detectDelegationTools(selectedTools) {
     tintinWorkflow,
     enableOnly,
     researchSession,
+    researchDispatch,
   };
 }
 
@@ -133,10 +136,9 @@ export function mergeDelegationRestrictions(previous, text) {
   );
 }
 
-/** Child sessions and explicit opt-outs never receive proactive delegation. */
+/** Explicit opt-outs disable advice; child status alone is not an opt-out. */
 export function delegationPolicyDisabled(env = process.env) {
   const value = env ?? {};
-  if (value.PI_SUBAGENT_CHILD === '1') return true;
   if (value.PI_RESEARCH_DISABLE_DELEGATION === '1') return true;
   return /^(?:0|off|false|no|disabled)$/i.test(String(value.PI_RESEARCH_DELEGATION_POLICY ?? ''));
 }
@@ -147,6 +149,7 @@ function familySummary(caps) {
   if (caps.tintinAgent) labels.push('@tintinweb `Agent`');
   if (caps.tintinWorkflow) labels.push('@tintinweb `SubagentWorkflow`');
   if (caps.researchSession) labels.push('`research_session`');
+  if (caps.researchDispatch) labels.push('`research_dispatch`');
   return labels.join(', ');
 }
 
@@ -195,12 +198,13 @@ export function buildDelegationGuidance({ selectedTools, restrictions, env } = {
     '- For pi-subagents, put `agent` and `task` at the top level and other controls under `options`; do not use the old `subagent(agentName, prompt)` form. Check the actual agent/workflow list before naming one.',
     '- Give each child a bounded question, expected output, and evidence paths. Never ask a child to run model training/serving or other unauthorized or unbudgeted model work.',
     '- Keep the lead context small: request a short conclusion plus file paths, then verify key claims yourself; do not import full child transcripts or dumps.',
-    '- Only this lead session may delegate; never instruct a child to spawn more agents.',
-    `- Direct read/grep/find/ls/bash remain available and are never blocked; use them to recover or verify.${restriction.readOnly ? ' In read-only mode, use only read-only commands and do not modify files.' : ''}`,
+    '- Collaborators may recursively delegate separable work inside the same owner, workspace, charter and permission scope. Respect installed depth, role and shared task budgets; SSH, agy and supervisor roles remain leaves.',
+    `- Use read/grep/find/ls for planning and verification. Managed collaborators must declare a plan or an indivisible-task reason before bulk work; coordinators wait for child receipts before completion.${restriction.readOnly ? ' In read-only mode, use only read-only commands and do not modify files.' : ''}`,
   );
   if (caps.researchSession) {
-    lines.push('- `research_session` is active for top-level multi-agent session creation. Inspect its actual schema before use; do not assume child-delegation fields.');
+    lines.push('- `research_session` is active for independent Pi processes with real parent links. Supply tasks when a collaborator receives several jobs; the server automatically dispatches that structured list.');
   }
+  if (caps.researchDispatch) lines.push('- `research_dispatch` executes a declared DAG immediately, enforces dependencies and concurrency, and records child reports. Use stable planId on retries. For indivisible work record atomic with a reason; never substitute prose for an execution receipt.');
   return lines.join('\n');
 }
 

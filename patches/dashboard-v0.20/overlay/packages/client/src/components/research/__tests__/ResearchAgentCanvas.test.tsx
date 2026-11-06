@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ResearchAgentCanvas } from '../ResearchAgentCanvas.js';
 import type { ResearchExecution } from '../research-projection.js';
@@ -84,4 +84,52 @@ describe('research collaboration canvas', () => {
     expect(screen.getAllByTestId('canvas-role-node')).toHaveLength(4);
     expect(screen.getAllByText(/观测已过期/).length).toBeGreaterThan(0);
   });
+});
+
+describe('recorded hierarchy and inline spreading', () => {
+ it('shows nested collaborators beneath their real creator, with parent navigation', () => {
+  const clusters=makeClusters(3),relations=[
+   {id:'a',fromExecutionId:'p-0',toExecutionId:'p-1',kind:'dispatch' as const,evidence:{source:'explicit-record' as const,eventId:'spawn-a'}},
+   {id:'b',fromExecutionId:'p-1',toExecutionId:'p-2',kind:'dispatch' as const,evidence:{source:'explicit-record' as const,eventId:'spawn-b'}},
+  ];
+  render(<ResearchAgentCanvas clusters={clusters} relations={relations} stale={false} onAgent={vi.fn()} statusLabel={label} roleLabel={label} />);
+  expect(screen.getAllByTestId('canvas-parent-edge')).toHaveLength(2);
+  expect(screen.getByRole('button',{name:'聚焦研究会话 2'}).getAttribute('data-depth')).toBe('2');
+  expect(screen.getByRole('button',{name:'聚焦研究会话 2'}).textContent).toContain('创建者：研究会话 1');
+  fireEvent.click(screen.getByRole('button',{name:'聚焦研究会话 2'}));
+  fireEvent.click(screen.getByRole('button',{name:'返回创建者 研究会话 1'}));
+  expect(screen.getByRole('button',{name:'查看 研究会话 1 会话详情'})).toBeTruthy();
+ });
+ it('uses explicit execution parents and keeps an unloaded creator distinct from user-created roots', () => {
+  const clusters=makeClusters(3);
+  clusters[1].sessionExec.parentExecutionId='p-0';
+  clusters[2].sessionExec.parentExecutionId='unloaded-parent';
+  render(<ResearchAgentCanvas clusters={clusters} stale={false} onAgent={vi.fn()} statusLabel={label} roleLabel={label} />);
+  expect(screen.getAllByTestId('canvas-parent-edge')).toHaveLength(1);
+  expect(screen.getByRole('button',{name:'聚焦研究会话 1'}).getAttribute('data-parent-id')).toBe('p-0');
+  const detached=screen.getByRole('button',{name:'聚焦研究会话 2'});
+  expect(detached.textContent).toContain('父会话未载入');
+  expect(detached.textContent).not.toContain('我创建的');
+ });
+ it('spreads repeated runs inside the existing canvas, keeps details and collapses with Escape', () => {
+  const clusters=makeClusters(1), group=clusters[0].childRoleGroups[0], onAgent=vi.fn();
+  group.executions=[group.latest,{...group.latest,id:'earlier-run',status:'completed',prompt:'Earlier independent work'}];
+  render(<ResearchAgentCanvas clusters={clusters} stale={false} onAgent={onAgent} statusLabel={label} roleLabel={label} />);
+  fireEvent.click(screen.getByRole('button',{name:'聚焦研究会话 0'}));
+  const role=screen.getByRole('button',{name:/展开 role-0 的 2 轮执行/});
+  expect(role.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(role);
+  const viewport=screen.getByTestId('research-canvas-viewport');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(within(viewport).getAllByRole('button',{name:/查看 role-0 第 .* 轮详情/})).toHaveLength(2);
+  expect(role.getAttribute('aria-expanded')).toBe('true');
+  fireEvent.click(within(viewport).getByRole('button',{name:'查看 role-0 第 1 轮详情'}));
+  expect(onAgent).toHaveBeenLastCalledWith(group.roleObj,group.executions[1]);
+  fireEvent.keyDown(role,{key:'Escape'});
+  expect(role.getAttribute('aria-expanded')).toBe('false');
+  expect(document.activeElement).toBe(role);
+  expect(within(viewport).queryByRole('button',{name:'查看 role-0 第 1 轮详情'})).toBeNull();
+  fireEvent.click(role);fireEvent.click(screen.getByRole('button',{name:'收起执行卡片'}));
+  expect(role.getAttribute('aria-expanded')).toBe('false');
+ });
 });

@@ -186,12 +186,22 @@ describe("three origins and real dispatch edges", () => {
     );
     expect(lead).toMatchObject({
       kind: "lead-agent-created", role: "literature",
-      creatorSessionId: "lead-session", creatorLabel: "主agent",
+      creatorSessionId: "lead-session", creatorLabel: "父会话",
     });
     const workflow = projectExecutionOrigin(execution("session-stage", "stage"), { id: "stage", via: "spawn" }, "lead-session");
     expect(workflow).toMatchObject({ kind: "workflow-created", creatorSessionId: "lead-session", creatorLabel: "工作流" });
     const user = projectExecutionOrigin(execution("session-user", "user"), { id: "user" });
     expect(user).toMatchObject({ kind: "user-created", creatorLabel: "用户" });
+  });
+
+  it("recognizes a native session parent without assuming that every creator is the lead", () => {
+    const child = projectExecutionOrigin(execution("session-review", "review", { parentExecutionId: "session-experiment" }));
+    expect(child).toMatchObject({ kind: "lead-agent-created", creatorSessionId: "experiment", creatorLabel: "父会话" });
+    expect(child.label).not.toContain("Lead");
+    const nested = projectExecutionOrigin(execution("session-review", "review"), {
+      id: "review", researchSession: { ...provenance, parentSessionId: "experiment", creatorSessionId: "experiment" },
+    });
+    expect(nested.creatorSessionId).toBe("experiment");
   });
 
   it("maps provenance session ids to actual workbench execution ids and omits missing endpoints", () => {

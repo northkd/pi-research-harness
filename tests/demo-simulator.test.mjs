@@ -19,7 +19,10 @@ test('the simulated collaboration graph satisfies the dashboard contract', async
   assert.equal(isResearchWorkbenchObservation(observation), true);
   assert.equal(observation.executions.filter((entry) => entry.kind === 'pi-session').length, 4);
   assert.equal(observation.executions.filter((entry) => entry.kind === 'native-subagent').length, 8);
-  assert.equal(observation.relations.length, 8);
+  assert.equal(observation.relations.length, 11);
+  assert.equal(observation.executions.find(entry => entry.id === 'DEMO:review').parentExecutionId, 'DEMO:experiment');
+  assert.ok(observation.relations.some(edge => edge.fromExecutionId === 'DEMO:experiment' && edge.toExecutionId === 'DEMO:review'));
+  assert.equal(observation.executions.filter(entry => entry.parentExecutionId === 'DEMO:literature' && entry.role === 'research-literature').length, 2);
   assert.ok(observation.executions.some((entry) => entry.kind === 'native-subagent' && entry.stage === '3-review'));
   assert.ok(observation.executions.every((entry) => entry.prompt.includes('模拟')));
   assert.equal(observation.observedUsage.responses, 0);
@@ -61,6 +64,20 @@ test('demo mode blocks real mutations and simulates only the demo project', asyn
   const changedBudget = await (await runtime.fetch('/api/res-workflow/research-budget', { method: 'POST', body: JSON.stringify({ cwd, limits: { attempts: 18, modelRequests: 9 } }) })).json();
   assert.deepEqual(changedBudget.limits, { attempts: 18, modelRequests: 9 });
   assert.equal(calls.length, before);
+  const permissionUrl = '/api/res-workflow/task-permissions';
+  const initialPermissions = await (await runtime.fetch(permissionUrl + '?cwd=' + encodeURIComponent(cwd))).json();
+  assert.equal(initialPermissions.status, 'unconfigured');
+  const grant = { cwd, expectedRevision: null, requestId: 'demo-grant-1', action: 'authorize', confirmed: true,
+    task: '查看合成数据', capabilities: initialPermissions.capabilities, durationHours: 48, additionalRoots: [] };
+  const approved = await (await runtime.fetch(permissionUrl, { method: 'POST', body: JSON.stringify(grant) })).json();
+  assert.equal(approved.status, 'active');
+  assert.match(approved.task, /模拟/);
+  assert.equal((await runtime.fetch(permissionUrl, { method: 'POST', body: JSON.stringify(grant) })).status, 409);
+  assert.equal((await runtime.fetch(permissionUrl, { method: 'POST', body: JSON.stringify({ ...grant, cwd: '/tmp/other-project' }) })).status, 403);
+  const revoked = await (await runtime.fetch(permissionUrl, { method: 'POST', body: JSON.stringify({ cwd, expectedRevision: approved.revision,
+    requestId: 'demo-revoke-1', confirmed: true, action: 'revoke' }) })).json();
+  assert.equal(revoked.status, 'revoked');
+  assert.equal(calls.length, before, 'synthetic grants must never reach real authorization APIs');
   const goalUrl = '/api/folders/goals?cwd=' + encodeURIComponent(cwd);
   const goals = await (await runtime.fetch(goalUrl)).json();
   assert.equal(goals.success, true);

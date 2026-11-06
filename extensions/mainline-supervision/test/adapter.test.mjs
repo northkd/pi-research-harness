@@ -1,10 +1,15 @@
-// All tests below are MOCK bus/UI/core tests. No provider/model is called.
+// Bus/UI tests use a mock core unless explicitly marked DISK. No provider/model is called.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { MockStore } from './mock-core.mjs';
+import { MainlineStore } from '../src/core.mjs';
+import { createHash } from 'node:crypto';
+import { charterHash } from '../../research-loop/src/adoption.mjs';
+import { readTaskPermissionContext } from '../../research-loop/src/task-permission-context.mjs';
+import { updateTaskPermissions } from '../../research-loop/src/task-permissions.mjs';
 import { autoApproveStatePath, writeAutoApproveState } from '../src/auto-approve.mjs';
 import { loadAdapter } from '../scripts/host-env.mjs';
 const imported = await loadAdapter();
@@ -33,7 +38,8 @@ function harness(t, options = {}) {
     }
   });
   if (options.prepare) options.prepare(cwd);
-  createMainlineAdapter(pi, { Store: MockStore, env: options.env ?? {}, autoApprove: options.autoApprove });
+  const Store = options.Store ?? MockStore;
+  createMainlineAdapter(pi, { Store, env: options.env ?? {}, autoApprove: options.autoApprove, readTaskPermissionContext: options.readTaskPermissionContext });
   const fire = (name, event = {}) => hooks.get(name)?.(event, ctx);
   if (!options.skipSessionStart) fire('session_start');
   const act = p => tool.execute('call', p, null, null, ctx);
@@ -41,7 +47,7 @@ function harness(t, options = {}) {
   const configure = (authorized = true) => act({ action: 'configure', coreText: 'Synthetic frozen core: implement plan step.', approvedPaths: ['plan.md'], authorized });
   const complete = (overrides = {}) => { const a = new MockStore(cwd).getState().reviewActivity; bus.emit('subagent:async-complete', { id: a.runId, runId: a.runId, sessionId: 'parent-1', state: 'complete', success: true, toolCallId: 'rpc-spawn-' + a.requestId, results: [{ agent: 'research-mainline-supervisor', success: true, structuredOutput: GOOD }], ...overrides }); };
   t.after(() => { fire('session_shutdown'); if (!options.cwd) fs.rmSync(cwd, { recursive: true, force: true }); });
-  return { cwd, ctx, hooks, fire, requests, bus, act, actAt, configure, complete, messages, statuses, confirms, notices, get: () => new MockStore(cwd).getState(), command };
+  return { cwd, ctx, hooks, fire, requests, bus, act, actAt, configure, complete, messages, statuses, confirms, notices, get: () => new Store(cwd).getState(), command };
 }
 test('MOCK authorized capture → detached spawn → exact completion → persistence; foreground end synchronous', async t => {
   const h = harness(t); await h.configure(); await flush(); h.complete(); await flush();
@@ -253,4 +259,76 @@ test('MOCK failed toggle persistence is surfaced in the result and command notic
   const last = h.notices.at(-1);
   assert.equal(last.level, 'error');
   assert.match(last.text, /未保存/);
+});
+
+// These adapter checks mock the supervisor state; the separate task-permissions suite
+// uses real on-disk adoption, session membership, owner and authorization records.
+test('MOCK live task profile avoids repeat dialogs and immediately honors narrowed/revoked scope', async t => {
+  let profile = { status: 'active', cwd: '/', additionalRoots: [], capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: false } };
+  const h = harness(t, { readTaskPermissionContext: () => ({ profile }) });
+  await makeLimited(h);
+  assert.equal(h.fire('tool_call', GATE_BASH), undefined);
+  assert.equal(h.confirms.includes(GATE_TITLE), false);
+  profile = { ...profile, capabilities: { ...profile.capabilities, localExecution: false } };
+  assert.equal(h.fire('tool_call', GATE_BASH)?.block, true);
+  assert.equal(h.confirms.includes(GATE_TITLE), false);
+  profile = { ...profile, status: 'revoked' };
+  assert.match(h.fire('tool_call', GATE_BASH)?.reason, /authorization-revoked/);
+  profile = { ...profile, status: 'expired' };
+  assert.match(h.fire('tool_call', GATE_BASH)?.reason, /authorization-expired/);
+});
+test('MOCK task grant preserves hard denials and explicit operator auto-approval disable', async t => {
+  const context = () => ({ profile: { status: 'active', cwd: '/', additionalRoots: [], capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: true } } });
+  const h = harness(t, { readTaskPermissionContext: context, autoApprove: false });
+  await makeLimited(h);
+  assert.match(h.fire('tool_call', GATE_BASH)?.reason, /auto-approve-disabled/);
+  assert.equal(h.confirms.includes(GATE_TITLE), false);
+  const other = harness(t, { readTaskPermissionContext: context });
+  await makeLimited(other);
+  assert.equal(other.fire('tool_call', { toolName: 'bash', toolCallId: 'hard-deny', input: { command: 'sudo rm -rf /' } })?.block, true);
+});
+
+test('MOCK task startup exposes verified scope, expiry and one upfront prerequisite review', async t => {
+  const profile = { status: 'active', task: 'Finish the synthetic run', cwd: '/workspace/synthetic', expiresAt: '2027-01-01T00:00:00.000Z', additionalRoots: [], blockers: [{ code: 'resource-budget-unavailable', tool: 'research_dispatch' }], capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: false } };
+  const h = harness(t, { readTaskPermissionContext: () => ({ profile }) });
+  const event = h.fire('before_agent_start', { systemPrompt: 'Existing agent instructions', prompt: 'Run the task' });
+  assert.ok(event.systemPrompt.startsWith('Existing agent instructions'));
+  assert.ok(event.systemPrompt.includes(profile.task));
+  assert.ok(event.systemPrompt.includes(profile.expiresAt));
+  assert.ok(event.systemPrompt.includes('one concrete upfront request'));
+  assert.ok(event.systemPrompt.includes('resource-budget-unavailable'));
+  assert.equal(h.confirms.length, 0);
+});
+
+test('DISK a joined workspace receives live task guidance with unconfigured dormant supervision', async t => {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'dormant-task-grant-'));
+  const cwd = path.join(root, 'project'), storeDir = path.join(root, 'grants'), privateDir = path.join(root, 'adoptions');
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const json = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
+  const ownerKey = JSON.stringify(['host', 'inert-operator']);
+  json(path.join(cwd, '.pi/research-loop/state.json'), { schema: 'pi-research-state.v1', charter: { revision: 1, objective: 'Synthetic preflight', successCriteria: ['Deliver measured results'] } });
+  const charter = charterHash(cwd), adoptionId = 'adopt-' + hash(cwd).slice(0, 24), confirmationHash = 'sha256:' + hash('confirmation');
+  const sessionFile = path.join(cwd, 'parent-session.jsonl');
+  fs.writeFileSync(sessionFile, JSON.stringify({ type: 'session', id: 'parent-1', cwd }) + '\n');
+  json(sessionFile.slice(0, -6) + '.meta.json', { resWorkflow: { canonicalCwd: cwd, joinedAt: '2026-01-01T00:00:00.000Z', via: 'adoption' } });
+  const location = path.join(privateDir, hash(ownerKey), hash(cwd));
+  json(path.join(location, 'adopted.json'), { confirmed: true, id: adoptionId, confirmationHash });
+  json(path.join(location, adoptionId + '.json'), { schema: 'pi-res-workflow-operation.v1', ownerKey, cwd, adoption: { id: adoptionId, cwd, status: 'confirmed' } });
+  json(path.join(cwd, '.pi/research-loop/adoptions', adoptionId, 'confirmation.json'), { schema: 'pi-research-adoption-confirmation.v1', adoptionId, confirmationHash, charterHash: charter, autoRun: false });
+  const grant = updateTaskPermissions({ cwd, storeDir, ownerKey, charterHash: charter, action: 'authorize', confirmed: true, expectedRevision: null, requestId: 'dormant-guidance-grant', task: 'Run the synthetic analysis and return its evidence', durationHours: 24, capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: false }, additionalRoots: [] });
+  const h = harness(t, { cwd, Store: MainlineStore, readTaskPermissionContext: ctx => readTaskPermissionContext(ctx, { storeDir, privateDir }) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.equal(h.get().enabled, false);
+  assert.equal(h.get().authorized, false);
+  assert.equal(h.get().coreRevision, 0);
+  assert.equal(readTaskPermissionContext(h.ctx, { storeDir, privateDir })?.profile?.revision, grant.revision);
+  const result = h.fire('before_agent_start', { systemPrompt: 'Original instructions', prompt: 'Begin the analysis' });
+  assert.ok(result.systemPrompt.startsWith('Original instructions'));
+  assert.ok(result.systemPrompt.includes(grant.task));
+  assert.ok(result.systemPrompt.includes(grant.expiresAt));
+  assert.equal(result.message, undefined, 'no supervisor configuration or review is required');
+  assert.equal(h.confirms.length, 0);
+  await flush();
+  assert.equal(h.requests.length, 0, 'preflight does not activate the supervisor or a model');
+  assert.equal(h.get().enabled, false);
 });

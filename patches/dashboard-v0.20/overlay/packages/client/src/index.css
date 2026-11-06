@@ -1629,3 +1629,40 @@ button:not(.rounded-full), input, select, textarea, [role="button"]:not(.rounded
   grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: 0.75rem;
 }
+
+/* Native dashboard scrollbars stay quiet until the scroll region is in use. */
+:root {
+  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 30%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 33%, transparent);
+  --scrollbar-thumb-active: color-mix(in srgb, var(--text-secondary) 68%, transparent);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+*:hover, *:focus-visible { scrollbar-color: var(--scrollbar-thumb-hover) transparent; }
+*::-webkit-scrollbar { width: 7px; height: 7px; }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border: 1px solid transparent; border-radius: 8px; background-clip: padding-box; min-height: 28px; }
+*:hover::-webkit-scrollbar-thumb, *:focus-visible::-webkit-scrollbar-thumb { background-color: var(--scrollbar-thumb-hover); }
+*::-webkit-scrollbar-thumb:active { background-color: var(--scrollbar-thumb-active); }
+@media (prefers-contrast: more) {
+  :root { --scrollbar-thumb: var(--text-tertiary); --scrollbar-thumb-hover: var(--text-secondary); }
+}
+@media (forced-colors: active) {
+  * { scrollbar-color: auto; scrollbar-width: auto; }
+  *::-webkit-scrollbar-thumb { background: ButtonText; }
+}
+
+/* Execution rounds fan out from their role card in the same canvas scene. */
+.research-canvas-scene { transition: transform 260ms cubic-bezier(.2,.8,.2,1); }
+.research-canvas-position { transition: left 260ms cubic-bezier(.2,.8,.2,1), top 260ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease; }
+.research-canvas-execution {
+  transform-origin: left top;
+  transition: left 260ms cubic-bezier(.2,.8,.2,1), top 260ms cubic-bezier(.2,.8,.2,1), transform 260ms cubic-bezier(.2,.8,.2,1), opacity 180ms ease, visibility 0s linear 260ms;
+}
+.research-canvas-execution[data-expanded="false"] { visibility: hidden; opacity: 0; pointer-events: none; transform: scale(.85); }
+.research-canvas-execution[data-expanded="true"] { visibility: visible; opacity: 1; transform: scale(1); transition-delay: 0s; }
+@media (prefers-reduced-motion: reduce) {
+  .research-agent-canvas *, .research-agent-canvas *::before, .research-agent-canvas *::after { animation: none !important; transition: none !important; }
+}

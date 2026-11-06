@@ -15,6 +15,10 @@ const ResearchBudgetControls = lazy(() =>
   import("./ResearchBudgetControls.js").then((module) => ({ default: module.ResearchBudgetControls }))
 );
 
+const ResearchPermissionControls = lazy(() =>
+  import("./ResearchPermissionControls.js").then((module) => ({ default: module.ResearchPermissionControls }))
+);
+
 export const STAGES = [
   { id: "1-idea", label: "Idea Discovery", short: "调研与发散", desc: "文献调研、独立发散、收窄问题", icon: mdiLightbulbOnOutline },
   { id: "2-experiment", label: "Experiment", short: "实验与验证", desc: "最小可判定实验、真实运行与原始输出", icon: mdiFlaskOutline },
@@ -155,6 +159,12 @@ export function ResearchOverviewAndBudget({
             note="控制环版本，非研究阶段"
           />
         </section>
+
+        {adopted ? (
+          <Suspense fallback={<p role="status" className="text-xs text-[var(--text-secondary)]">正在加载任务授权…</p>}>
+            <ResearchPermissionControls cwd={adoptionCwd ?? cwd} connectionGeneration={connectionGeneration} onRefresh={onRefresh} />
+          </Suspense>
+        ) : <p className="text-xs text-[var(--text-secondary)]" data-testid="research-permissions-unavailable">确认并接入当前研究约定后，可设置长任务执行授权。</p>}
 
         {/* Research Budget Integration */}
         {adopted && (

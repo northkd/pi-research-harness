@@ -14,8 +14,9 @@ import { extractTurnStats, type StatsData } from "@blackbelt-technology/pi-dashb
 import { usageToTotals } from "@blackbelt-technology/pi-dashboard-shared/usage-totals.js";
 import type { DashboardSession, NotifyLogEntry } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { createAgentConfirmRegistry } from "./access/agent-confirm-registry.js";
-import { handlePathGateRefusal, handlePathYoloRequest } from "./access/agent-yolo.js";
+import { handlePathGateRefusal } from "./access/agent-yolo.js";
 import { recordRefusal } from "./access/refusal-ledger.js";
+import { handleResearchTaskPathRequest } from "./res-workflow/research-task-path-handler.js";
 import { handlePathGrantRequest } from "./access/agent-grant.js";
 import { announceableGrantStoreId } from "./access/grant-store-id.js";
 import { type PendingAttachment, prepareEventForIngest } from "./attachments/attachment-ingest.js";
@@ -240,6 +241,8 @@ export interface EventWiringDeps {
    * See change: fix-spawn-correlation-ttl-coupling (D7).
    */
   pendingPromptAcks?: import("./pending/pending-prompt-acks.js").PendingPromptAcks;
+  /** Owning bridge acknowledged a durable dispatcher receipt. */
+  onPromptReceived?(sessionId: string, promptId: string): void;
   /**
    * Optional plugin pi-message dispatcher. When provided, every
    * `plugin_pi_message` envelope forwarded from a plugin bridge entry is
@@ -354,6 +357,7 @@ export function wireEvents(deps: EventWiringDeps): void {
     pushDispatcher,
     pendingClientCorrelations,
     pendingPromptAcks,
+    onPromptReceived,
     dispatchPluginPiMessage,
     dispatchPluginRequest,
     dispatchPluginRawEvent,
@@ -1130,14 +1134,13 @@ export function wireEvents(deps: EventWiringDeps): void {
     // Agent path gate × YOLO (change: yolo-covers-agent-path-gate): the bridge
     // asks at its would-prompt point and reports operator denies.
     if (msg.type === "path_yolo_request") {
-      piGateway.sendToSession(
-        sessionId,
-        handlePathYoloRequest(sessionId, msg, {
-          decideAgentPath: deps.decideAgentPath,
-          registry: agentConfirmRegistry,
-          recordRefusal,
-        }),
-      );
+      void handleResearchTaskPathRequest(sessionId, msg, sessionManager.get(sessionId), {
+        decideAgentPath: deps.decideAgentPath,
+        registry: agentConfirmRegistry,
+        recordRefusal,
+      }).then(result => piGateway.sendToSession(sessionId, result)).catch(() => {
+        piGateway.sendToSession(sessionId, { type: "path_yolo_result", requestId: msg.requestId, verdict: "decline" });
+      });
       return;
     }
     if (msg.type === "path_gate_refusal") {
@@ -2146,7 +2149,10 @@ export function wireEvents(deps: EventWiringDeps): void {
       // already refuses a frame whose named id belongs to another socket), so a
       // displaced bridge cannot acknowledge the current owner's prompt.
       // See change: fix-spawn-correlation-ttl-coupling (D7).
-      if (msg.promptId) pendingPromptAcks?.acknowledge(msg.promptId, sessionId);
+      if (msg.promptId) {
+        pendingPromptAcks?.acknowledge(msg.promptId, sessionId);
+        onPromptReceived?.(sessionId, msg.promptId);
+      }
       browserGateway.sendToSubscribers(sessionId, {
         type: "prompt_received",
         sessionId,

@@ -15,6 +15,8 @@ import type { RemoteTranscriptStore } from "../session/remote-transcript-store.j
 import type { NetworkGuard } from "./route-deps.js";
 import { isResWorkflowResearchBudgetUpdateRequest } from "@blackbelt-technology/pi-dashboard-shared/research-budget.js";
 import { createResWorkflowResearchBudgetService } from "../res-workflow/research-budget-service.js";
+import { isResearchTaskPermissionUpdate } from "@blackbelt-technology/pi-dashboard-shared/research-task-permissions.js";
+import { createResWorkflowTaskPermissionService } from "../res-workflow/task-permission-service.js";
 
 export interface ResWorkflowRouteDeps extends Omit<ResWorkflowServiceDeps, "privateDir" | "historyRoots"> {
   networkGuard: NetworkGuard;
@@ -61,6 +63,7 @@ export function registerResWorkflowRoutes(fastify: FastifyInstance, deps: ResWor
     readRetained: deps.readRetained ?? (deps.remoteTranscriptStore?.readRawBounded ? (id, maxBytes) => deps.remoteTranscriptStore!.readRawBounded!(id, maxBytes) : undefined),
   });
   fastify.addHook("onClose", async () => { service.dispose(); });
+  const taskPermissions = createResWorkflowTaskPermissionService({ researchLoopRoot: deps.researchLoopRoot, connection: access => service.connection(access) });
   const researchBudget = createResWorkflowResearchBudgetService({ researchLoopRoot: deps.researchLoopRoot, connection: access => service.connection(access) });
 
   const accessFor = (request: FastifyRequest, cwd: unknown) => resWorkflowAccess(deps, {
@@ -269,6 +272,15 @@ export function registerResWorkflowRoutes(fastify: FastifyInstance, deps: ResWor
     return { success: false, error: "workbench-sync-unavailable" };
   });
   read("/api/res-workflow/connection", access => service.connection(access));
+  read("/api/res-workflow/task-permissions", access => taskPermissions.read(access));
+  fastify.post("/api/res-workflow/task-permissions", guarded, async (request, reply) => {
+    if (!isResearchTaskPermissionUpdate(request.body)) {
+      reply.code(400);
+      return { success: false, error: "task-permissions-invalid", code: "task-permissions-invalid" };
+    }
+    const value = request.body;
+    return execute(request, reply, value.cwd, access => taskPermissions.update(access, { ...value, cwd: access.cwd }));
+  });
   read("/api/res-workflow/research-budget", access => researchBudget.read(access));
   fastify.post("/api/res-workflow/research-budget", guarded, async (request, reply) => {
     if (!isResWorkflowResearchBudgetUpdateRequest(request.body)) {

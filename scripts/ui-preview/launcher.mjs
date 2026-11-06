@@ -127,6 +127,9 @@ function isolatedEnvironment(previewHome) {
     XDG_DATA_HOME: path.join(previewHome, '.local/share'),
     PI_CODING_AGENT_DIR: path.join(previewHome, '.pi/agent'),
     PI_CODING_AGENT_SESSION_DIR: path.join(previewHome, '.pi/agent/sessions'),
+    // Same explicit backend path as bin/pi-research-dashboard. It is our
+    // repository source, never an inherited user/provider configuration.
+    PI_RESEARCH_LOOP_ROOT: path.join(repo, 'extensions/research-loop'),
     PI_DASHBOARD_PIN_DIRS: project,
     PI_DASHBOARD_NO_MDNS: '1',
     // Native Linux-compatible TCP bridge opt-in; loopback and normal proof

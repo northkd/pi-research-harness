@@ -249,13 +249,13 @@ export function ResearchExecutionPanels({
     if (info?.name && info.nameSource !== "firstMessage") return info.name;
     // A lead-created collaborator is named by its assigned role and creator;
     // never by the raw first prompt.
-    if (origin.kind === "lead-agent-created" && origin.role) return `${roleLabel(origin.role)} · Lead 协作`;
+    if (origin.kind === "lead-agent-created" && origin.role) return `${roleLabel(origin.role)} · 派生协作`;
     if (info?.name) return info.name;
     if (info?.firstMessage) {
       const clean = info.firstMessage.replace(/[#*`>-]/g, "").replace(/\s+/g, " ").trim();
       return clean.length > 28 ? clean.slice(0, 28) + "…" : clean;
     }
-    return isCaptain ? "当前交互会话" : "独立协同会话";
+    return isCaptain ? "当前交互会话" : "协作会话";
   };
 
   const getSessionWorkflowDuty = (sessionExec: ResearchExecution, isCaptain: boolean) => {
@@ -1908,7 +1908,7 @@ export function ResearchExecutionPanels({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
                     <Icon path={mdiAccountGroup} size={0.7} className="text-[var(--accent-blue)]" />
-                    <span>1. 独立协同会话 ({piSessions.length} 个独立研究会话)</span>
+                    <span>1. 多智能体协作会话 ({piSessions.length} 个研究会话)</span>
                   </div>
                   <span className="text-[11px] text-[var(--text-secondary)]">
                     每个会话拥有独立上下文；来源与协作关系按记录展示

@@ -656,7 +656,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchAgentCanvas.tsx": {
-      "sha256": "333f790351a49f73a37199642c8b4ddf8b66b91197f0db89cd5fafa4a9355deb",
+      "sha256": "0f24063c1aba697923a5a4067a6f2f172006886dfcbafacfc23f8efc63eb7e6e",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchAgentDetail.tsx": {
@@ -672,11 +672,15 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchExecutionPanels.tsx": {
-      "sha256": "c0366075a0d127702c0f30aeafaf8b1b60c3fa93c42d0000c83a1e59d60d7b3d",
+      "sha256": "d03b10d79ec208eb3cb7b7978b9e2c857bfbaa97d86fe39fd0ab2f265723bc64",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchOverviewAndBudget.tsx": {
-      "sha256": "8ff52e18fbd8206135333743d321548cd62ef30f76a84e04414edea6f3503cce",
+      "sha256": "c01ca826e3c4bcd4375b0e5a91e262c81e1892cd8354c449d2d492e382cbacff",
+      "baseBlob": null
+    },
+    "packages/client/src/components/research/ResearchPermissionControls.tsx": {
+      "sha256": "02f7d788790840ab4f050766330c1b702f18191c4b9e42f65c3536292fb92ace",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchPipelinePage.tsx": {
@@ -740,7 +744,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchAgentCanvas.test.tsx": {
-      "sha256": "fe55b08ab78de98268fb4a3c470b0ad47db82a504623740f7d7b2445e3f291a4",
+      "sha256": "45f31126554cb80779b3a8dbe44c178248fc5be5d6732d9c9d7be86817f7bf77",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchAgentDetail.test.tsx": {
@@ -784,7 +788,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/research-projection.test.ts": {
-      "sha256": "35233261acf803794de79de071c47187b564dc49eda3c1ef6e6a64c11bd5dec6",
+      "sha256": "89a2db00621a146003119d31637ccbd6702a265f2a050cfc1738f093c8a06934",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/use-research-loop-live.test.tsx": {
@@ -800,7 +804,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/research-agent-canvas-layout.ts": {
-      "sha256": "708deba0b9f8d826ace42b27bd307d19ab4792fd203fe7acd24f153244fe1208",
+      "sha256": "8c3c76f7829a3908dc43846bcf90520a105817af8cafe64cc1fedfcef3f9f947",
       "baseBlob": null
     },
     "packages/client/src/components/research/research-presentation.ts": {
@@ -808,7 +812,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/research-projection.ts": {
-      "sha256": "06ee23abde0987809a0d5751a1f47ed41e83b155082f885c5a5889f256deedeb",
+      "sha256": "c9d16cd2052b9b57db90e89d8596ee89abb9f69f4e06695e6f318a114241d352",
       "baseBlob": null
     },
     "packages/client/src/components/research/research-workspace.css": {
@@ -1024,7 +1028,7 @@
       "baseBlob": "b27628d68aad7c20180d0e466a94aedb738d9c35"
     },
     "packages/client/src/index.css": {
-      "sha256": "63cb35b1175358bd0732799e0f3e74a62d1967324a1f0d79b2e6eb2d89b58a13",
+      "sha256": "3038c242e2bb043d6a78974df74ac04cad23e2ed07983428346715004b528e10",
       "baseBlob": "366c21b49fbc85a15ee9c5f9055c7991251c29b9"
     },
     "packages/client/src/lib/__tests__/back-target.test.ts": {
@@ -1077,6 +1081,10 @@
     },
     "packages/client/src/lib/api/res-workflow-api.ts": {
       "sha256": "0bf3a876626d37d2552a536279d05f27f21559236a11c8ee21b06f838159a74c",
+      "baseBlob": null
+    },
+    "packages/client/src/lib/api/research-task-permissions-api.ts": {
+      "sha256": "b7917244788461c73f6500dc5b60d268afd8fef802232cb38bcfcd12fe34f24a",
       "baseBlob": null
     },
     "packages/client/src/lib/chat/__tests__/follow-glide.test.ts": {
@@ -1556,7 +1564,7 @@
       "baseBlob": "94b3f2e8c72e3b4e72637033bc43d548fad79801"
     },
     "packages/extension/src/bridge.ts": {
-      "sha256": "44ccd9f6a57262b6ee80fe377a69021cf35fc8df895873ded88d1f5efef50711",
+      "sha256": "0874052b5e5f982bcd187f9452f4398ef05c4c589cec7d55d289e5b5d2561aaa",
       "baseBlob": "d0d03ba6d1895db8fcd43cbb7b70b045ac8c09d7"
     },
     "packages/extension/src/model-refresh.ts": {
@@ -1567,9 +1575,29 @@
       "sha256": "913f1ad0b4e5d3d52141169f846d1fb434e4eb5e065f3c3d894d285dd49e01d6",
       "baseBlob": null
     },
+    "packages/extension/src/path-gate/__tests__/handler.test.ts": {
+      "sha256": "fbcc24fe72ead5a8d591ad921107e20e459e26558618826c508db03b970811b9",
+      "baseBlob": "2f66c6795e0330fff8c50bf76dc691a8ca2231d1"
+    },
+    "packages/extension/src/path-gate/handler.ts": {
+      "sha256": "c3b23182a79d4488ab939aa1498c6854a757e2ffc955b4dfd18a9659308d842e",
+      "baseBlob": "f0e460c59b1f5c7dd82cdfc158b99705ef0ee95e"
+    },
+    "packages/extension/src/path-gate/yolo-link.ts": {
+      "sha256": "f3d41c401b8a956c384bfd9a00aad6503547dd2bd564ae5cfcbd12910944b105",
+      "baseBlob": "4a03181d173cbae1f8fc547aa1f4455d3640a667"
+    },
     "packages/extension/src/provider-register.ts": {
       "sha256": "f23bbfe0ab2b4c03d30072c42e9296a19e17b380e63ef8ec2b11a65ce978ecd1",
       "baseBlob": "6e576b148665cbd9222f9e19ae29f027f1876671"
+    },
+    "packages/extension/src/research-dispatch-receipts.d.mts": {
+      "sha256": "489864d9b92b0b1ffeabf560789e185d40031bcd4e80845fb28b030a77d30ba7",
+      "baseBlob": null
+    },
+    "packages/extension/src/research-dispatch-receipts.mjs": {
+      "sha256": "33fafc92c1285b3d1880f0f3a37886e6c3238f657c90324484c0b6bcfe40b9bf",
+      "baseBlob": null
     },
     "packages/extension/src/role-model-tools.ts": {
       "sha256": "2f1db6b5b1e8a984c49810f5937e9fbbaa6ef16823721bd134a0d9d813d9125b",
@@ -1699,6 +1727,10 @@
       "sha256": "4aae8689aa192283d84abb8ea116ce5f2ab5efdeb30aeea5660a9a12ac2c96d7",
       "baseBlob": null
     },
+    "packages/server/src/__tests__/res-workflow-backend-root.test.ts": {
+      "sha256": "eda801bc58ff9fb0255c5dc44ea3bb216d2e7de824107cfb8aadc6c41108e00d",
+      "baseBlob": null
+    },
     "packages/server/src/__tests__/res-workflow-history-boundaries.test.ts": {
       "sha256": "916202510a8c766871c386931776bcf50a422afcd2665571962fae241ecf46ee",
       "baseBlob": null
@@ -1733,6 +1765,10 @@
     },
     "packages/server/src/__tests__/res-workflow-strict-model.test.ts": {
       "sha256": "d7e1179812ca55159a10f6de9deff2da6d16d352a817772a57452a820666f3d1",
+      "baseBlob": null
+    },
+    "packages/server/src/__tests__/research-task-permissions.test.ts": {
+      "sha256": "63890502eb7fee38c238194972b362c5755392575e37259f333dd0670875436a",
       "baseBlob": null
     },
     "packages/server/src/__tests__/route-tier-gate.test.ts": {
@@ -1868,7 +1904,7 @@
       "baseBlob": "53430c8b072730dbcff03968f3e378689945d3b0"
     },
     "packages/server/src/event-wiring.ts": {
-      "sha256": "96be05b148a5b5406fd3f8786f63c85f185a504b8a29f19fed44dc5cb00ae77c",
+      "sha256": "e0e579e0fc0733634fcc3d56740f11be6c466250de8eed9f066a3af340f4e1ae",
       "baseBlob": "81caad7ebac2737ac39b89e6f5434b40a3dfcbd9"
     },
     "packages/server/src/identity/__tests__/http-road-classification.test.ts": {
@@ -2020,7 +2056,7 @@
       "baseBlob": null
     },
     "packages/server/src/res-workflow/adoption-service.ts": {
-      "sha256": "653eb38c64e5b20464f285e9189c00cc1f7921531ff921e921de9936f79efdab",
+      "sha256": "c9b9c07dd31b5d3332c6559b8c5a6cbdd8bd6a762867bba1cffaaf33186ab771",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/analysis-agent.ts": {
@@ -2075,12 +2111,24 @@
       "sha256": "83aebe9c3f4bb9b20b3cb7847d533500c16d62de4509bac2013139ba650a8993",
       "baseBlob": null
     },
+    "packages/server/src/res-workflow/research-dispatch-service.d.mts": {
+      "sha256": "e947c4650278da0920dff293d74160aa20bf16b357e3a1ced7505e7cfa37924e",
+      "baseBlob": null
+    },
+    "packages/server/src/res-workflow/research-dispatch-service.mjs": {
+      "sha256": "d553f3f52448a3a3d1fc3eb8a977aaa3b45685a686d94acf992d6004333c4581",
+      "baseBlob": null
+    },
     "packages/server/src/res-workflow/research-session-service.d.mts": {
-      "sha256": "75092b1a599e06503b3c1684eb1a72a597239bea2303d48330ee74504cc2a3e6",
+      "sha256": "9d3d0c4af2f12d975360420a87b0f0be42ca21522aacc9cebb6e2c597eac4591",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-session-service.mjs": {
-      "sha256": "33e12a9b9aa520582cc73560b06e0812d1634d164326f32a45b7e35b9e5dda6b",
+      "sha256": "4a3eb6fc9ea882ee9cfebade63c8fa3c3753cfe69dec2d47a136c9f912c9e161",
+      "baseBlob": null
+    },
+    "packages/server/src/res-workflow/research-task-path-handler.ts": {
+      "sha256": "bfb1097ab933e12e8965c6ca109220380d6254aef4c85e05681e3eb7f45c978a",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/safe-files.ts": {
@@ -2163,6 +2211,10 @@
       "sha256": "18d9d0d22425c95477cb26d1bb184d46faa8f3756b4353424c5d767e3a042b6f",
       "baseBlob": null
     },
+    "packages/server/src/res-workflow/task-permission-service.ts": {
+      "sha256": "db3a601817ea2aeedb7bf6390ae960cd8e99278561847768fb136960c41d384b",
+      "baseBlob": null
+    },
     "packages/server/src/routes/file-routes.ts": {
       "sha256": "e67cdf31451b3981ea14436f5d08afa6279b75124782265b52ce1128a3387bb2",
       "baseBlob": "543b8237cc4aca75985d937bed944900371601f5"
@@ -2172,11 +2224,11 @@
       "baseBlob": "ffefb6ae35b9cc75d44e5582a74b754a0cac5ad5"
     },
     "packages/server/src/routes/res-workflow-research-session-routes.ts": {
-      "sha256": "a71c70743b523e014cb11ec618334954a01e29e32d1eca6fe68f3b9abc4fa61b",
+      "sha256": "b9b6e86e1a48eafd2b0e8d5a9e7521306b5c0e8b934139384b4c83cda58683e6",
       "baseBlob": null
     },
     "packages/server/src/routes/res-workflow-routes.ts": {
-      "sha256": "36b538c86af1b3bb5abac7a1a8b2e4e79cb23d71585c43369545bc91950efb0c",
+      "sha256": "e691571aeccc3cab93978f2740a32a31df5bcc75e0b85701a63bbbba6c50eec0",
       "baseBlob": null
     },
     "packages/server/src/routes/science-instances-routes.ts": {
@@ -2200,7 +2252,7 @@
       "baseBlob": null
     },
     "packages/server/src/server.ts": {
-      "sha256": "04f5fb393eb214719859887ed66f7b820584c399b88a81bde0fb57a62ec9b801",
+      "sha256": "bb16586fb0995e884c0d5ae0bc9a23b1a8612eb4de58e0c5a9b2c975ddf9a787",
       "baseBlob": "ee4f0d47762d85dd6814ffa22f98165a39418f34"
     },
     "packages/server/src/session/__tests__/replay-exit-controller.test.ts": {
@@ -2356,7 +2408,7 @@
       "baseBlob": "57da4dbcc2a9f96f8ec421ad26593f7f01f93a30"
     },
     "packages/shared/src/protocol.ts": {
-      "sha256": "41002d3e7d6a483a482f3fd90a3e26fd21f84174e3de9d38b22ddb46d0caf4d3",
+      "sha256": "f40489857156624c3831ee5f1fb25b4306a5ee5662f5066614d7fa6bdabf5ff9",
       "baseBlob": "7f5d6f16a4f8cf7cb40efb256bcd7667e6a3924f"
     },
     "packages/shared/src/res-workflow.ts": {
@@ -2368,7 +2420,11 @@
       "baseBlob": null
     },
     "packages/shared/src/research-session.ts": {
-      "sha256": "c969fb67d0be1bd8c681af1af88a4cc27cb4c1641fb66c7af4305a0d55377ddf",
+      "sha256": "1879959a717f832333826c49f730ceb36af09e8bad192295464e678b7df62aa7",
+      "baseBlob": null
+    },
+    "packages/shared/src/research-task-permissions.ts": {
+      "sha256": "c3fd88fe685730e8945d19f1400e02d72ea1cca417bb4cd218e7bd52239d1217",
       "baseBlob": null
     },
     "packages/shared/src/research-workbench.ts": {

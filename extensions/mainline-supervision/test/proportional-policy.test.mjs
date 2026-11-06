@@ -162,3 +162,23 @@ test('capture failure keeps dispatch unverified but not every development action
   assert.equal(store.getState().blocked, false); assert.equal(store.getState().reviewHealth.status, 'BLIND_SPOT');
   assert.equal(decide(store, 'edit', { path: 'src/a.py' }).allow, true); assert.equal(decide(store, 'ask_user', {}).allow, true);
 });
+
+test('research dispatch plans share resource and branch gates while status/report/atomic stay available', t => {
+  const { store } = fixture(t);
+  const event = { toolName: 'research_dispatch', input: { action: 'plan', tasks: [{ id: 't1', task: 'Analyze synthetic results' }] } };
+  const pending = { ...store.getState(), pendingChanges: true };
+  assert.equal(needsResource(event), true);
+  assert.equal(operationDecision(store, pending, event).confirmable, true);
+  store.meminfo = 'MemAvailable: 1000 kB';
+  assert.equal(operationDecision(store, pending, event).hard, true);
+  for (const action of ['status', 'report', 'atomic', 'cancel']) {
+    assert.equal(needsResource({ ...event, input: { action } }), false);
+    assert.equal(observationTool('research_dispatch', { action }), true);
+    assert.equal(operationDecision(store, pending, { ...event, input: { action } }).allow, true);
+  }
+  store.meminfo = 'MemAvailable: 4194304 kB';
+  off(store);
+  const restricted = decide(store, 'research_dispatch', { action: 'plan', tasks: [{ task: 'Inspect src/a.py' }] });
+  assert.equal(restricted.allow, false);
+  assert.equal(restricted.confirmable, undefined);
+});

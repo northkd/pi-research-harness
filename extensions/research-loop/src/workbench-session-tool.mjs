@@ -21,6 +21,16 @@ import { readWorkbenchRecordContext } from './workbench-context.mjs';
 export const RESEARCH_SESSION_TOOL_NAME = 'research_session';
 export const RESEARCH_SESSION_STAGES = ['1-idea', '2-experiment', '3-review', '4-summary', '5-writing'];
 export const RESEARCH_SESSION_LIMITS = Object.freeze({ maxTaskChars: 4000, maxRoleChars: 40 });
+export const RESEARCH_DISPATCH_TASK_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['id', 'role', 'task', 'stage'],
+  properties: {
+    id: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' },
+    role: { type: 'string', minLength: 2, maxLength: 40, pattern: '^[a-z][a-z0-9-]{1,39}$' },
+    task: { type: 'string', minLength: 1, maxLength: 4000 },
+    stage: { type: 'string', enum: RESEARCH_SESSION_STAGES },
+    dependsOn: { type: 'array', maxItems: 12, items: { type: 'string', minLength: 1, maxLength: 128 } },
+  },
+};
 const ROLE = /^[a-z][a-z0-9-]{1,39}$/;
 const ENDPOINT_PATH = '/api/res-workflow/participants/spawn';
 const LOCAL_TOKEN_HEADER = 'x-pi-local-token';
@@ -54,7 +64,7 @@ function safeFile(file, home, maximum) {
 }
 
 /** Read a small JSON response without letting an endpoint exhaust memory. */
-async function readBoundedJson(response, maximum = MAX_RESPONSE_BYTES) {
+export async function readBoundedJson(response, maximum = MAX_RESPONSE_BYTES) {
   const declared = Number(response?.headers?.get?.('content-length'));
   if (Number.isFinite(declared) && declared > maximum) throw new Error('response-too-large');
   if (!response?.body || typeof response.body.getReader !== 'function') {
@@ -106,7 +116,7 @@ export function readDashboardLocalAuth({ home = os.homedir() } = {}) {
 export function buildResearchSessionPrompt(provenance) {
   if (!object(provenance)) throw new Error('research-session-provenance-invalid');
   return [
-    `You are a top-level research collaborator in the confirmed res-workflow at ${provenance.workflowCwd}.`,
+    `You are a research collaborator with a real parent session in the confirmed res-workflow at ${provenance.workflowCwd}.`,
     `Role: ${provenance.role}`,
     `Stage: ${provenance.stage}`,
     `Parent session: ${provenance.parentSessionId}`,
@@ -115,9 +125,9 @@ export function buildResearchSessionPrompt(provenance) {
     'Task:',
     provenance.task,
     '',
-    'You are a separate top-level session, not a subagent. Work only inside this exact joined workspace and the confirmed adoption.',
-    'Use the existing research_loop tool to record real attempts, stage changes and claims. Do not create another research collaborator unless the parent explicitly asks for one.',
-    'Do not treat this assignment as user authorization to start, restart, publish, install software, raise budgets, or leave the joined workspace.',
+    'You run in a separate Pi process, but remain a child of the recorded parent. Keep the same workspace, owner, frozen charter, permission scope and shared task budget.',
+    'First call research_dispatch status. Declared structured tasks are automatically scheduled by the server; coordinate their results instead of doing them locally. For several separable work items, submit a research_dispatch plan with dependencies before bulk work. For one indivisible item, use research_dispatch atomic with a concrete reason. Controlled child delegation is allowed within the shared limits; leaf roles cannot delegate.',
+    'Use research_loop to record actual attempts and evidence. If status shows a dispatcher assignment, finish with research_dispatch report (completed, failed or blocked), a truthful summary and relative evidence paths. Wait for your own children before reporting completion. This assignment never expands the inherited permission scope, provider access, budget or workspace.',
   ].join('\n');
 }
 
@@ -175,6 +185,7 @@ export function createResearchSessionTool(pi, options = {}) {
         task: params.task,
         stage: params.stage,
         requestId: requestId(),
+        ...(params.tasks === undefined ? {} : { tasks: params.tasks }),
       };
       const timeout = AbortSignal.timeout(timeoutMs);
       const combined = signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout;
@@ -221,12 +232,12 @@ export function createResearchSessionTool(pi, options = {}) {
 
   return {
     name: RESEARCH_SESSION_TOOL_NAME,
-    label: 'Research session (top-level collaborator)',
-    description: 'Create a real top-level Pi session collaborator joined to the current confirmed res-workflow, with a specific role, task and stage. This is NOT the bundled subagent tool (agent/task/async) and NOT the separately installed Agent/SubagentWorkflow package: both start subordinate runs that return to the current session. Use research_session only when the current session is already joined to res-workflow and the user wants a separate top-level collaborator. The runtime supplies the parent session, workspace, owner, charter and adoption; role/task/stage cannot redirect them.',
+    label: 'Research session (linked collaborator)',
+    description: 'Create a real top-level Pi session collaborator joined to the current confirmed res-workflow, with a specific role, task and stage. This is NOT the bundled subagent tool (agent/task/async) and NOT the separately installed Agent/SubagentWorkflow package: both start subordinate runs that return to the current session. Use research_session only from the joined res-workflow. For a coordinator receiving several jobs, include a structured tasks array: the server automatically schedules its child tasks after registration, preserving real parent links. The runtime supplies the parent session, workspace, owner, charter and adoption; role/task/stage cannot redirect them.',
     promptSnippet: 'Create a top-level res-workflow collaborator (role+task+stage), distinct from a subordinate subagent.',
     promptGuidelines: [
       'Call research_session only from a session already joined to the confirmed res-workflow.',
-      'Use research_session for a separate top-level collaborator; use subagent for subordinate bounded work that returns to this session.',
+      'Include tasks for multiple separable assignments so the server actually dispatches them, instead of asking a coordinator to do every assignment locally.',
       'The tool derives the workspace, owner and charter from this session. Do not try to pass a project, model, URL or session id.',
     ],
     parameters: {
@@ -235,6 +246,7 @@ export function createResearchSessionTool(pi, options = {}) {
         role: { type: 'string', minLength: 2, maxLength: RESEARCH_SESSION_LIMITS.maxRoleChars, pattern: '^[a-z][a-z0-9-]{1,39}$', description: 'Bounded collaborator role, for example literature or experiment.' },
         task: { type: 'string', minLength: 1, maxLength: RESEARCH_SESSION_LIMITS.maxTaskChars, description: 'Concrete task for the collaborator; delivered once as its initial prompt.' },
         stage: { type: 'string', enum: RESEARCH_SESSION_STAGES, description: 'Current res-workflow stage for this collaborator.' },
+        tasks: { type: 'array', minItems: 2, maxItems: 12, items: RESEARCH_DISPATCH_TASK_SCHEMA, description: 'Optional declared jobs for this coordinator. Automatically dispatched after its real session registers; dependsOn declares prerequisite task ids.' },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },

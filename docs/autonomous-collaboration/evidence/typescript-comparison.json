@@ -1,0 +1,41 @@
+{
+  "method": "Compare multiset of file path, TS error code and diagnostic text; ignore line/column shifts; retain multiplicities.",
+  "baselineEvidence": "docs/ui-redesign/evidence/typescript-diagnostics.txt",
+  "currentEvidence": "docs/autonomous-collaboration/evidence/typescript-diagnostics.txt",
+  "baselineDiagnostics": 65,
+  "baselineFiles": 6,
+  "currentDiagnostics": 61,
+  "currentFiles": 5,
+  "newDiagnostics": 0,
+  "resolvedDiagnostics": 4,
+  "new": [],
+  "resolved": [
+    {
+      "path": "packages/server/src/routes/res-workflow-research-session-routes.ts",
+      "diagnostic": "error TS2322: Type '(cwd: string, options: { spawnToken: string; strategy?: string | undefined; }) => Promise<SpawnResult>' is not assignable to type '(cwd: string, options: { spawnToken: string; strategy?: string | undefined; }) => Promise<{ [key: string]: unknown; success: boolean; }>'.",
+      "count": 1
+    },
+    {
+      "path": "packages/server/src/routes/res-workflow-research-session-routes.ts",
+      "diagnostic": "error TS2322: Type 'Promise<ResWorkflowSpawnRef>' is not assignable to type 'Promise<Record<string, unknown>>'.",
+      "count": 1
+    },
+    {
+      "path": "packages/server/src/routes/res-workflow-research-session-routes.ts",
+      "diagnostic": "error TS2345: Argument of type '{ ownerKey?: string | undefined; researchSession: ResearchSessionProvenance; }' is not assignable to parameter of type '{ ownerKey?: string | undefined; researchSession?: ResearchSessionProvenance | undefined; }'.",
+      "count": 1
+    },
+    {
+      "path": "packages/server/src/routes/res-workflow-research-session-routes.ts",
+      "diagnostic": "error TS2345: Argument of type '{ spawnToken: string; strategy?: string | undefined; }' is not assignable to parameter of type '{ spawnToken: string; strategy?: SpawnStrategy | undefined; }'.",
+      "count": 1
+    }
+  ],
+  "currentByFile": {
+    "packages/server/src/res-workflow/adoption-service.ts": 1,
+    "packages/server/src/res-workflow/analysis-agent.ts": 27,
+    "packages/server/src/res-workflow/full-history-material.ts": 16,
+    "packages/server/src/res-workflow/full-history-review.ts": 14,
+    "packages/server/src/res-workflow/local-history-stream.ts": 3
+  }
+}

@@ -101,8 +101,10 @@ test('delegation guidance is dynamic and schema-accurate for each active family'
   assert.match(pi, /subagent\(\{ agent: "research-literature", task: .*async: true, options: \{ context: "fresh" \} \}\)/);
   assert.doesNotMatch(pi, /Agent\(\{ subagent_type/);
   assert.doesNotMatch(pi, /SubagentWorkflow\(\{/);
-  assert.match(pi, /Only this lead session may delegate/);
-  assert.match(pi, /never instruct a child to spawn more agents/);
+  assert.match(pi, /Collaborators may recursively delegate separable work/);
+  assert.match(pi, /same owner, workspace, charter and permission scope/);
+  assert.match(pi, /depth, role and shared task budgets/);
+  assert.match(pi, /SSH, agy and supervisor roles remain leaves/);
   assert.match(pi, /do not import full child transcripts or dumps/);
 
   const tintin = buildWorkbenchRecordProtocol(CONTEXT, {}, { selectedTools: ['Agent', 'SubagentWorkflow'] });
@@ -130,7 +132,10 @@ test('no delegation tool means no schema claim, and user restrictions suppress g
     selectedTools: ['subagent'],
     env: { PI_SUBAGENT_CHILD: '1' },
   });
-  assert.doesNotMatch(child, /subagent\(\{ agent:/);
+  assert.match(child, /subagent\(\{ agent:/);
+  assert.match(child, /Collaborators may recursively delegate/);
+  const explicitlyDisabled = buildWorkbenchRecordProtocol(CONTEXT, {}, { selectedTools: ['subagent'], env: { PI_SUBAGENT_CHILD: '1', PI_RESEARCH_DISABLE_DELEGATION: '1' } });
+  assert.doesNotMatch(explicitlyDisabled, /subagent\(\{ agent:/);
 });
 
 test('workbench opt-out survives a neutral 继续 turn and clears on explicit resumption', t => {
@@ -175,7 +180,7 @@ test('workbench read-only mode survives a neutral turn and keeps no-write constr
   assert.match(resumed, /subagent\(\{ agent:/);
 });
 
-test('registered workbench context propagates child environment opt-out', t => {
+test('registered workbench context preserves controlled recursive guidance for children', t => {
   const { cwd, privateDir, ctx } = joinedFixture(t);
   const handlers = new Map();
   registerWorkbenchContext({ on(name, handler) { handlers.set(name, handler); } }, {
@@ -184,7 +189,9 @@ test('registered workbench context propagates child environment opt-out', t => {
   const opts = { cwd, selectedTools: ['subagent'], sections: {} };
   handlers.get('before_agent_start')({ messageType: 'user', prompt: 'Review the project', systemPromptOptions: opts }, ctx);
   assert.match(opts.sections[WORKBENCH_CONTEXT_SECTION], /Synthetic joined objective/);
-  assert.doesNotMatch(opts.sections[WORKBENCH_CONTEXT_SECTION], /Dynamic delegation policy|subagent\(\{ agent:/);
+  assert.match(opts.sections[WORKBENCH_CONTEXT_SECTION], /Dynamic delegation policy/);
+  assert.match(opts.sections[WORKBENCH_CONTEXT_SECTION], /subagent\(\{ agent:/);
+  assert.match(opts.sections[WORKBENCH_CONTEXT_SECTION], /Managed collaborators must declare a plan or an indivisible-task reason/);
 });
 
 test('registerWorkbenchContext clears a stale section for an unjoined session', t => {

@@ -1,6 +1,6 @@
 {
   "schema": "pi-research-mainline-supervision-source.v1",
-  "date": "2026-11-04",
+  "date": "2026-11-06",
   "license": "Apache-2.0",
   "source": "Author-owned locally deployed policy-v2 / cadence-v1 implementation; not an upstream package",
   "localPriorAcceptance": {
@@ -18,7 +18,8 @@
     "Historical SDK gates retained with portable dependency roots; real model/host claims remain separate from mocks",
     "Remove four trailing spaces inherited from local author-owned source/tests; no behavioral change",
     "macOS capture reports OS total/free memory separately; Linux-only resource admission remains fail-closed",
-    "Project-local auto-approval preference is persisted separately from scientific acceptance; explicit startup defaults and existing hard gates are preserved"
+    "Project-local auto-approval preference is persisted separately from scientific acceptance; explicit startup defaults and existing hard gates are preserved",
+    "Confirmed time-limited workbench task grants suppress repeated soft confirmations; dispatch plans retain resource and branch gates, with live revocation and dormant-start guidance tests"
   ],
   "liveNewModelRoundtrip": "NOT_RUN",
   "persistentWorkflowHumanAdjudication": "NOT_IMPLEMENTED",
@@ -85,17 +86,17 @@
     },
     {
       "path": "src/index.ts",
-      "sha256": "37d2fc63f56c1874eedf2079f41aa4298504900ae536bf4e9c9393938bbef2b5",
+      "sha256": "4e93f9ae57f7671ed0216f5b077d3f8bde13a96a764540f20bc80d37c2f48720",
       "localSourceSha256": "9f234eb5f932d4d518de7b796a9a2db556dc2bf48ca53df6a8569fa915fc5d5a"
     },
     {
       "path": "src/policy.mjs",
-      "sha256": "fada12c2c27a71ec15480d7e5753dac7e1d094a2fda46312dfb75e91a7952fb7",
+      "sha256": "81d967592772f643e1bd0ae10ecf25d31bf42e1458141b215a5aa7b575cb6657",
       "localSourceSha256": "1d463b2f3f7c70054cada527b614d0795c855a8fbeae2e7dc1aebf12d1b6f93b"
     },
     {
       "path": "test/adapter.test.mjs",
-      "sha256": "babc47662304d05860c4b945f6b6b9cdf41d9d532457e9708f077c880e9ba49d",
+      "sha256": "19892a0aa4fd1408458d2b65062f7e681f58c31c3afc5efcc40c27e6088d66f3",
       "localSourceSha256": "bdec5458ab378c4369648e6ba16f8259ffc1e3bb7f7be0cefabe45025f9016fe"
     },
     {
@@ -135,7 +136,7 @@
     },
     {
       "path": "test/proportional-policy.test.mjs",
-      "sha256": "2beda466792792d2c7b9b693e42499b63b6972dc022897b05ea27d44e77687c9",
+      "sha256": "ee81e72f4e8b1e612e08668e4f9c353019f9cfae6eefd4745e3ca972baefcf0b",
       "localSourceSha256": "003c33e51880f2b8655b815576a548f67032ceb265526a93c90c6cf61ade635e"
     },
     {

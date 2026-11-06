@@ -32,6 +32,8 @@ const object = (value: unknown): value is Record<string, unknown> =>
 const text = (value: unknown, max: number): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= max && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
 
+export interface ResearchDispatchTask { id: string; role: string; task: string; stage: ResearchSessionStage; dependsOn?: string[] }
+
 /** Persisted on the CHILD session as `researchSession` and in its plugin-ref bag. */
 export interface ResearchSessionProvenance {
   schema: typeof RESEARCH_SESSION_SCHEMA;
@@ -45,6 +47,12 @@ export interface ResearchSessionProvenance {
   adoptionId: string;
   workflowCwd: string;
   spawnToken: string;
+  requestId?: string;
+  rootSessionId?: string;
+  depth?: number;
+  tasks?: ResearchDispatchTask[];
+  dispatchId?: string;
+  taskId?: string;
   createdAt: string;
   origin: "research_session";
   relation: "dispatch";
@@ -66,7 +74,14 @@ export function isResearchSessionProvenance(value: unknown): value is ResearchSe
     HASH.test(row.charterHash ?? "") && ADOPTION.test(row.adoptionId ?? "") &&
     text(row.workflowCwd, 4096) && row.workflowCwd.startsWith("/") &&
     TOKEN.test(row.spawnToken ?? "") && iso(row.createdAt) &&
-    row.origin === "research_session" && row.relation === "dispatch";
+    row.origin === "research_session" && row.relation === "dispatch" &&
+    (row.requestId === undefined || TOKEN.test(row.requestId)) &&
+    (row.rootSessionId === undefined || ID.test(row.rootSessionId)) &&
+    (row.depth === undefined || (Number.isSafeInteger(row.depth) && row.depth >= 1 && row.depth <= 3)) &&
+    (row.dispatchId === undefined || ID.test(row.dispatchId)) && (row.taskId === undefined || ID.test(row.taskId)) &&
+    (row.tasks === undefined || (Array.isArray(row.tasks) && row.tasks.length >= 2 && row.tasks.length <= 12 && row.tasks.every(task =>
+      object(task) && ID.test(task.id ?? "") && ROLE.test(task.role ?? "") && text(task.task, 4000) && RESEARCH_SESSION_STAGES.includes(task.stage) &&
+      (task.dependsOn === undefined || (Array.isArray(task.dependsOn) && task.dependsOn.length <= 12 && task.dependsOn.every(id => typeof id === "string" && ID.test(id)))))));
 }
 
 export function normalizeResearchSessionProvenance(value: unknown): ResearchSessionProvenance {
@@ -76,6 +91,12 @@ export function normalizeResearchSessionProvenance(value: unknown): ResearchSess
     creatorAgent: value.creatorAgent, role: value.role, task: value.task, stage: value.stage,
     charterHash: value.charterHash, adoptionId: value.adoptionId, workflowCwd: value.workflowCwd,
     spawnToken: value.spawnToken, createdAt: value.createdAt, origin: value.origin, relation: value.relation,
+    ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
+    ...(value.rootSessionId === undefined ? {} : { rootSessionId: value.rootSessionId }),
+    ...(value.depth === undefined ? {} : { depth: value.depth }),
+    ...(value.dispatchId === undefined ? {} : { dispatchId: value.dispatchId }),
+    ...(value.taskId === undefined ? {} : { taskId: value.taskId }),
+    ...(value.tasks === undefined ? {} : { tasks: value.tasks.map(task => ({ id: task.id, role: task.role, task: task.task, stage: task.stage, dependsOn: [...(task.dependsOn ?? [])] })) }),
   };
 }
 
@@ -148,7 +169,7 @@ export function deriveResearchSessionRelations(
 export function buildResearchSessionInitialPrompt(provenance: ResearchSessionProvenance): string {
   const row = normalizeResearchSessionProvenance(provenance);
   return [
-    `You are a top-level research collaborator in the confirmed res-workflow at ${row.workflowCwd}.`,
+    `You are a research collaborator with a real parent session in the confirmed res-workflow at ${row.workflowCwd}.`,
     `Role: ${row.role}`,
     `Stage: ${row.stage}`,
     `Parent session: ${row.parentSessionId}`,
@@ -157,8 +178,8 @@ export function buildResearchSessionInitialPrompt(provenance: ResearchSessionPro
     'Task:',
     row.task,
     '',
-    'You are a separate top-level session, not a subagent. Work only inside this exact joined workspace and the confirmed adoption.',
-    'Use the existing research_loop tool to record real attempts, stage changes and claims. Do not create another research collaborator unless the parent explicitly asks for one.',
-    'Do not treat this assignment as user authorization to start, restart, publish, install software, raise budgets, or leave the joined workspace.',
+    'You run in a separate Pi process, but remain a child of the recorded parent. Keep the same workspace, owner, frozen charter, permission scope and shared task budget.',
+    'First call research_dispatch status. Declared structured tasks are automatically scheduled by the server; coordinate their results instead of doing them locally. For several separable work items, submit a research_dispatch plan with dependencies before bulk work. For one indivisible item, use research_dispatch atomic with a concrete reason. Controlled child delegation is allowed within the shared limits; leaf roles cannot delegate.',
+    'Use research_loop to record actual attempts and evidence. If status shows a dispatcher assignment, finish with research_dispatch report (completed, failed or blocked), a truthful summary and relative evidence paths. Wait for your own children before reporting completion. This assignment never expands the inherited permission scope, provider access, budget or workspace.',
   ].join('\n');
 }

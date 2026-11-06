@@ -148,6 +148,20 @@ function requireAgentConsent(consent: ResWorkflowConsent): void {
 }
 
 export async function resolveInstalledResearchLoopRoot(): Promise<string> {
+  // The portable launcher already supplies this operator-owned startup path.
+  // Honor it before the historical sibling-install layout; a bad explicit
+  // configuration must not silently load a different research backend.
+  const configured = process.env.PI_RESEARCH_LOOP_ROOT;
+  if (configured !== undefined) {
+    try {
+      if (!path.isAbsolute(configured)) throw new Error("absolute backend path required");
+      const info = await lstat(configured);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("regular backend directory required");
+      const manifest = JSON.parse((await readBoundedRegular(path.join(configured, "package.json"), 16384)).text);
+      if (manifest.name !== "pi-research-loop-local") throw new Error("unexpected research backend package");
+      return await realpath(configured);
+    } catch { throw new ResWorkflowError(503, "research-backend-unavailable"); }
+  }
   let ancestor = path.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 12; depth++) {
     const candidate = path.join(ancestor, "research-loop");
