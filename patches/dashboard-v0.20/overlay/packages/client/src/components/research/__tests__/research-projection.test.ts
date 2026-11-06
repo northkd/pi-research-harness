@@ -177,21 +177,49 @@ const execution = (id: string, sessionId: string, extra: Partial<ResearchExecuti
   id, sessionId, kind: "pi-session", status: "running", source: "observation", evidence: [], ...extra,
 });
 
-describe("three origins and real dispatch edges", () => {
-  it("labels lead-created, workflow-created and user-created sessions distinctly", () => {
+describe("recorded origins and real dispatch edges", () => {
+  it("labels agent dispatch, formal workflow work and explicit user creation distinctly", () => {
     const lead = projectExecutionOrigin(
       execution("session-child", "child"),
-      { id: "child", researchSession: provenance, firstMessage: "raw prompt text" },
+      { id: "child", cwd: "/workspace", researchSession: provenance, firstMessage: "raw prompt text" },
       "lead-session",
     );
     expect(lead).toMatchObject({
       kind: "lead-agent-created", role: "literature",
       creatorSessionId: "lead-session", creatorLabel: "父会话",
     });
-    const workflow = projectExecutionOrigin(execution("session-stage", "stage"), { id: "stage", via: "spawn" }, "lead-session");
+    const workflow = projectExecutionOrigin(execution("workflow-step", "stage", { kind: "workflow-step", source: "workflow-record" }), { id: "stage" }, "lead-session");
     expect(workflow).toMatchObject({ kind: "workflow-created", creatorSessionId: "lead-session", creatorLabel: "工作流" });
-    const user = projectExecutionOrigin(execution("session-user", "user"), { id: "user" });
+    const user = projectExecutionOrigin(execution("session-user", "user"), {
+      id: "user", cwd: "/workspace", pluginRefs: { "res-workflow": { sessionCreation: {
+        schema: "pi-session-creation.v1", kind: "user", entryPoint: "dashboard",
+        cwd: "/workspace", createdAt: "2026-11-06T00:00:00.000Z",
+      } } },
+    });
     expect(user).toMatchObject({ kind: "user-created", creatorLabel: "用户" });
+  });
+
+  it("does not mistake workflow membership, session launch channel or missing history for a creator", () => {
+    for (const info of [undefined, { id: "legacy" }, { id: "legacy", via: "spawn" }, { id: "legacy", resWorkflow: { via: "spawn" } }]) {
+      const row = execution("session-legacy", "legacy", { workflowRunId: "joined-run" });
+      expect(projectExecutionOrigin(row, info, "lead-session")).toMatchObject({ kind: "unknown", label: "来源未记录" });
+      expect(projectExecutionOrigin(row, info, "lead-session").creatorSessionId).toBeUndefined();
+    }
+  });
+
+  it("recognizes native subagent ancestry without needing a session creation receipt", () => {
+    const child = projectExecutionOrigin(execution("native-child", "native-child", { kind: "native-subagent", parentExecutionId: "session-reviewer" }));
+    expect(child).toMatchObject({ kind: "lead-agent-created", label: "Agent 派生", creatorSessionId: "reviewer" });
+  });
+
+  it("does not project self-parent or foreign-workspace provenance as a creator or hierarchy edge", () => {
+    const executions = [execution("session-lead-session", "lead-session"), execution("session-child", "child")];
+    const foreign = { id: "child", resWorkflow: { canonicalCwd: "/other-workspace" }, researchSession: provenance };
+    const self = { id: "child", researchSession: { ...provenance, parentSessionId: "child", creatorSessionId: "child" } };
+    for (const info of [foreign, self]) {
+      expect(projectExecutionOrigin(executions[1]!, info).kind).toBe("unknown");
+      expect(projectResearchSessionRelations(executions, [info])).toEqual([]);
+    }
   });
 
   it("recognizes a native session parent without assuming that every creator is the lead", () => {
@@ -199,24 +227,24 @@ describe("three origins and real dispatch edges", () => {
     expect(child).toMatchObject({ kind: "lead-agent-created", creatorSessionId: "experiment", creatorLabel: "父会话" });
     expect(child.label).not.toContain("Lead");
     const nested = projectExecutionOrigin(execution("session-review", "review"), {
-      id: "review", researchSession: { ...provenance, parentSessionId: "experiment", creatorSessionId: "experiment" },
+      id: "review", cwd: "/workspace", researchSession: { ...provenance, parentSessionId: "experiment", creatorSessionId: "experiment" },
     });
     expect(nested.creatorSessionId).toBe("experiment");
   });
 
   it("maps provenance session ids to actual workbench execution ids and omits missing endpoints", () => {
     const executions = [execution("session-lead-session", "lead-session"), execution("session-child", "child")];
-    expect(projectResearchSessionRelations(executions, [{ id: "child", researchSession: provenance }])).toEqual([{
+    expect(projectResearchSessionRelations(executions, [{ id: "child", cwd: "/workspace", researchSession: provenance }])).toEqual([{
       id: "research-session:spawn-token-1",
       fromExecutionId: "session-lead-session",
       toExecutionId: "session-child",
       kind: "dispatch",
       evidence: { source: "explicit-record", eventId: "spawn-token-1" },
     }]);
-    expect(projectResearchSessionRelations([executions[0]!], [{ id: "child", researchSession: provenance }])).toEqual([]);
+    expect(projectResearchSessionRelations([executions[0]!], [{ id: "child", cwd: "/workspace", researchSession: provenance }])).toEqual([]);
     expect(projectResearchSessionRelations(executions, [
-      { id: "child", researchSession: provenance },
-      { id: "child", researchSession: provenance },
+      { id: "child", cwd: "/workspace", researchSession: provenance },
+      { id: "child", cwd: "/workspace", researchSession: provenance },
     ])).toHaveLength(1);
   });
 });

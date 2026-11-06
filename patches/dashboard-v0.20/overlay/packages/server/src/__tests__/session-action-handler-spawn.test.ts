@@ -3,6 +3,9 @@
  * See change: spawn-failure-diagnostics.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import WebSocket from "ws";
 
 // Mock everything the handler depends on.
@@ -11,6 +14,7 @@ vi.mock("../spawn-process/spawn-preflight.js", () => ({
 }));
 
 vi.mock("../spawn-process/spawn-register-watchdog.js", () => ({
+  armSpawnWatchdog: vi.fn(),
   getSpawnRegisterWatchdog: vi.fn().mockReturnValue({
     arm: vi.fn(),
   }),
@@ -22,6 +26,7 @@ vi.mock("../spawn-process/spawn-failure-log.js", () => ({
 
 vi.mock("../spawn-process/process-manager.js", () => ({
   spawnPiSession: vi.fn(),
+  getKeeperManager: () => ({ isKeeperAlive: () => false }),
 }));
 
 vi.mock("@blackbelt-technology/pi-dashboard-shared/config.js", () => ({
@@ -41,7 +46,7 @@ vi.mock("@blackbelt-technology/pi-dashboard-shared/platform/binary-lookup.js", (
   },
 }));
 
-import { handleSpawnSession } from "../browser-handlers/session-action-handler.js";
+import { handleResumeSession, handleSpawnSession } from "../browser-handlers/session-action-handler.js";
 import { spawnPiSession } from "../spawn-process/process-manager.js";
 import { appendSpawnFailure } from "../spawn-process/spawn-failure-log.js";
 import { preflightSpawn } from "../spawn-process/spawn-preflight.js";
@@ -244,11 +249,50 @@ describe("handleSpawnSession — explicit res-workflow intent", () => {
     expect(JSON.stringify(f.ctx.messages)).not.toMatch(/resWorkflowBinding|canonicalCwd|joinedAt/);
   });
 
-  it("an ordinary same-cwd creation neither checks connection nor files an association", async () => {
+  it("an ordinary creation files its user origin before spawn without checking connection or filing membership", async () => {
     const f = joinedCtx();
+    mockSpawnPiSession.mockImplementation(async (_cwd, options) => {
+      expect(f.registry.file).toHaveBeenCalledWith(options?.spawnToken, { sessionCreation: expect.objectContaining({ schema: "pi-session-creation.v1", kind: "user", entryPoint: "dashboard", cwd: "/p/x" }) }, "res-workflow");
+      return { success: true, message: "fake spawn", spawnToken: options?.spawnToken };
+    });
     await handleSpawnSession({ type: "spawn_session", cwd: "/p/x", requestId: "ordinary" } as never, f.ctx as never);
-    expect(f.prepare).not.toHaveBeenCalled(); expect(f.registry.file).not.toHaveBeenCalled();
-    expect(mockSpawnPiSession).toHaveBeenCalledWith("/p/x", { strategy: "headless" });
+    expect(f.prepare).not.toHaveBeenCalled();
+    expect(mockSpawnPiSession).toHaveBeenCalledWith("/p/x", { strategy: "headless", spawnToken: expect.any(String) });
+  });
+
+  it("withdraws a failed ordinary creation's display ref", async () => {
+    const f = joinedCtx();
+    mockSpawnPiSession.mockRejectedValueOnce(new Error("fixture failure"));
+    await handleSpawnSession({ type: "spawn_session", cwd: "/p/x" } as never, f.ctx as never);
+    const token = f.registry.file.mock.calls[0]?.[0];
+    expect(token).toEqual(expect.any(String));
+    expect(f.registry.remove).toHaveBeenCalledWith(token);
+  });
+
+  it.each([true, false])("a user fork carries a user creation token before spawn (existing history: %s)", async existing => {
+    const f = joinedCtx(); const cwd = mkdtempSync(join(tmpdir(), "user-fork-origin-"));
+    try {
+      const file = join(cwd, "parent.jsonl");
+      if (existing) writeFileSync(file, JSON.stringify({ type: "session", id: "parent", cwd, parentSession: "/a/prior/ancestor.jsonl" }) + "\n");
+      const session = { id: "parent", cwd, sessionFile: file, status: "ended" };
+      const ctx = { ...f.ctx, sessionManager: { get: () => session } };
+      mockSpawnPiSession.mockImplementation(async (_cwd, options) => {
+        expect(f.registry.file).toHaveBeenCalledWith(options?.spawnToken, { sessionCreation: expect.objectContaining({ kind: "user", entryPoint: "dashboard", cwd }) }, "res-workflow");
+        return { success: true, message: "fake fork", spawnToken: options?.spawnToken };
+      });
+      await handleResumeSession({ type: "resume_session", sessionId: "parent", mode: "fork" } as never, ctx as never);
+      expect(mockSpawnPiSession).toHaveBeenCalledTimes(1);
+      expect(f.prepare).not.toHaveBeenCalled();
+      expect(f.registry.file.mock.calls[0][1]).not.toHaveProperty("researchSession");
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
+
+  it("continuing an existing session does not replace its creation evidence", async () => {
+    const f = joinedCtx();
+    const ctx = { ...f.ctx, sessionManager: { get: () => ({ id: "existing", cwd: "/p/x", sessionFile: "/p/x/session.jsonl", status: "ended" }) } };
+    await handleResumeSession({ type: "resume_session", sessionId: "existing", mode: "continue" } as never, ctx as never);
+    expect(mockSpawnPiSession).toHaveBeenCalledTimes(1);
+    expect(f.registry.file).not.toHaveBeenCalled();
   });
 
   it("concurrent same-cwd join intents receive distinct pre-minted tokens, never a cwd association queue", async () => {

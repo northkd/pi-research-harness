@@ -1,5 +1,6 @@
 import type { ResearchWorkbenchObservation, ResearchWorkbenchRelation, ResearchWorkbenchExecution } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
 import { deriveResearchSessionRelations, projectResearchSession, type ResearchSessionProvenance } from "@blackbelt-technology/pi-dashboard-shared/research-session.js";
+import { projectSessionCreation, sessionProvenanceMatchesCwd } from "@blackbelt-technology/pi-dashboard-shared/session-creation.js";
 
 export const RESEARCH_STAGE_IDS = ["1-idea", "2-experiment", "3-review", "4-summary", "5-writing"] as const;
 export type StageId = typeof RESEARCH_STAGE_IDS[number];
@@ -46,14 +47,16 @@ export interface ResearchExecution extends Omit<ResearchWorkbenchExecution, "kin
   observedAt?: string;
 }
 export interface ConfiguredRole { name: string; skills: string[]; note?: string; model?: string }
-export type ResearchExecutionOriginKind = "user-created" | "workflow-created" | "lead-agent-created";
+export type ResearchExecutionOriginKind = "user-created" | "workflow-created" | "lead-agent-created" | "unknown";
 export interface ResearchSessionInfoLike {
   id?: string;
+  cwd?: string;
   name?: string;
   firstMessage?: string;
   nameSource?: string;
   via?: string;
-  resWorkflow?: { via?: string };
+  resWorkflow?: { via?: string; canonicalCwd?: string };
+  sessionCreation?: unknown;
   researchSession?: unknown;
   pluginRefs?: Record<string, Record<string, unknown>>;
 }
@@ -66,35 +69,46 @@ export interface ResearchExecutionOrigin {
   provenance?: ResearchSessionProvenance;
 }
 
-/**
- * Three distinct origins for a real execution. A lead-created collaborator is
- * identified only by persisted provenance (role + true creator session); its
- * prompt is never used as identity. Workflow-created means the session was
- * spawned by the workflow host rather than typed by the user.
- */
+function scopedResearchSession(info: ResearchSessionInfoLike | null | undefined, expectedCwd?: string) {
+  if (!info?.id) return null;
+  const projected = projectResearchSession({ id: info.id, researchSession: info.researchSession, pluginRefs: info.pluginRefs });
+  if (!projected || projected.provenance.parentSessionId === info.id
+    || !sessionProvenanceMatchesCwd(info, projected.provenance.workflowCwd, expectedCwd)) return null;
+  return projected;
+}
+
+/** Creation needs a recorded actor. Workflow membership and launch channels do not prove one. */
 export function projectExecutionOrigin(
   row: ResearchExecution,
   info?: ResearchSessionInfoLike | null,
   workflowParentSessionId?: string,
+  expectedCwd?: string,
 ): ResearchExecutionOrigin {
-  const provenance = projectResearchSession({
-    id: info?.id ?? row.sessionId ?? row.id,
-    researchSession: info?.researchSession,
-    pluginRefs: info?.pluginRefs,
-  })?.provenance;
+  const sessionId = row.sessionId ?? (row.kind === "pi-session" && row.id.startsWith("session-") ? row.id.slice(8) : row.id);
+  const sessionInfo = info && (!info.id || info.id === sessionId) ? { ...info, id: sessionId } : undefined;
+  const provenance = scopedResearchSession(sessionInfo, expectedCwd)?.provenance;
   if (provenance) {
     return {
       kind: "lead-agent-created",
-      label: "Agent 会话创建",
+      label: "Agent 派生",
       creatorSessionId: provenance.creatorSessionId,
       creatorLabel: "父会话",
       role: provenance.role,
       provenance,
     };
   }
-  const workflowCreated = row.source === "workflow-record" || !!row.workflowRunId ||
-    info?.via === "spawn" || info?.resWorkflow?.via === "spawn";
-  if (workflowCreated) {
+  // parentExecutionId comes from observed dispatch, not Pi's user-fork header.
+  if ((row.kind === "pi-session" || row.kind === "native-subagent") && row.parentExecutionId && row.parentExecutionId !== row.id && row.parentExecutionId !== sessionId) {
+    return {
+      kind: "lead-agent-created", label: "Agent 派生",
+      creatorSessionId: row.parentExecutionId.startsWith("session-") ? row.parentExecutionId.slice(8) : row.parentExecutionId,
+      creatorLabel: "父会话", role: row.role,
+    };
+  }
+  if (projectSessionCreation(sessionInfo, expectedCwd)) {
+    return { kind: "user-created", label: "用户创建", creatorLabel: "用户", role: row.role };
+  }
+  if (row.kind === "workflow-step" && row.source === "workflow-record") {
     return {
       kind: "workflow-created",
       label: "工作流创建",
@@ -103,16 +117,7 @@ export function projectExecutionOrigin(
       role: row.role,
     };
   }
-  // A native parent execution is also direct ancestry evidence when provenance
-  // is unavailable (for example while the session metadata request is loading).
-  if (row.kind === "pi-session" && row.parentExecutionId && row.parentExecutionId !== row.id) {
-    return {
-      kind: "lead-agent-created", label: "Agent 会话创建",
-      creatorSessionId: row.parentExecutionId.startsWith("session-") ? row.parentExecutionId.slice(8) : row.parentExecutionId,
-      creatorLabel: "父会话", role: row.role,
-    };
-  }
-  return { kind: "user-created", label: "用户创建", creatorLabel: "用户", role: row.role };
+  return { kind: "unknown", label: "来源未记录", creatorLabel: "未记录", role: row.role };
 }
 
 /**
@@ -122,10 +127,11 @@ export function projectExecutionOrigin(
 export function projectResearchSessionRelations(
   executions: ResearchExecution[],
   sessions: ResearchSessionInfoLike[],
+  expectedCwd?: string,
 ): ResearchWorkbenchRelation[] {
   return deriveResearchSessionRelations(
     executions.map(row => ({ id: row.id, ...(row.sessionId ? { sessionId: row.sessionId } : {}) })),
-    sessions.flatMap(session => typeof session.id === "string"
+    sessions.flatMap(session => typeof session.id === "string" && scopedResearchSession(session, expectedCwd)
       ? [{ id: session.id, researchSession: session.researchSession, pluginRefs: session.pluginRefs }]
       : []),
   );

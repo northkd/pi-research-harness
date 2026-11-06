@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { loadConfig } from "@blackbelt-technology/pi-dashboard-shared/config.js";
+import { createSessionCreation } from "@blackbelt-technology/pi-dashboard-shared/session-creation.js";
 import type { ApiResponse } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import type { FastifyInstance } from "fastify";
 import {
@@ -335,11 +336,18 @@ export function registerSessionApi(fastify: FastifyInstance, deps: SessionApiDep
         agent?: string;
         initialPrompt?: unknown;
         joinResWorkflow?: unknown;
+        creationEntryPoint?: unknown;
       } = request.body ?? {};
       const { cwd, agent } = body;
       if (!cwd) {
         reply.code(400);
         return { success: false, error: "cwd is required" } satisfies ApiResponse;
+      }
+      // The REST route is also used by tools. Only the dedicated UI stage
+      // action declares user creation; generic HTTP spawn stays unclassified.
+      if (body.creationEntryPoint !== undefined && (body.creationEntryPoint !== "research-stage" || body.joinResWorkflow !== true)) {
+        reply.code(400);
+        return { success: false, error: "invalid-session-creation-entry-point" } satisfies ApiResponse;
       }
       // Bounded first prompt. An absent field keeps the legacy no-prompt spawn;
       // an empty string is treated as absent (mirrors the WS spawn road). Any
@@ -452,6 +460,7 @@ export function registerSessionApi(fastify: FastifyInstance, deps: SessionApiDep
             expiresAt: requestExpiresAt ?? null,
             write: true,
           });
+          if (body.creationEntryPoint === "research-stage") workflowRef = { ...workflowRef, sessionCreation: createSessionCreation(workflowRef.resWorkflow.canonicalCwd, "research-stage") };
         } catch (err) {
           const rawCode = (err as { code?: unknown })?.code;
           const code =

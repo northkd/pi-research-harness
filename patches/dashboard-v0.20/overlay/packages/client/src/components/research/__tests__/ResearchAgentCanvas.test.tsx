@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ResearchAgentCanvas } from '../ResearchAgentCanvas.js';
+import { ResearchAgentCanvas, type CanvasSessionCluster } from '../ResearchAgentCanvas.js';
 import type { ResearchExecution } from '../research-projection.js';
 
 function makeClusters(count = 16) {
@@ -13,6 +13,41 @@ function makeClusters(count = 16) {
 const label = (name: string) => name;
 afterEach(cleanup);
 describe('research collaboration canvas', () => {
+  it('starts and returns to the overview at 100%, while preserving a chosen zoom across updates', () => {
+    const props = { stale:false, onAgent:vi.fn(), statusLabel:label, roleLabel:label };
+    const view=render(<ResearchAgentCanvas clusters={makeClusters()} {...props} />);
+    const viewport=screen.getByTestId('research-canvas-viewport');
+    expect(viewport.getAttribute('data-scale')).toBe('1.000');
+    expect(screen.getByTestId('research-canvas-zoom').textContent).toBe('100%');
+    fireEvent.click(screen.getByRole('button',{name:'放大画布'}));
+    expect(viewport.getAttribute('data-scale')).toBe('1.250');
+    view.rerender(<ResearchAgentCanvas clusters={makeClusters(17)} {...props} stale />);
+    expect(viewport.getAttribute('data-scale')).toBe('1.250');
+    fireEvent.click(screen.getByRole('button',{name:'聚焦研究会话 4'}));
+    fireEvent.click(screen.getByRole('button',{name:'返回全部会话'}));
+    expect(viewport.getAttribute('data-scale')).toBe('1.000');
+    fireEvent.click(screen.getByRole('button',{name:'适应画布'}));
+    expect(viewport.getAttribute('data-scale')).not.toBe('1.000');
+  });
+  it('distinguishes explicit user creation, agent dispatch and unrecorded historical origins', () => {
+    const clusters: CanvasSessionCluster[]=makeClusters(3);
+    clusters[0].origin='user-created';
+    clusters[1].origin='lead-agent-created';
+    clusters[1].creatorSessionId='p-0';
+    clusters[1].sessionExec.parentExecutionId='p-0';
+    render(<ResearchAgentCanvas clusters={clusters} stale={false} onAgent={vi.fn()} statusLabel={label} roleLabel={label} />);
+    const user=screen.getByRole('button',{name:'聚焦研究会话 0'});
+    const agent=screen.getByRole('button',{name:'聚焦研究会话 1'});
+    const unknown=screen.getByRole('button',{name:'聚焦研究会话 2'});
+    expect(user.getAttribute('data-origin')).toBe('user-created');
+    expect(within(user).getByTestId('canvas-session-origin').textContent).toContain('用户创建');
+    expect(agent.getAttribute('data-origin')).toBe('lead-agent-created');
+    expect(within(agent).getByTestId('canvas-session-origin').textContent).toContain('Agent 派生');
+    expect(within(agent).getByTestId('canvas-session-creator').textContent).toContain('研究会话 0');
+    expect(unknown.getAttribute('data-origin')).toBe('unknown');
+    expect(within(unknown).getByTestId('canvas-session-origin').textContent).toContain('来源未记录');
+    expect(unknown.textContent).not.toContain('用户创建');
+  });
   it('shows a compact overview and opens only the chosen session’s children', () => {
     const clusters=makeClusters(),onAgent=vi.fn();
     render(<ResearchAgentCanvas clusters={clusters} stale={false} onAgent={onAgent} statusLabel={label} roleLabel={label} />);
@@ -87,6 +122,16 @@ describe('research collaboration canvas', () => {
 });
 
 describe('recorded hierarchy and inline spreading', () => {
+ it('does not select an arbitrary creator when loaded dispatch parents conflict', () => {
+  const clusters=makeClusters(3);
+  clusters[2].sessionExec.parentExecutionId='p-0';
+  const relations=[{id:'conflict',fromExecutionId:'p-1',toExecutionId:'p-2',kind:'dispatch' as const,evidence:{source:'explicit-record' as const,eventId:'spawn-conflict'}}];
+  render(<ResearchAgentCanvas clusters={clusters} relations={relations} stale={false} onAgent={vi.fn()} statusLabel={label} roleLabel={label} />);
+  const child=screen.getByRole('button',{name:'聚焦研究会话 2'});
+  expect(screen.queryAllByTestId('canvas-parent-edge')).toHaveLength(0);
+  expect(within(child).getByTestId('canvas-session-creator').textContent).toContain('父关系冲突');
+  expect(child.textContent).not.toMatch(/创建者：研究会话 [01]|p-0（未载入）/);
+ });
  it('shows nested collaborators beneath their real creator, with parent navigation', () => {
   const clusters=makeClusters(3),relations=[
    {id:'a',fromExecutionId:'p-0',toExecutionId:'p-1',kind:'dispatch' as const,evidence:{source:'explicit-record' as const,eventId:'spawn-a'}},
@@ -108,7 +153,7 @@ describe('recorded hierarchy and inline spreading', () => {
   expect(screen.getAllByTestId('canvas-parent-edge')).toHaveLength(1);
   expect(screen.getByRole('button',{name:'聚焦研究会话 1'}).getAttribute('data-parent-id')).toBe('p-0');
   const detached=screen.getByRole('button',{name:'聚焦研究会话 2'});
-  expect(detached.textContent).toContain('父会话未载入');
+  expect(detached.textContent).toContain('unloaded-parent（未载入）');
   expect(detached.textContent).not.toContain('我创建的');
  });
  it('spreads repeated runs inside the existing canvas, keeps details and collapses with Escape', () => {

@@ -7,7 +7,7 @@ export interface CanvasPoint { x: number; y: number }
 
 const MARGIN = 36;
 const SESSION_WIDTH = 246;
-const SESSION_HEIGHT = 108;
+const SESSION_HEIGHT = 124;
 const ROLE_WIDTH = 222;
 const ROLE_HEIGHT = 82;
 const COLUMN_GAP = 30;
@@ -17,7 +17,7 @@ export const MAX_CANVAS_SCALE = 2;
 
 /** A compact grid: child executions are hidden until their parent is selected. */
 export function layoutOverview(ids: string[], viewportWidth = Number.POSITIVE_INFINITY) {
-  const targetWidth = Math.max(SESSION_WIDTH + MARGIN * 2, (viewportWidth - 24) / 0.8);
+  const targetWidth = Math.max(SESSION_WIDTH + MARGIN * 2, viewportWidth - 24);
   const widthColumns = Math.max(1, Math.floor((targetWidth - MARGIN * 2 + COLUMN_GAP) / (SESSION_WIDTH + COLUMN_GAP)));
   const columns = Math.min(4, widthColumns, Math.max(1, Math.ceil(Math.sqrt(ids.length))));
   const rows = Math.max(1, Math.ceil(ids.length / columns));
@@ -87,7 +87,7 @@ export function layoutSessionHierarchy(ids: string[], recordedParents: ReadonlyM
   });
   const indent = viewportWidth < 500 ? 20 : 36;
   const familyWidth = SESSION_WIDTH + Math.max(...families.map(family => Math.max(...family.map(member => member.depth)))) * indent;
-  const targetWidth = Math.max(familyWidth + MARGIN * 2, (viewportWidth - 24) / 0.8);
+  const targetWidth = Math.max(familyWidth + MARGIN * 2, viewportWidth - 24);
   const columns = Math.min(3, roots.length, Math.max(1, Math.floor((targetWidth - MARGIN * 2 + COLUMN_GAP) / (familyWidth + COLUMN_GAP))));
   const width = MARGIN * 2 + columns * familyWidth + (columns - 1) * COLUMN_GAP;
   const laneBottoms = Array.from({ length: columns }, () => 132);

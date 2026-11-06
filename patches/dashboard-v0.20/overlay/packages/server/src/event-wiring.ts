@@ -6,6 +6,8 @@
 import { VAULT_DELIVERY_FEATURE } from "@blackbelt-technology/pi-dashboard-shared/vault-delivery.js";
 import type { BrowserNotifyMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
 import { loadConfig } from "@blackbelt-technology/pi-dashboard-shared/config.js";
+import { canonPath } from "@blackbelt-technology/pi-dashboard-shared/cwd-guard.js";
+import { isSessionCreation } from "@blackbelt-technology/pi-dashboard-shared/session-creation.js";
 import { normalizeNotifyLevel } from "@blackbelt-technology/pi-dashboard-shared/notify.js";
 import { detectOpenSpecActivity, isValidOpenSpecChangeSlug } from "@blackbelt-technology/pi-dashboard-shared/openspec-activity-detector.js";
 import type { ExtensionToServerMessage, PluginRequestMessage } from "@blackbelt-technology/pi-dashboard-shared/protocol.js";
@@ -1773,17 +1775,26 @@ export function wireEvents(deps: EventWiringDeps): void {
             }
           | undefined;
         const resolved = msg.spawnToken && !deferResWorkflow ? pendingPluginRefRegistry?.resolve(msg.spawnToken) : null;
-        if (resolved?.ownerId === "res-workflow") {
+        const creationOnly = resolved?.ownerId === "res-workflow" && Object.keys(resolved.ref).length === 1 && "sessionCreation" in resolved.ref;
+        if (resolved?.ownerId === "res-workflow" && !creationOnly) {
           // Private host binding must never enter the generic projection or
           // headless entry. The validated association is persisted below.
           pendingResWorkflowRef = resolved.ref;
         } else if (resolved) {
           // First register: consumed from the token store. Promote onto the
           // persisted entry so a reconnect / keeper respawn re-resolves it.
-          ref = resolved.ref;
+          // Ordinary UI creation has no association or private identity. It
+          // uses this same durable bag without asking to join a workflow.
+          if (creationOnly) {
+            const creation = resolved.ref.sessionCreation;
+            // The bridge may resolve a UI cwd symlink. Keep the verified
+            // display scope equal to the registered session's actual cwd.
+            ref = isSessionCreation(creation) && canonPath(creation.cwd) === canonPath(msg.cwd)
+              ? { sessionCreation: { ...creation, cwd: msg.cwd } } : undefined;
+          } else ref = resolved.ref;
           ownerId = resolved.ownerId;
           lifecycle = resolved.lifecycle;
-          if (Object.keys(ref).length > 0) reg.setPluginRef(sessionId, ref);
+          if (ref && Object.keys(ref).length > 0) reg.setPluginRef(sessionId, ref);
         } else {
           // Reconnect / cold-start restore: the token was already consumed;
           // read the ref promoted onto the entry. No owner-notify (owner

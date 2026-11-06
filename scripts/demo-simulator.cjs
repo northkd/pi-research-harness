@@ -125,7 +125,11 @@
     const sessions = [
       ['DEMO:main', '【模拟】主控 Agent'], ['DEMO:literature', '【模拟】文献协作 Agent'],
       ['DEMO:experiment', '【模拟】实验协作 Agent'], ['DEMO:review', '【模拟】评审协作 Agent'],
-    ].map(([id, name]) => ({ id, name, cwd, status: 'idle', driver: 'pi', model: 'DEMO/本地模拟（未调用）' }));
+    ].map(([id, name]) => ({ id, name, cwd, status: 'idle', driver: 'pi', model: 'DEMO/本地模拟（未调用）',
+      ...(id === 'DEMO:main' ? { pluginRefs: { 'res-workflow': { sessionCreation: {
+        schema: 'pi-session-creation.v1', kind: 'user', entryPoint: 'dashboard', cwd, createdAt: new Date().toISOString(),
+      } } } } : {}),
+    }));
     const fakeSnapshot = async (response) => {
       if (!response.ok) return response;
       const data = await response.clone().json();

@@ -21,7 +21,7 @@ import { pathKey, resolveSessionGroupPath } from "@blackbelt-technology/pi-dashb
 import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import type { MetaPersistence } from "../persistence/meta-persistence.js";
 import type { SessionManager } from "./memory-session-manager.js";
-import { sessionFromMeta } from "./session-scanner.js";
+import { projectLegacyResearchSession, sessionFromMeta } from "./session-scanner.js";
 import { projectPluginRefs, sanitizePersistedBags } from "./plugin-refs.js";
 
 /**
@@ -334,6 +334,7 @@ export function createSessionArchive(deps: SessionArchiveDeps): SessionArchive {
         pluginHidden: session.pluginHidden,
         archiveOnEnd: session.archiveOnEnd,
         ...(session.pluginRefs ? { pluginRefs: sanitizePersistedBags(session.pluginRefs), resWorkflow: session.resWorkflow } : {}),
+        ...projectLegacyResearchSession(session),
       };
       sessionManager.remove(id);
       insertRow(captured);

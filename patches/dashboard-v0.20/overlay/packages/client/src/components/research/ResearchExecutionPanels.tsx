@@ -18,6 +18,7 @@ import {
 } from "@mdi/js";
 import { Icon } from "@mdi/react";
 import { useApiBase } from "../../lib/api/api-context.js";
+import { sessionProvenanceMatchesCwd } from "@blackbelt-technology/pi-dashboard-shared/session-creation.js";
 import {
   configuredRolesForStage,
   latestObservedExecution,
@@ -124,6 +125,13 @@ const hasRunningStatus = (row: ResearchExecution) =>
   !["completed", "failed", "blocked", "stopped", "cancelled", "paused"].includes(row.workflowStatus ?? "") &&
   ["streaming", "started", "running", "queued", "pending", "stopping"].includes(row.status);
 
+const EMPTY_SESSION_INFO: Record<string, ResearchSessionInfoLike> = {};
+const originBadgeClass = (kind: ResearchExecutionOrigin["kind"]) => kind === "user-created"
+  ? "border-sky-500/40 bg-sky-500/10 text-[var(--text-secondary)]"
+  : kind === "lead-agent-created" ? "border-purple-500/40 bg-purple-500/10 text-[var(--text-secondary)]"
+  : kind === "workflow-created" ? "border-amber-500/40 bg-amber-500/10 text-[var(--text-secondary)]"
+  : "border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]";
+
 export function formatTime(iso?: string | null): string {
   if (!iso) return "未记录";
   const ms = Date.parse(iso);
@@ -181,8 +189,12 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
   const run = projection.currentRun;
   const isWorkflowActive = executions.some((row) => live(row));
 
-  // Session metadata cache for matching real session names and the three origins.
-  const [sessionInfoMap, setSessionInfoMap] = useState<Record<string, ResearchSessionInfoLike>>({});
+  // Do not reuse names or creation evidence from another host/workspace while loading.
+  const sessionInfoScope = JSON.stringify([apiBase, cwd ?? null]);
+  const [sessionInfoCache, setSessionInfoCache] = useState<{ scope: string; rows: Record<string, ResearchSessionInfoLike> }>(
+    () => ({ scope: sessionInfoScope, rows: EMPTY_SESSION_INFO }),
+  );
+  const sessionInfoMap = sessionInfoCache.scope === sessionInfoScope ? sessionInfoCache.rows : EMPTY_SESSION_INFO;
 
   useEffect(() => {
     if (!visible) return;
@@ -192,12 +204,12 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
         const res = await fetch(`${apiBase}/api/sessions`);
         if (res.ok) {
           const json = await res.json();
-          const list = Array.isArray(json) ? json : json?.data || [];
-          const map: Record<string, any> = {};
+          const list = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+          const map: Record<string, ResearchSessionInfoLike> = {};
           for (const s of list) {
-            if (s.id) map[s.id] = s;
+            if (s && typeof s.id === "string" && s.id) map[s.id] = s;
           }
-          if (isMounted) setSessionInfoMap(map);
+          if (isMounted) setSessionInfoCache({ scope: sessionInfoScope, rows: map });
         }
       } catch {
         // ignore
@@ -209,15 +221,36 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
       isMounted = false;
       clearInterval(interval);
     };
-  }, [apiBase, visible]);
+  }, [apiBase, sessionInfoScope, visible]);
 
   const sessionIdFor = (row: ResearchExecution) => row.sessionId || (row.kind === "pi-session" && row.id.startsWith("session-") ? row.id.slice(8) : row.id);
-  const sessionInfoFor = (row: ResearchExecution) => sessionInfoMap[sessionIdFor(row)] || sessionInfoMap[row.id];
+  const sessionInfoFor = (row: ResearchExecution) => {
+    const info = sessionInfoMap[sessionIdFor(row)];
+    return info && (!cwd || sessionProvenanceMatchesCwd(info, cwd, cwd)) ? info : undefined;
+  };
   const originFor = (row: ResearchExecution): ResearchExecutionOrigin => {
-    const origin = projectExecutionOrigin(row, sessionInfoFor(row), run?.parentSessionId);
-    const creator = origin.creatorSessionId ? sessionInfoMap[origin.creatorSessionId] : undefined;
-    const name = creator?.nameSource !== "firstMessage" ? creator?.name?.trim().slice(0, 80) : undefined;
-    return name && name !== origin.creatorSessionId ? { ...origin, creatorLabel: name } : origin;
+    const info = sessionInfoFor(row);
+    const parentIds = [row.parentExecutionId, ...projection.relations.filter(relation => relation.kind === "dispatch" && relation.toExecutionId === row.id).map(relation => relation.fromExecutionId)]
+      .filter((id): id is string => !!id && id !== row.id && id !== sessionIdFor(row));
+    const parents = new Map(parentIds.map(id => {
+      const parent = executions.find(execution => execution.id === id);
+      return [parent ? sessionIdFor(parent) : id.replace(/^session-/, ""), id];
+    }));
+    const observedParent = parents.size === 1 ? [...parents.values()][0] : undefined;
+    const origin = projectExecutionOrigin(observedParent ? { ...row, parentExecutionId: observedParent } : row, info, run?.parentSessionId, cwd);
+    if (origin.provenance) parents.set(origin.provenance.creatorSessionId, origin.provenance.creatorSessionId);
+    if (parents.size > 1 && (row.kind === "pi-session" || row.kind === "native-subagent")) {
+      return { ...origin, kind: "lead-agent-created", label: "Agent 派生", creatorSessionId: undefined, creatorLabel: "父关系冲突" };
+    }
+    const creatorExecution = origin.creatorSessionId ? executions.find(execution => execution.id === origin.creatorSessionId || sessionIdFor(execution) === origin.creatorSessionId) : undefined;
+    const creator = creatorExecution ? sessionInfoFor(creatorExecution) : origin.creatorSessionId ? sessionInfoMap[origin.creatorSessionId] : undefined;
+    const creatorScope = origin.provenance?.workflowCwd ?? info?.resWorkflow?.canonicalCwd ?? info?.cwd ?? cwd;
+    const creatorInScope = creator && (creatorScope ? sessionProvenanceMatchesCwd(creator, creatorScope, cwd) : !!creatorExecution);
+    const name = creatorInScope && creator.nameSource !== "firstMessage" ? creator.name?.trim().slice(0, 80) : undefined;
+    const fallbackName = creatorExecution ? (sessionIdFor(creatorExecution) === mainAgentId ? "主 Agent 会话" : "协作会话") : origin.creatorSessionId;
+    return origin.creatorSessionId
+      ? { ...origin, creatorLabel: name && name !== origin.creatorSessionId ? name : fallbackName! }
+      : origin;
   };
   const roleNameOf = (row: ResearchExecution) => originFor(row).role ?? executionRoleName(row);
   const configured = stage ? configuredRolesForStage(projection.configuration, stage) : [];
@@ -228,13 +261,13 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
   }
   const originText = (row: ResearchExecution) => {
     const origin = originFor(row);
-    return `${origin.label} · 创建者：${origin.creatorLabel}${origin.role ? ` · 角色：${roleLabel(origin.role)}` : ""}`;
+    return `${origin.label}${origin.kind === "unknown" ? "" : ` · 创建者：${origin.creatorLabel}`}${origin.role ? ` · 角色：${roleLabel(origin.role)}` : ""}`;
   };
   const sessionRows = useMemo(() => Object.values(sessionInfoMap).filter(
     (row): row is ResearchSessionInfoLike & { id: string } => typeof row.id === "string",
   ), [sessionInfoMap]);
   const relations = useMemo(() => {
-    const merged = [...projection.relations, ...projectResearchSessionRelations(executions, sessionRows)];
+    const merged = [...projection.relations, ...projectResearchSessionRelations(executions, sessionRows, cwd)];
     const byId = new Map<string, (typeof merged)[number]>();
     for (const relation of merged) {
       if (executions.some(node => node.id === relation.fromExecutionId) &&
@@ -243,7 +276,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
       }
     }
     return [...byId.values()];
-  }, [projection.relations, executions, sessionRows]);
+  }, [projection.relations, executions, sessionRows, cwd]);
 
   const getSessionDisplayName = (sessionExec: ResearchExecution, isCaptain: boolean) => {
     const info = sessionInfoFor(sessionExec);
@@ -364,7 +397,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
       const res = await fetch(`${apiBase}/api/session/spawn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd, initialPrompt: promptText, joinResWorkflow: true }),
+        body: JSON.stringify({ cwd, initialPrompt: promptText, joinResWorkflow: true, creationEntryPoint: "research-stage" }),
       });
       const receipt = await res.json().catch(() => ({}));
       if (!res.ok || receipt.success !== true) throw new Error(receipt.error || `创建请求未确认（HTTP ${res.status}）`);
@@ -484,6 +517,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
         isUserCreated: origin.kind === "user-created",
         origin: origin.kind,
         originLabel: origin.label,
+        creatorSessionId: origin.creatorSessionId,
         creatorLabel: origin.creatorLabel,
         assignedRole: origin.role,
         workflowDuty,
@@ -1247,13 +1281,9 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                                     {relation.tag}
                                   </span>
                                   <span
-                                    className={`rounded-full border px-2 py-0.5 text-[9.5px] font-medium ${
-                                      cluster.isUserCreated
-                                        ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
-                                        : "border-purple-500/40 bg-purple-500/10 text-purple-400"
-                                    }`}
+                                    className={`rounded-full border px-2 py-0.5 text-[9.5px] font-medium ${originBadgeClass(cluster.origin)}`}
                                   >
-                                    {cluster.originLabel} · 创建者：{cluster.creatorLabel}
+                                    {cluster.originLabel}{cluster.origin !== "unknown" && ` · 创建者：${cluster.creatorLabel}`}
                                   </span>
                                   {isLive ? (
                                     <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/60 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-600 dark:text-emerald-400 shadow-sm animate-pulse">
@@ -1363,13 +1393,9 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                                     {relation.tag} · {relation.linkText}
                                   </span>
                                   <span
-                                    className={`rounded-full border px-2 py-0.5 text-[9.5px] font-medium ${
-                                      cluster.isUserCreated
-                                        ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
-                                        : "border-purple-500/40 bg-purple-500/10 text-purple-400"
-                                    }`}
+                                    className={`rounded-full border px-2 py-0.5 text-[9.5px] font-medium ${originBadgeClass(cluster.origin)}`}
                                   >
-                                    {cluster.originLabel} · 创建者：{cluster.creatorLabel}
+                                    {cluster.originLabel}{cluster.origin !== "unknown" && ` · 创建者：${cluster.creatorLabel}`}
                                   </span>
                                   {childSubs.length > 0 ? (
                                     <span className="tint-action-purple rounded-full border px-2.5 py-0.5 text-[10.5px] font-semibold">
@@ -1873,7 +1899,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                   </span>
                 </div>
                 <div className="win11-grid-cards">
-                  {fusedSessionClusters.map(({ sessionExec, title, roleObj, isCaptain, isUserCreated, originLabel, creatorLabel, workflowDuty, childSubs }) => (
+                  {fusedSessionClusters.map(({ sessionExec, title, roleObj, isCaptain, origin, originLabel, creatorLabel, workflowDuty, childSubs }) => (
                     <div
                       key={sessionExec.id}
                       onClick={() => onAgent(roleObj, sessionExec)}
@@ -1895,12 +1921,8 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                             {title}
                           </span>
                           <div className="flex items-center gap-1.5">
-                            <span className={`rounded-full border px-2 py-0.2 text-[9.5px] font-medium ${
-                              isUserCreated
-                                ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
-                                : "border-purple-500/40 bg-purple-500/10 text-purple-400"
-                            }`}>
-                              {originLabel} · 创建者：{creatorLabel}
+                            <span className={`rounded-full border px-2 py-0.2 text-[9.5px] font-medium ${originBadgeClass(origin)}`}>
+                              {originLabel}{origin !== "unknown" && ` · 创建者：${creatorLabel}`}
                             </span>
                             <span className="tint-action-purple rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold">
                               派发 {childSubs.length} 子任务

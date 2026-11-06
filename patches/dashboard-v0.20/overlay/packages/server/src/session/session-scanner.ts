@@ -7,6 +7,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, sep } from "node:path";
 import type { ArchivedSessionSummary } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
 import { loadConfig } from "@blackbelt-technology/pi-dashboard-shared/config.js";
+import { canonPath } from "@blackbelt-technology/pi-dashboard-shared/cwd-guard.js";
+import { isResearchSessionProvenance, normalizeResearchSessionProvenance } from "@blackbelt-technology/pi-dashboard-shared/research-session.js";
 import { resolvePiSessionsDir } from "@blackbelt-technology/pi-dashboard-shared/dashboard-paths.js";
 import { hasGitPathSegment } from "@blackbelt-technology/pi-dashboard-shared/platform/git.js";
 import { mergeSessionMeta, metaPath, readSessionMeta, type SessionMeta, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
@@ -14,12 +16,26 @@ import { condenseForFirstMessage } from "@blackbelt-technology/pi-dashboard-shar
 import type { DashboardSession, SessionSource } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { readServiceArchiveBackfillAt, stampServiceArchiveBackfill } from "../persistence/boot-state.js";
 import { readJsonlMtime } from "./derive-ended-at.js";
-import { projectPluginRefs, sanitizePersistedBags } from "./plugin-refs.js";
+import { mergePluginRefBag, projectPluginRefs, sanitizePersistedBags } from "./plugin-refs.js";
 import { STATS_EXTRACTOR_VERSION } from "@blackbelt-technology/pi-dashboard-shared/usage-totals.js";
 import { extractSessionStats } from "./session-stats-reader.js";
 
 function getSessionsDir(): string {
   return resolvePiSessionsDir({ piSessionsDir: loadConfig().piSessionsDir });
+}
+
+/** Old sidecars stored this evidence outside the plugin bag. Normalize only
+ * in memory so routine saves/re-registers retain it; never create membership. */
+export function projectLegacyResearchSession(meta: { cwd?: string; pluginRefs?: Record<string, Record<string, unknown>>; researchSession?: unknown }) {
+  const recorded = meta.researchSession;
+  if (meta.pluginRefs?.["res-workflow"]?.researchSession !== undefined || meta.pluginRefs?.["research-session"]?.researchSession !== undefined ||
+      !isResearchSessionProvenance(recorded) || !meta.cwd || !isAbsolute(meta.cwd) || canonPath(meta.cwd) !== canonPath(recorded.workflowCwd)) return {};
+  const researchSession = normalizeResearchSessionProvenance(recorded);
+  const bags = sanitizePersistedBags(meta.pluginRefs);
+  const pluginRefs = mergePluginRefBag(bags, "res-workflow", { researchSession });
+  // An oversized legacy record may still be shown in this read. Never grow
+  // the durable bag past its bound and lose its existing membership on load.
+  return { researchSession, ...(pluginRefs ? { pluginRefs } : {}) };
 }
 
 /** Extract session ID (UUID) from a filename like `<ts>_<uuid>.jsonl` */
@@ -154,6 +170,7 @@ export function sessionFromMeta(
     // bag is validated (untrusted sidecar) — see session/plugin-refs.ts.
     ...projectPluginRefs(meta.pluginRefs),
     pluginRefs: sanitizePersistedBags(meta.pluginRefs),
+    ...projectLegacyResearchSession(meta),
     id: sessionId,
     cwd: meta.cwd ?? "",
     name: meta.name,
@@ -366,6 +383,7 @@ function archivedRowFromMeta(
     pluginHidden: meta.pluginHidden,
     archiveOnEnd: meta.archiveOnEnd,
     ...(pluginRefs ? { pluginRefs, resWorkflow: projectPluginRefs(pluginRefs).resWorkflow as DashboardSession["resWorkflow"] } : {}),
+    ...projectLegacyResearchSession(meta),
   };
 }
 

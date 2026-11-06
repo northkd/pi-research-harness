@@ -129,6 +129,35 @@ async function run() {
     return { refs, calls, prepare, support: { prepare, registry: refs } };
   }
 
+  test('stage UI entry point persists user creation while generic REST workflow spawn has no creator claim', async () => {
+    for (const entryPoint of [undefined, 'research-stage']) {
+      const r = rig(); const joined = joinSupport();
+      r.deps.resWorkflowSpawnSupport = joined.support;
+      let filed;
+      globalThis.__stageMocks.spawnPiSession = async (_cwd, options) => {
+        filed = joined.refs.resolve(options.spawnToken)?.ref;
+        return { success: true, message: 'spawned', spawnToken: options.spawnToken };
+      };
+      const response = await r.handler({ body: { cwd: '/proj', joinResWorkflow: true, ...(entryPoint ? { creationEntryPoint: entryPoint } : {}) } }, r.reply);
+      assert.equal(response.success, true);
+      if (!entryPoint) assert.equal(filed.sessionCreation, undefined);
+      else {
+        assert.deepEqual({ ...filed.sessionCreation, createdAt: 'time' }, { schema: 'pi-session-creation.v1', kind: 'user', entryPoint: 'research-stage', cwd: '/proj', createdAt: 'time' });
+        assert.ok(Number.isFinite(Date.parse(filed.sessionCreation.createdAt)));
+      }
+    }
+  });
+
+  test('REST creation labels accept only the stage UI declaration with explicit membership', async () => {
+    for (const body of [{ cwd: '/proj', creationEntryPoint: 'dashboard' }, { cwd: '/proj', creationEntryPoint: 'research-stage' }, { cwd: '/proj', joinResWorkflow: true, creationEntryPoint: { kind: 'user' } }]) {
+      const r = rig();
+      const response = await r.handler({ body }, r.reply);
+      assert.equal(r.reply.statusCode, 400);
+      assert.equal(response.error, 'invalid-session-creation-entry-point');
+      assert.equal(r.spawns.length, 0);
+    }
+  });
+
   test('REST spawn files prompt under exact token before spawn and fast register consumes it once', async () => {
     const r = rig();
     let during = null;

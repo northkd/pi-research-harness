@@ -17,6 +17,11 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 原生子代理保持指定的具体模型，发送前核验自动路由接管。
 操作入口、错误码、模型兼容边界见[目标绑定与子代理模型说明](docs/charter-binding-models/README.md)。
 
+工作区会话总览默认 `100%`，返回总览恢复 `100%`。
+画布与列表区分“用户创建”“Agent 派生”“来源未记录”。
+派生会话显示实际创建者与父子连线，旧版有效父记录沿保存与归档保留。
+规则与实测范围见[会话来源与默认缩放说明](docs/session-origins/README.md)。
+
 ![项目实际运行结构：操作入口、Pi 执行、研究记录、观测回流与独立 Science 查看通道](docs/images/project-illustration.png)
 
 *以上是按当前源码绘制的运行结构图。全部流程图提供 [SVG 与绘图脚本](docs/images/README.md)，节点、箭头及适用条件见[源码对应表](docs/images/workflow-source-map.md)。图中的外部能力需要本机配置；图本身不表示真实研究任务已经运行。*
@@ -56,7 +61,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 ![新版研究工作台：目标、阶段、任务、产物及任务概览](docs/ui-redesign/screenshots/01-real-workbench-1440.png)
 
-![智能体协作画布：真实创建层级、父子连线与所属子代理](docs/autonomous-collaboration/screenshots/06-agents-demo-1440.png)
+![智能体协作画布：100% 总览、用户与 Agent 创建来源、父子连线](docs/session-origins/evidence/24-session-origins-100-percent-1440.png)
 
 *截图来自实际构建的 Dashboard、原生服务和认证流程，画面内容为明确标注的合成演示数据。工作台截图保留 2026-11-05 验证，协作画布更新为本分支 2026-11-06 验证；它们不表示正在执行真实科研任务。*
 
@@ -156,6 +161,11 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 `research_session` 从可信会话上下文核对项目、成员关系与研究约定；子任务不能通过传入任意目录或目标地址跨工作台派发。角色分工也不会自行扩大远程计算、材料外发或发表授权。见 [research_session 实现](extensions/research-loop/src/workbench-session-tool.mjs) 与 [委派策略](extensions/research-loop/src/delegation-policy.mjs)。
 
 智能体画布读取真实派发来源，展示创建者、协作深度和父子连线；分组虚线只表示同一工作区，任务交接也不会被当作父子关系。聚焦会话后可以返回创建者，多轮 Subagent 卡片在当前画布中展开和收起。画布本身不会启动智能体。文字纠偏发往真实目标会话；“已提交”不等于已经执行，也不等于停止其进程。
+
+新建、手动 Fork 与独立阶段入口保存用户创建记录。
+`via: spawn` 只表示工作流接入方式，不能判断创建者。
+有可靠父记录的会话显示“Agent 派生”；缺少历史证据的会话显示“来源未记录”。
+总览默认 `100%`，手动缩放与显式“适应画布”继续保留。
 
 ### 已附带的角色模板
 
@@ -458,14 +468,22 @@ node scripts/ui-preview/launcher.mjs run \
 该轮隔离真实服务部署与浏览器 35 项通过；访问权限使用实际服务保存及刷新，主 Agent 投递与阶段创建使用明确标注的模拟，0 模型请求。
 该轮未修改用户生产机器；[完整验证清单](docs/workflow-controls/validation.json)保留执行范围与截图。
 
-本轮目标绑定与模型保持：Harness 375 项、监督离线 64 项、客户端 39 项、新 binding server 7 项通过。
+上一轮目标绑定与模型保持：Harness 375 项、监督离线 64 项、客户端 39 项、新 binding server 7 项通过。
 实际 SDK / native driver 检查 16 项通过，网络请求 0 次。
 生产前端构建成功，648 项覆盖层核对一致。
 隔离真实服务与浏览器 39 项通过，绑定衔接保留 6 个原记录文件 hash。
 TypeScript 仍有 61 条既有诊断，新增 0 条。
 扩展 server 回归 21 项通过、13 项失败，失败与同布局基线逐项一致。
-本轮未调用真实 LLM，未操作用户生产数据或服务器。
+该轮未调用真实 LLM，未操作用户生产数据或服务器。
 升级步骤、两张新增截图与实测证据见[目标绑定与子代理模型说明](docs/charter-binding-models/README.md)。
+
+本轮会话来源与默认缩放：Harness 381 项、监督离线 64 项通过。
+原生 Dashboard client 63 项、server 63 项、最终画布布局 9 项通过；各组存在重叠。
+生产构建、语法检查与 649 项覆盖层核对通过。
+隔离真实服务与浏览器 43 项通过，覆盖三类来源、100% 默认值、创建者文字可读性与旧来源正常保存。
+完整 TypeScript 仍有 61 条既有诊断，新增 0、消除 0。
+本轮未调用真实模型，未操作用户生产数据或服务。
+源码规则、更新步骤与实测证据见[会话来源与默认缩放说明](docs/session-origins/README.md)。
 
 ## 可用范围与已知问题
 
@@ -473,7 +491,7 @@ TypeScript 仍有 61 条既有诊断，新增 0 条。
 |---|---|
 | 自动研究角色与模型 | 自动流程引用的 explorer、strategist 和阶段映射中的 reframer 未附带角色模板；具体模型 ID 和原生 subagents 服务需本地核对。不能承诺全新安装后一键完成科研 |
 | 同步代理 | workbench-sync 代理已有的工作区访问/身份转发缺口仍未在本分支完成验收。原先独立的研究后端 resolver 路径不匹配已修复并通过定向回归 |
-| 全仓类型检查 | 当前仍有 61 条既有诊断；与上一轮记录相比新增 0 条、消除 0 条。详见[诊断对比](docs/charter-binding-models/evidence/typescript-comparison.json)，全仓 typecheck 尚未通过 |
+| 全仓类型检查 | 当前仍有 61 条既有诊断；与上一轮记录相比新增 0 条、消除 0 条。详见[诊断对比](docs/session-origins/evidence/typescript-comparison.json)，全仓 typecheck 尚未通过 |
 | Science | 已保存查看、通信和产物跟随源码；通用 host、项目授权绑定和实际环境需另配，真实端到端未验证 |
 | 平台与资源 | Linux 是主要验证环境；macOS 能构建和展示，但部分并行/监督准入依赖 `/proc/meminfo`。Windows 原生和 WSL2 全流程未在本分支验收 |
 | 外部服务 | UI 验证没有运行真实付费模型、活跃 Pi bridge、远程 PTY 终止、Browser takeover 或所有插件的真实任务 |
@@ -491,6 +509,7 @@ TypeScript 仍有 61 条既有诊断，新增 0 条。
 - [0.20 开发、安装与服务器部署](docs/RELEASE-0.20.md)
 - [主 Agent、五阶段启动、访问权限与当前验证](docs/workflow-controls/implementation.md)
 - [目标版本绑定、旧工作流衔接与子代理模型保持](docs/charter-binding-models/README.md)
+- [会话总览 100%、创建来源与父 Agent](docs/session-origins/README.md)
 - [递归执行器、协作画布与旧授权模式历史记录](docs/autonomous-collaboration/implementation.md)
 - [模型速度：原生计时、CC Switch 参考口径与验证](docs/model-speed/implementation.md)
 - [UI 改版：实现、截图、测试与已知失败](docs/ui-redesign/implementation.md)

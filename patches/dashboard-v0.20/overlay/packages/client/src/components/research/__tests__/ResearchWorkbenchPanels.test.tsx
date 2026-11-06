@@ -70,19 +70,39 @@ describe("research scientific panels", () => {
       spawnToken: "spawn-token-1234", createdAt: "2026-11-04T00:00:00.000Z", origin: "research_session", relation: "dispatch",
     };
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ data: [
-      { id: "parent-uuid", name: "研究主会话", nameSource: "manual" },
-      { id: "child-uuid", name: "实验协作者", nameSource: "manual", firstMessage: "DO_NOT_USE_RAW_FIRST_PROMPT", researchSession: provenance },
+      { id: "parent-uuid", cwd: "/project", name: "研究主会话", nameSource: "manual" },
+      { id: "child-uuid", cwd: "/project", name: "实验协作者", nameSource: "manual", firstMessage: "DO_NOT_USE_RAW_FIRST_PROMPT", researchSession: provenance },
     ] }) })));
     try {
       render(<ResearchExecutionPanels projection={projectResearch(snapshot, observed)} stage={null} includeUnstaged stale={false} onAgent={vi.fn()} />);
       const canvas = screen.getByRole("region", { name: "协作拓扑画布" });
       await waitFor(() => expect(within(canvas).getAllByText("实验协作者").length).toBeGreaterThan(0));
       expect(canvas.textContent).toContain("创建者：研究主会话");
-      expect(canvas.textContent).toContain("Agent 创建");
+      expect(canvas.textContent).toContain("Agent 派生");
       expect(canvas.textContent).toContain("暂无已记录的任务职责");
       expect(canvas.textContent).not.toContain("全流程主控协调");
       expect(canvas.textContent).not.toMatch(/parent-uuid|child-uuid|DO_NOT_USE_RAW_FIRST_PROMPT/);
     } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("shows creation evidence for the current workspace and drops cached labels when its scope changes", async () => {
+    const observed = observation();
+    observed.executions = [{ id: "session-human", kind: "pi-session", sessionId: "human", status: "idle" }];
+    const info = { id: "human", cwd: "/project", name: "用户建立的研究会话", nameSource: "manual", resWorkflow: { via: "spawn" },
+      pluginRefs: { "res-workflow": { sessionCreation: {
+        schema: "pi-session-creation.v1", kind: "user", entryPoint: "research-stage", cwd: "/project", createdAt: "2026-11-06T00:00:00.000Z",
+      } } },
+    };
+    const fetchMock=vi.fn(async () => ({ ok:true, json:async () => ({ data:[info] }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const props={ projection:projectResearch(snapshot, observed), stage:null, includeUnstaged:true, stale:false, onAgent:vi.fn() };
+    const view=render(<ResearchExecutionPanels {...props} cwd="/project" />);
+    await waitFor(() => expect(screen.getByTestId("canvas-session-origin").textContent).toContain("用户创建"));
+    expect(screen.getByTestId("canvas-session-node").textContent).not.toContain("工作流创建");
+    fetchMock.mockImplementation(() => new Promise(() => {}));
+    view.rerender(<ResearchExecutionPanels {...props} cwd="/different-project" />);
+    expect(screen.getByTestId("canvas-session-origin").textContent).toContain("来源未记录");
+    expect(screen.getByTestId("canvas-session-node").textContent).not.toContain("用户建立的研究会话");
   });
 
   it("requests res-workflow membership when independently launching a stage session", async () => {
@@ -95,11 +115,36 @@ describe("research scientific panels", () => {
       fireEvent.click(screen.getByText("确认并新建会话启动"));
       await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/session/spawn"))).toBe(true));
       const spawnCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/session/spawn"))!;
-      expect(JSON.parse(String(spawnCall[1]?.body))).toMatchObject({ cwd: "/project", joinResWorkflow: true });
+      expect(JSON.parse(String(spawnCall[1]?.body))).toMatchObject({ cwd: "/project", joinResWorkflow: true, creationEntryPoint: "research-stage" });
       expect(String(spawnCall[1]?.body)).toContain("阶段独立启动任务");
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps recorded dispatch origins and conflicting parents consistent between canvas and list", async () => {
+    const observed=observation();
+    observed.executions=[
+      { id:"session-parent", sessionId:"parent", kind:"pi-session", status:"idle" },
+      { id:"session-child", sessionId:"child", kind:"pi-session", status:"idle" },
+    ];
+    observed.relations=[{ id:"dispatch", fromExecutionId:"session-parent", toExecutionId:"session-child", kind:"dispatch", evidence:{source:"tool-call",eventId:"spawn"} }];
+    vi.stubGlobal("fetch",vi.fn(async () => ({ok:true,json:async () => ({data:[
+      {id:"parent",cwd:"/project",name:"用户主会话",nameSource:"manual"},
+      {id:"child",cwd:"/project",name:"派生任务",nameSource:"manual",resWorkflow:{via:"spawn"}},
+    ]})})));
+    const props={ stage:null, includeUnstaged:true, stale:false, onAgent:vi.fn(), cwd:"/project" };
+    const view=render(<ResearchExecutionPanels {...props} projection={projectResearch(snapshot,observed)} />);
+    await waitFor(() => expect(screen.getByRole("button",{name:"聚焦派生任务"}).getAttribute("data-origin")).toBe("lead-agent-created"));
+    fireEvent.click(within(screen.getByRole("group",{name:"协作视图布局"})).getByRole("button",{name:"列表"}));
+    expect(screen.getAllByText(/Agent 派生 · 创建者：用户主会话/).length).toBeGreaterThan(0);
+    observed.executions.push({id:"session-other",sessionId:"other",kind:"pi-session",status:"idle"});
+    observed.relations.push({id:"conflict",fromExecutionId:"session-other",toExecutionId:"session-child",kind:"dispatch",evidence:{source:"tool-call",eventId:"spawn-conflict"}});
+    view.rerender(<ResearchExecutionPanels {...props} projection={projectResearch(snapshot,observed)} />);
+    expect(screen.getAllByText(/Agent 派生 · 创建者：父关系冲突/).length).toBeGreaterThan(0);
+    fireEvent.click(within(screen.getByRole("group",{name:"协作视图布局"})).getByRole("button",{name:"画布"}));
+    expect(within(screen.getByRole("button",{name:"聚焦派生任务"})).getByTestId("canvas-session-creator").textContent).toContain("父关系冲突");
+    expect(screen.queryAllByTestId("canvas-parent-edge")).toHaveLength(0);
   });
 
   it("does not turn configured skills or task text into observed tool calls", () => {

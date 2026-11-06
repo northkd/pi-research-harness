@@ -29,6 +29,14 @@ test('narrow split panes use a readable single-column overview',()=>{
  assert.ok(new Set(wide.nodes.map(n=>n.x)).size>1);
  assert.ok(narrow.width<=400);
 });
+test('overview columns fit their viewport at 100% without assuming an automatic zoom-out',()=>{
+ const ids=Array.from({length:16},(_,i)=>`session-${i}`);
+ for(const viewport of [600,800,900]) {
+  assert.ok(layoutOverview(ids,viewport).width<=viewport);
+  const parents=new Map([['session-1','session-0'],['session-3','session-2']]);
+  assert.ok(layoutSessionHierarchy(ids,parents,viewport).width<=viewport);
+ }
+});
 test('focused branches stack vertically in narrow split panes',()=>{
  const scene=layoutFocusedSession('parent',['role-a','role-b'],320);
  assert.ok(scene.width<=350);

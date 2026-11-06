@@ -138,6 +138,11 @@ function seedStaleCharterBinding(previewHome, session) {
     successCriteria: ['【演示】旧主张保持原始验收记录', '【演示】新目标单独核对'],
     constraints: ['【演示】源数据只读'], nonGoals: ['【演示】不发布真实结论'], autoRun: false,
   }, { expectedCharterHash: fixture.receipt.charterHash });
+  // The binding fixture needs only an adopted pointer. The live workbench
+  // additionally reads the current operation; seed that normal pointer in
+  // this temporary fixture so its observation uses the same adoption scope.
+  const currentPointerPath = path.join(fixture.privateScope, 'current.json');
+  fs.writeFileSync(currentPointerPath, JSON.stringify({ id: fixture.adoptionId }) + '\n', { mode: 0o600 });
   const files = [];
   function collect(directory) {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -148,12 +153,51 @@ function seedStaleCharterBinding(previewHome, session) {
     }
   }
   collect(path.join(project, '.pi/research-loop'));
-  for (const file of [fixture.privateOperationPath, fixture.adoptedPointerPath, path.join(project, 'ledger.jsonl')]) {
+  for (const file of [fixture.privateOperationPath, fixture.adoptedPointerPath, currentPointerPath, path.join(project, 'ledger.jsonl')]) {
     if (fs.existsSync(file)) files.push(file);
   }
   const originalFiles = [...new Set(files)].map(file => ({ file, hash: createHash('sha256').update(fs.readFileSync(file)).digest('hex') }));
   return { cwd: project, privateDir: fixture.privateDir, ownerKey: fixture.ownerKey, adoptionId: fixture.adoptionId,
     sessionId: session.id, sessionFile: session.sessionFile, originalFiles };
+}
+
+function seedSessionOrigins(previewHome, sessions, binding) {
+  const now = new Date().toISOString();
+  const state = JSON.parse(fs.readFileSync(path.join(project, '.pi/research-loop/state.json'), 'utf8'));
+  const charterHash = 'sha256:' + createHash('sha256').update(JSON.stringify(state.charter)).digest('hex');
+  function amend(session, edit) {
+    const file = session.sessionFile.replace(/\.jsonl$/, '.meta.json');
+    const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+    edit(meta);
+    fs.writeFileSync(file, JSON.stringify(meta, null, 2) + '\n', { mode: 0o600 });
+  }
+  amend(sessions[0], meta => {
+    meta.pluginRefs ??= {};
+    meta.pluginRefs['res-workflow'] = { ...(meta.pluginRefs['res-workflow'] ?? {}),
+      sessionCreation: { schema: 'pi-session-creation.v1', kind: 'user', entryPoint: 'dashboard', cwd: project, createdAt: now } };
+  });
+  // A genuine legacy field shape, with synthetic values. Creation history is
+  // separate from current membership; this ended collaborator is not joined.
+  amend(sessions[1], meta => {
+    meta.researchSession = { schema: 'pi-research-session.v1', parentSessionId: sessions[0].id,
+      creatorSessionId: sessions[0].id, creatorAgent: 'research_session', role: 'research-literature',
+      task: '【演示】核对合成来源记录；没有实际派发任务。', stage: '1-idea', charterHash,
+      adoptionId: binding.adoptionId, workflowCwd: project, spawnToken: randomUUID(), createdAt: now,
+      origin: 'research_session', relation: 'dispatch' };
+  });
+  amend(sessions[2], meta => {
+    meta.pluginRefs ??= {};
+    meta.pluginRefs['res-workflow'] = { resWorkflow: { canonicalCwd: project, joinedAt: now, via: 'spawn' } };
+  });
+  // Supply an explicitly synthetic observer checkpoint, then let the actual
+  // server read ended-session metadata and the actual client derive ancestry.
+  const parents = Object.fromEntries(sessions.map(session => [session.id, { execution: {
+    id: 'session-' + session.id, sessionId: session.id, kind: 'pi-session', role: 'collaborator', status: 'ended',
+    startedAt: now, lastActivityAt: now, prompt: '【演示】来源显示夹具；没有模型调用。',
+  } }]));
+  const checkpoint = path.join(previewHome, '.pi/dashboard/workbench-sync/state/synthetic-owner/synthetic-project/checkpoint.json');
+  fs.mkdirSync(path.dirname(checkpoint), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(checkpoint, JSON.stringify({ scope: { cwd: project, charterHash, adoptionId: binding.adoptionId }, parents, native: {}, actions: [] }, null, 2), { mode: 0o600 });
 }
 
 function isolatedEnvironment(previewHome) {
@@ -339,6 +383,7 @@ try {
   registerDashboardExtras(runtime);
   const syntheticSessions = seedEndedTranscripts(previewHome);
   const bindingFixture = seedStaleCharterBinding(previewHome, syntheticSessions[0]);
+  seedSessionOrigins(previewHome, syntheticSessions, bindingFixture);
   const port = await availablePort();
   const configDir = path.join(previewHome, '.pi/dashboard');
   fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });

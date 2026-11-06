@@ -5,6 +5,7 @@ import { canonPath } from "@blackbelt-technology/pi-dashboard-shared/cwd-guard.j
 import { metaPath, writeSessionMeta, type SessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
 import { isResWorkflowServiceSession, type ResWorkflowConnection, type ResWorkflowParticipantResponse, type ResWorkflowParticipation } from "@blackbelt-technology/pi-dashboard-shared/res-workflow.js";
 import { isResearchSessionProvenance, normalizeResearchSessionProvenance, type ResearchSessionProvenance } from "@blackbelt-technology/pi-dashboard-shared/research-session.js";
+import { isSessionCreation, type SessionCreation } from "@blackbelt-technology/pi-dashboard-shared/session-creation.js";
 import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { isLocalOperator } from "../identity/session-access.js";
 import type { PendingPluginRefRegistry } from "../pending/pending-plugin-ref-registry.js";
@@ -22,6 +23,8 @@ export interface ResWorkflowSpawnRef {
   resWorkflowBinding: { ownerKey: string; identity: ResWorkflowIdentity; resolverActive: boolean };
   /** Optional top-level-collaborator provenance supplied by the native tool road. */
   researchSession?: ResearchSessionProvenance;
+  /** Explicit UI creation label, never a participant or permission credential. */
+  sessionCreation?: SessionCreation;
 }
 /** A verified parent may supply the child's exact two-part owner key. */
 function ownerKeyRealm(value: string): boolean {
@@ -64,7 +67,7 @@ export function createResWorkflowParticipants(deps: ParticipantDeps) {
     if (!(await deps.connection(access)).adopted) throw new ResWorkflowError(409, "res-workflow-not-connected");
   };
 
-  async function join(access: ResWorkflowAccess, sessionId: string, via: ResWorkflowParticipation["via"], spawn?: { resWorkflow: ResWorkflowParticipation; sessionFile?: string; principalOwner?: HistoryCandidate["principalOwner"]; researchSession?: unknown }): Promise<ResWorkflowParticipantResponse> {
+  async function join(access: ResWorkflowAccess, sessionId: string, via: ResWorkflowParticipation["via"], spawn?: { resWorkflow: ResWorkflowParticipation; sessionFile?: string; principalOwner?: HistoryCandidate["principalOwner"]; researchSession?: unknown; sessionCreation?: unknown }): Promise<ResWorkflowParticipantResponse> {
     const researchSession = spawn?.researchSession === undefined
       ? undefined
       : isResearchSessionProvenance(spawn.researchSession)
@@ -72,6 +75,7 @@ export function createResWorkflowParticipants(deps: ParticipantDeps) {
         : (() => { throw new ResWorkflowError(409, "participant-spawn-binding-invalid"); })();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) throw new ResWorkflowError(400, "real-session-id-required");
     await connected(access);
+    const sessionCreation = isSessionCreation(spawn?.sessionCreation) && canonPath(spawn.sessionCreation.cwd) === access.cwd ? spawn.sessionCreation : undefined;
     const row = lookup(sessionId);
     if (!matches(row, access)) throw new ResWorkflowError(404, "participant-session-not-found");
     const expected = { ...row! };
@@ -119,7 +123,7 @@ export function createResWorkflowParticipants(deps: ParticipantDeps) {
       const bags = { ...disk };
       for (const [owner, bag] of Object.entries(memory ?? {})) bags[owner] = { ...bags[owner], ...bag };
       const resWorkflow = participation(bags["res-workflow"]?.resWorkflow, access.cwd) ?? spawn?.resWorkflow ?? { canonicalCwd: access.cwd, joinedAt: new Date().toISOString(), via };
-      const sanitized = deps.registry.sanitize({ resWorkflow, ...(researchSession ? { researchSession } : {}) }, "res-workflow");
+      const sanitized = deps.registry.sanitize({ resWorkflow, ...(researchSession ? { researchSession } : {}), ...(sessionCreation ? { sessionCreation } : {}) }, "res-workflow");
       if (!sanitized.resWorkflow || researchSession && sanitized.researchSession === undefined) throw new ResWorkflowError(409, "participant-ref-unavailable");
       const pluginRefs = mergePluginRefBag(bags, "res-workflow", sanitized);
       if (!pluginRefs) throw new ResWorkflowError(409, "participant-ref-unavailable");
@@ -127,7 +131,7 @@ export function createResWorkflowParticipants(deps: ParticipantDeps) {
       writeSessionMeta(file, nextMeta);
       if (deps.sessionManager.get(sessionId)) deps.sessionManager.update(sessionId, { pluginRefs, resWorkflow, ...(researchSession ? { researchSession } : {}) });
       else deps.sessionArchive.updatePluginRefs(sessionId, pluginRefs);
-      deps.broadcast(sessionId, { resWorkflow, ...(researchSession ? { researchSession } : {}) });
+      deps.broadcast(sessionId, { pluginRefs, resWorkflow, ...(researchSession ? { researchSession } : {}) });
       return { sessionId, resWorkflow, ...(researchSession ? { researchSession } : {}) };
     } catch (err) {
       if (err instanceof ResWorkflowError) throw err;
@@ -192,7 +196,7 @@ export function createResWorkflowParticipants(deps: ParticipantDeps) {
         : binding.identity.principal ?? undefined
       : undefined;
     if (!matches(row, access) || !sameOwner(row!.principalOwner, expectedOwner) || row!.sessionFile && row!.sessionFile !== registration.sessionFile) throw new ResWorkflowError(404, "participant-session-not-found");
-    return join(access, sessionId, "spawn", { resWorkflow: intent, sessionFile: registration.sessionFile, principalOwner: expectedOwner, researchSession: raw.researchSession });
+    return join(access, sessionId, "spawn", { resWorkflow: intent, sessionFile: registration.sessionFile, principalOwner: expectedOwner, researchSession: raw.researchSession, sessionCreation: raw.sessionCreation });
   }
   return { join, prepareSpawn, registerSpawn };
 }

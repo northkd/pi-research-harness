@@ -4,6 +4,7 @@
 import { existsSync } from "node:fs";
 import type { BrowserToServerMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
 import { loadConfig } from "@blackbelt-technology/pi-dashboard-shared/config.js";
+import { createSessionCreation } from "@blackbelt-technology/pi-dashboard-shared/session-creation.js";
 import type { Principal } from "@blackbelt-technology/pi-dashboard-shared/identity.js";
 import { ToolResolver } from "@blackbelt-technology/pi-dashboard-shared/platform/binary-lookup.js";
 import {
@@ -45,6 +46,16 @@ import { choiceToSpawnOptions, resolveResumeChoice, validateSpawnChoice } from "
 export const FORK_DEGRADED_TO_NEW_MESSAGE =
   "Started a fresh session \u2014 the source had no persisted history to fork from.";
 export const FORK_DEGRADED_TO_NEW_CODE = "FORK_DEGRADED_TO_NEW";
+
+/** A user fork is a fresh user creation; its JSONL parent is not a dispatch. */
+function fileUserForkCreation(ctx: BrowserHandlerContext, cwd: string): string | undefined {
+  const registry = ctx.resWorkflowSpawnSupport?.registry;
+  if (!registry) return;
+  try {
+    const token = mintSpawnToken();
+    return registry.file(token, { sessionCreation: createSessionCreation(cwd, "dashboard") }, "res-workflow") ? token : undefined;
+  } catch { return; } // Display metadata must not block an otherwise valid fork.
+}
 
 /**
  * The slice of `BrowserHandlerContext` the reload path actually needs.
@@ -650,6 +661,8 @@ export async function handleResumeSession(
     sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "This session is still running", code: "resume.already_active", requestId: msg.requestId });
     return;
   }
+  const forkCreationToken = msg.mode === "fork" ? fileUserForkCreation(ctx, session.cwd) : undefined;
+  const dropForkCreation = () => { if (forkCreationToken) ctx.resWorkflowSpawnSupport?.registry.remove(forkCreationToken); };
   // Fork preflight: silent-degrade when the source session has no on-disk
   // JSONL yet (empty session, no persisted entries). `pi --fork <missing>`
   // would crash silently and produce a 30s register-timeout; instead we
@@ -669,7 +682,9 @@ export async function handleResumeSession(
     // Fresh spawn: no sessionFile, no mode — just `pi --mode rpc`.
     const degradeResult = await spawnPiSession(session.cwd, {
       strategy: degradeConfig.spawnStrategy,
-    });
+      ...(forkCreationToken ? { spawnToken: forkCreationToken } : {}),
+    }).catch(err => { dropForkCreation(); throw err; });
+    if (!degradeResult.success) dropForkCreation();
     // Zombie reopen is a spawn entry point.
     const degradeTimeoutMs = armSpawnWatchdog(
       session.cwd,
@@ -719,6 +734,7 @@ export async function handleResumeSession(
     try {
       forkSessionFile = createBranchedSessionFile(session.sessionFile, msg.entryId);
     } catch (err: any) {
+      dropForkCreation();
       sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: `Fork from entry failed: ${err.message}`, requestId: msg.requestId });
       return;
     }
@@ -742,7 +758,9 @@ export async function handleResumeSession(
     mode: msg.mode,
     strategy: resumeConfig.spawnStrategy,
     ...choiceToSpawnOptions(resumeChoice),
-  });
+    ...(forkCreationToken ? { spawnToken: forkCreationToken } : {}),
+  }).catch(err => { dropForkCreation(); throw err; });
+  if (!result.success) dropForkCreation();
   // WebSocket drag-to-resume / fork is a spawn entry point.
   const resumeTimeoutMs = armSpawnWatchdog(
     session.cwd,
@@ -819,16 +837,24 @@ export async function handleSpawnSession(
       return;
     }
   }
-  const ownerSpawnToken = ownerToStamp || workflowRef ? mintSpawnToken() : undefined;
+  // This browser action is an explicit user creation, including a blank
+  // session that may join a workflow later. Membership `via` is unrelated.
+  let creationRef: { sessionCreation: ReturnType<typeof createSessionCreation> } | undefined;
+  if (support) {
+    try { creationRef = { sessionCreation: createSessionCreation(workflowRef?.resWorkflow.canonicalCwd ?? msg.cwd, "dashboard") }; }
+    catch { refuseAssociation("session-creation-invalid"); return; }
+  }
+  const pendingRef = workflowRef ? { ...workflowRef, ...creationRef } : creationRef;
+  const ownerSpawnToken = ownerToStamp || pendingRef ? mintSpawnToken() : undefined;
   if (ownerToStamp && ownerSpawnToken) {
     pendingPrincipalOwnerRegistry?.file(ownerSpawnToken, ownerToStamp);
   }
   const dropPendingIdentity = () => {
     if (!ownerSpawnToken) return;
     pendingPrincipalOwnerRegistry?.remove(ownerSpawnToken);
-    if (workflowRef) support?.registry.remove(ownerSpawnToken);
+    if (pendingRef) support?.registry.remove(ownerSpawnToken);
   };
-  if (workflowRef && ownerSpawnToken && !support!.registry.file(ownerSpawnToken, workflowRef, "res-workflow")) {
+  if (pendingRef && ownerSpawnToken && !support!.registry.file(ownerSpawnToken, pendingRef, "res-workflow")) {
     dropPendingIdentity(); refuseAssociation("participant-ref-unavailable"); return;
   }
 

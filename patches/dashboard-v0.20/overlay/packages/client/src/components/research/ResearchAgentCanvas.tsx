@@ -22,6 +22,7 @@ export interface CanvasSessionCluster {
   isUserCreated?: boolean;
   origin?: ResearchExecutionOriginKind;
   originLabel?: string;
+  creatorSessionId?: string;
   creatorLabel?: string;
   assignedRole?: string;
   workflowDuty?: string;
@@ -42,9 +43,12 @@ const originTint = (origin?: ResearchExecutionOriginKind) =>
     ? "border-purple-500/40 bg-purple-500/10 text-[var(--text-secondary)]"
     : origin === "workflow-created"
     ? "border-amber-500/40 bg-amber-500/10 text-[var(--text-secondary)]"
-    : "border-sky-500/40 bg-sky-500/10 text-[var(--text-secondary)]";
+    : origin === "user-created"
+    ? "border-sky-500/40 bg-sky-500/10 text-[var(--text-secondary)]"
+    : "border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]";
 const originGlyph = (origin?: ResearchExecutionOriginKind) =>
-  origin === "lead-agent-created" ? "🧭 Agent 创建" : origin === "workflow-created" ? "⚡ 工作流创建" : "👤 我创建的";
+  origin === "lead-agent-created" ? "🧭 Agent 派生" : origin === "workflow-created" ? "⚡ 工作流创建"
+    : origin === "user-created" ? "👤 用户创建" : "来源未记录";
 
 const nodeStyle = (node: CanvasNode) => ({ position: "absolute" as const, left: node.x, top: node.y, width: node.width, height: node.height });
 const curve = (fromX: number, fromY: number, toX: number, toY: number) => {
@@ -69,6 +73,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
   const [rolePage, setRolePage] = useState(0);
   const [size, setSize] = useState({ width: 800, height: 520 });
   const [view, setView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 });
+  const previousSceneMode = useRef<"overview" | "detail" | null>(null);
   const filteredClusters = useMemo(() => {
     const term = query.trim().toLocaleLowerCase();
     return term ? clusters.filter(cluster => [cluster.title, cluster.sessionExec.id, cluster.sessionExec.prompt, cluster.sessionExec.summary]
@@ -81,11 +86,14 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
   const visibleRoles = focused?.childRoleGroups.slice(page * pageSize, (page + 1) * pageSize) ?? [];
   const expandedRoleGroup = focused?.sessionExec.id === expandedGroupKey?.sessionId
     ? visibleRoles.find(group => group.roleName === expandedGroupKey?.roleName) : undefined;
-  const sessionParents = useMemo(() => resolveSessionParents(clusters.map(cluster => cluster.sessionExec.id), [
-    ...relations,
-    ...clusters.flatMap(cluster => cluster.sessionExec.parentExecutionId
-      ? [{ fromExecutionId: cluster.sessionExec.parentExecutionId, toExecutionId: cluster.sessionExec.id, kind: "dispatch" }] : []),
-  ]), [clusters, relations]);
+  const sessionParents = useMemo(() => {
+    const conflicts = new Set(clusters.filter(cluster => cluster.creatorLabel === "父关系冲突").map(cluster => cluster.sessionExec.id));
+    return resolveSessionParents(clusters.map(cluster => cluster.sessionExec.id), [
+      ...relations,
+      ...clusters.flatMap(cluster => cluster.sessionExec.parentExecutionId
+        ? [{ fromExecutionId: cluster.sessionExec.parentExecutionId, toExecutionId: cluster.sessionExec.id, kind: "dispatch" }] : []),
+    ].filter(relation => !conflicts.has(relation.toExecutionId)));
+  }, [clusters, relations]);
   const clusterById = useMemo(() => new Map(clusters.map(cluster => [cluster.sessionExec.id, cluster])), [clusters]);
   const overview = useMemo(() => layoutSessionHierarchy(filteredClusters.map(cluster => cluster.sessionExec.id), sessionParents, size.width), [filteredClusters, sessionParents, size.width]);
   const detail = useMemo(() => focused ? layoutFocusedSession(focused.sessionExec.id, visibleRoles.map(group => group.roleName), size.width,
@@ -127,8 +135,18 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
   }, [visible]);
 
-  // Keep the user's pan/zoom while live status updates arrive; refit only when the topology changes.
+  // The overview opens at actual size. Geometry updates retain the user's scale;
+  // fitting the whole workspace is an explicit action, including for large graphs.
   useLayoutEffect(() => {
+    const enteringOverview = previousSceneMode.current !== "overview";
+    previousSceneMode.current = detail ? "detail" : "overview";
+    if (!detail) {
+      setView(previous => {
+        const scale = enteringOverview ? 1 : previous.scale;
+        return { scale, x: Math.max(12, (size.width - scene.width * scale) / 2), y: 12 };
+      });
+      return;
+    }
     const fitted = fitGraph(scene, size);
     const readableScale = 0.7;
     setView(fitted.scale < readableScale
@@ -188,16 +206,24 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
     const liveNode = !(stale && row.source === "observation") && isLive(row.status);
     const parentId = sessionParents.get(row.id);
     const parent = parentId && clusterById.get(parentId);
-    const recordedCreator = !!row.parentExecutionId || relations.some(relation => relation.kind === "dispatch" && relation.toExecutionId === row.id);
+    const directParent = row.parentExecutionId !== row.id ? row.parentExecutionId : undefined;
+    const recordedParents = relations.filter(relation => relation.kind === "dispatch" && relation.toExecutionId === row.id && relation.fromExecutionId !== row.id);
+    const recordedCreator = !!directParent || recordedParents.length > 0;
     const isAgentCreated = !!parentId || recordedCreator || cluster.origin === "lead-agent-created";
-    const creatorLabel = parent ? parent.title : isAgentCreated
-      ? (cluster.creatorLabel && !["用户", "父会话", "主agent"].includes(cluster.creatorLabel) ? `${cluster.creatorLabel}（未载入）` : "父会话未载入")
+    const origin = isAgentCreated ? "lead-agent-created" : cluster.origin ?? "unknown";
+    const recordedParentIds = new Set([directParent, ...recordedParents.map(relation => relation.fromExecutionId)].filter((id): id is string => !!id));
+    const parentConflict = recordedParentIds.size > 1 || cluster.creatorLabel === "父关系冲突";
+    const creatorId = cluster.creatorSessionId ?? directParent?.replace(/^session-/, "")
+      ?? (recordedParents.length === 1 ? recordedParents[0].fromExecutionId.replace(/^session-/, "") : undefined);
+    const creatorLabel = parentConflict ? "父关系冲突" : parent ? parent.title : isAgentCreated
+      ? (cluster.creatorLabel && !["用户", "父会话", "主agent"].includes(cluster.creatorLabel)
+        ? `${cluster.creatorLabel}（未载入）` : creatorId ? `${creatorId}（未载入）` : "父会话未载入")
       : cluster.creatorLabel;
     let depth = 0, ancestor = parentId;
     while (ancestor) { depth += 1; ancestor = sessionParents.get(ancestor); }
     return (
       <button
-        key={node.id} type="button" data-testid="canvas-session-node" data-parent-id={parentId ?? undefined} data-depth={depth}
+        key={node.id} type="button" data-testid="canvas-session-node" data-origin={origin} data-parent-id={parentId ?? undefined} data-depth={depth}
         aria-label={inFocus ? `查看 ${cluster.title} 会话详情` : `聚焦${cluster.title}`}
         onClick={() => { if (inFocus) onAgent(cluster.roleObj, row); else focusSession(row.id); }}
         onFocus={() => revealNode(node)}
@@ -220,19 +246,19 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
               <span className={`font-semibold ${cluster.isCaptain ? "text-[var(--accent-orange)]" : "text-[var(--accent-blue)]"}`}>
                 {cluster.isCaptain ? (depth ? `主 Agent · 第 ${depth} 层` : "主 Agent") : parentId ? `第 ${depth} 层协作` : isAgentCreated ? "派生协作会话" : "协作会话"}
               </span>
-              <span className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${originTint(isAgentCreated ? "lead-agent-created" : cluster.origin)}`}>
-                {originGlyph(isAgentCreated ? "lead-agent-created" : cluster.origin)}
+              <span data-testid="canvas-session-origin" className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${originTint(origin)}`}>
+                {originGlyph(origin)}
               </span>
               {cluster.assignedRole && (
-                <span className="rounded px-1.5 py-0.2 border border-[var(--border-primary)] text-[9.5px] text-[var(--text-secondary)]">
+                <span className="max-w-full truncate rounded px-1.5 py-0.2 border border-[var(--border-primary)] text-[9.5px] text-[var(--text-secondary)]" title={`角色：${roleLabel(cluster.assignedRole)}`}>
                   角色：{roleLabel(cluster.assignedRole)}
                 </span>
               )}
             </div>
           </span>
         </span>
-        <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={[creatorLabel && `创建者：${creatorLabel}`, cluster.workflowDuty].filter(Boolean).join(" · ") || cluster.title}>
-          {creatorLabel && isAgentCreated ? `创建者：${creatorLabel} · ` : ""}
+        <span data-testid="canvas-session-caption" className="block shrink-0 truncate text-[10px] text-[var(--text-secondary)]" title={[creatorLabel && `创建者：${creatorLabel}`, cluster.workflowDuty].filter(Boolean).join(" · ") || cluster.title}>
+          {creatorLabel && isAgentCreated ? <span data-testid="canvas-session-creator">创建者：{creatorLabel} · </span> : null}
           {cluster.workflowDuty ?? "暂无已记录的任务职责"}
         </span>
         <span className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
@@ -282,7 +308,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
             <button type="button" aria-label="下一组角色" disabled={page >= pageCount - 1} onClick={() => { setExpandedGroupKey(null); setRolePage(page + 1); }} className="rounded px-1.5 py-1 hover:bg-[var(--bg-hover)] disabled:opacity-40">›</button>
           </div>}
           <button type="button" onClick={() => zoom(1 / 1.25)} className="win11-btn p-1.5" aria-label="缩小画布" title="缩小"><Icon path={mdiMagnifyMinusOutline} size={0.65} /></button>
-          <span className="w-10 text-center font-mono text-[10px] text-[var(--text-secondary)]" aria-label={`缩放 ${Math.round(view.scale * 100)}%`}>{Math.round(view.scale * 100)}%</span>
+          <span data-testid="research-canvas-zoom" className="w-10 text-center font-mono text-[10px] text-[var(--text-secondary)]" aria-label={`缩放 ${Math.round(view.scale * 100)}%`}>{Math.round(view.scale * 100)}%</span>
           <button type="button" onClick={() => zoom(1.25)} className="win11-btn p-1.5" aria-label="放大画布" title="放大"><Icon path={mdiMagnifyPlusOutline} size={0.65} /></button>
           <button type="button" onClick={fit} className="win11-btn p-1.5" aria-label="适应画布" title="适应画布"><Icon path={mdiArrowExpandAll} size={0.65} /></button>
         </div>

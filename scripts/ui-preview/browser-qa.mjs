@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { inspectWorkbenchRecordContext } from '../../extensions/research-loop/src/workbench-context.mjs';
 const runtime = process.env.PI_UI_PREVIEW_RUNTIME;
@@ -183,6 +184,87 @@ try {
     await page.getByTestId('research-main-agent-select').selectOption(bindingFixture.sessionId);
     await page.waitForFunction(() => document.querySelector('[data-testid="research-charter-binding-status"]')?.textContent === '会话已接入 · 目标版本 2 已绑定');
   });
+  await check('real ended-session API retains explicit user and legacy agent creation records', async () => {
+    const response = await context.request.get(`${base}/api/sessions`);
+    assert.equal(response.status(), 200);
+    const listing = await response.json();
+    const rows = Array.isArray(listing) ? listing : listing.data;
+    assert.ok(Array.isArray(rows), 'Native sessions response must contain its session list');
+    const user = rows.find(row => row.id === fixtureSessions[0].id);
+    const child = rows.find(row => row.id === fixtureSessions[1].id);
+    const unknown = rows.find(row => row.id === fixtureSessions[2].id);
+    assert.equal(user.pluginRefs?.['res-workflow']?.sessionCreation?.kind, 'user');
+    const provenance = child.researchSession ?? child.pluginRefs?.['res-workflow']?.researchSession;
+    assert.equal(provenance?.parentSessionId, user.id);
+    assert.equal((unknown.resWorkflow ?? unknown.pluginRefs?.['res-workflow']?.resWorkflow)?.via, 'spawn');
+    assert.equal(unknown.pluginRefs?.['res-workflow']?.sessionCreation, undefined);
+    // Exercise the native full-overwrite metadata save, without resuming a Pi
+    // process or changing the displayed fixture name.
+    const renamed = await context.request.post(`${base}/api/session/${child.id}/rename`, { data: { name: fixtureSessions[1].name } });
+    assert.equal(renamed.status(), 200);
+    assert.equal((await renamed.json()).success, true);
+    const sidecar = fixtureSessions[1].sessionFile.replace(/\.jsonl$/, '.meta.json');
+    let saved;
+    const deadline = Date.now() + 5000;
+    do {
+      saved = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
+      if (saved.pluginRefs?.['res-workflow']?.researchSession?.parentSessionId === user.id) break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    assert.equal(saved.pluginRefs?.['res-workflow']?.researchSession?.parentSessionId, user.id);
+    assert.equal(saved.pluginRefs?.['res-workflow']?.resWorkflow, undefined);
+    report.sessionOrigins = { syntheticMetadata: true, realHistoryApi: true, legacyParentRetained: true,
+      persistedAfterRename: true, joinMethodDoesNotProveCreation: true };
+  });
+  await check('actual workspace overview starts at 100 percent and distinguishes all recorded origins', async () => {
+    const observed = await (await context.request.get(`${base}/api/res-workflow/workbench-sync?cwd=${encodeURIComponent(cwd)}`)).json();
+    const snapshot = await (await context.request.get(`${base}/api/res-workflow?cwd=${encodeURIComponent(cwd)}`)).json();
+    const { isResearchWorkbenchObservation } = await import(pathToFileURL(path.join(runtime, 'packages/shared/src/research-workbench.ts')).href);
+    const charter = JSON.parse(snapshot.research['state.json']).charter;
+    const scope = { valid: isResearchWorkbenchObservation(observed), adopted: snapshot.adopted,
+      cwdMatches: observed.cwd === snapshot.adoption?.cwd, adoptionMatches: observed.adoptionId === snapshot.adoption?.id,
+      charterMatches: observed.charterHash === 'sha256:' + createHash('sha256').update(JSON.stringify(charter)).digest('hex'),
+      executions: observed.executions?.length ?? 0 };
+    report.sessionOrigins ??= {};
+    report.sessionOrigins.observation = scope;
+    assert.ok(Object.entries(scope).every(([key, value]) => key === 'executions' ? value === 3 : value === true), JSON.stringify(scope));
+    await page.getByTestId('workspace-view-agents').click();
+    await page.getByTestId('research-canvas-viewport').waitFor({ state: 'visible' });
+    const node = index => page.getByRole('button', { name: `聚焦${fixtureSessions[index].name}`, exact: true });
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="canvas-session-origin"]')].some(el => el.textContent.includes('用户创建')));
+    assert.match(await node(0).getByTestId('canvas-session-origin').innerText(), /用户创建/);
+    assert.match(await node(1).getByTestId('canvas-session-origin').innerText(), /Agent 派生/);
+    assert.match(await node(2).getByTestId('canvas-session-origin').innerText(), /来源未记录/);
+    assert.equal(await node(1).getAttribute('data-parent-id'), `session-${fixtureSessions[0].id}`);
+    assert.match(await node(1).getByTestId('canvas-session-creator').innerText(), /数据细节分析/);
+    assert.equal(await page.getByTestId('canvas-parent-edge').count(), 1);
+    assert.equal(await page.getByTestId('research-canvas-viewport').getAttribute('data-scale'), '1.000');
+    assert.equal((await page.getByTestId('research-canvas-zoom').innerText()).trim(), '100%');
+    await page.getByTestId('research-canvas-viewport').scrollIntoViewIfNeeded();
+    const creatorLine = await node(1).getByTestId('canvas-session-creator').evaluate(element => {
+      const text = element.getBoundingClientRect(), line = element.parentElement.getBoundingClientRect();
+      const card = element.closest('[data-testid="canvas-session-node"]').getBoundingClientRect();
+      return { textHeight: text.height, lineHeight: line.height,
+        insideLine: text.top >= line.top - 1 && text.bottom <= line.bottom + 1,
+        insideCard: text.top >= card.top && text.bottom <= card.bottom };
+    });
+    assert.ok(creatorLine.textHeight > 0 && creatorLine.lineHeight >= creatorLine.textHeight - 1
+      && creatorLine.insideLine && creatorLine.insideCard, `Creator line must remain readable: ${JSON.stringify(creatorLine)}`);
+    await screenshot('24-session-origins-100-percent-1440');
+    report.sessionOrigins.defaultZoom = 1;
+    report.sessionOrigins.rendered = ['user-created', 'agent-derived', 'unknown'];
+    report.sessionOrigins.creatorLineVisible = true;
+  });
+  await check('manual canvas zoom still works and returning to overview restores the 100 percent default', async () => {
+    await page.getByRole('button', { name: '放大画布', exact: true }).click();
+    assert.equal(await page.getByTestId('research-canvas-viewport').getAttribute('data-scale'), '1.250');
+    await page.getByRole('button', { name: '缩小画布', exact: true }).click();
+    assert.equal(await page.getByTestId('research-canvas-viewport').getAttribute('data-scale'), '1.000');
+    await page.getByRole('button', { name: `聚焦${fixtureSessions[0].name}`, exact: true }).click();
+    await page.getByRole('button', { name: '返回全部会话', exact: true }).click();
+    assert.equal(await page.getByTestId('research-canvas-viewport').getAttribute('data-scale'), '1.000');
+    await page.getByTestId('workspace-view-workbench').click();
+  });
   await check('one access-mode selection persists through the real authenticated service without task setup', async () => {
     const select = page.getByTestId('research-access-select');
     await page.waitForFunction(() => document.querySelector('[data-testid="research-access-select"]')?.value === 'default');
@@ -343,6 +425,9 @@ try {
   await check('demo data is explicitly identified', async () => assert.match(await page.locator('body').innerText(), /模拟|演示/));
   await screenshot('05-workbench-demo-1440');
   await page.getByTestId('workspace-view-agents').click();
+  await check('collaboration demo also opens with a 100 percent overview', async () => {
+    assert.equal(await page.getByTestId('research-canvas-viewport').getAttribute('data-scale'), '1.000');
+  });
   await screenshot('06-agents-demo-1440');
   await check('recorded multi-agent creators form a three-level canvas hierarchy', async () => {
     const nodes = page.getByTestId('canvas-session-node');

@@ -75,7 +75,7 @@ describe("visible research execution controls", () => {
     expect((screen.getByTestId("research-stage-prompt") as HTMLTextAreaElement).value).toBe("只运行指定的数值验证，保存原始结果。");
     expect(screen.queryByText(/已成功为/)).toBeNull();
     const failedCall = fetcher.mock.calls.find(([url]) => String(url).endsWith("/api/session/spawn"))!;
-    expect(JSON.parse(String(failedCall[1]?.body))).toEqual({ cwd: "/project", initialPrompt: "只运行指定的数值验证，保存原始结果。", joinResWorkflow: true });
+    expect(JSON.parse(String(failedCall[1]?.body))).toEqual({ cwd: "/project", initialPrompt: "只运行指定的数值验证，保存原始结果。", joinResWorkflow: true, creationEntryPoint: "research-stage" });
     succeeded = true;
     fireEvent.click(screen.getByTestId("research-stage-launch"));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
