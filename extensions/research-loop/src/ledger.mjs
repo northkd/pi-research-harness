@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { withResearchAttemptBudget, readResearchBudget } from './research-budget.mjs';
 import { charterHash as currentCharterHash, withScientificRecordLock } from './adoption.mjs';
 
 export const LEDGER_VERSION = 1;
@@ -129,7 +128,7 @@ export function newState(charter) {
     attempts: 0,
     phase: 1,
     claims: [],
-    budget: { maxAttempts: 60, staleAfter: 3, repeatLimit: 2 },
+    budget: { staleAfter: 3, repeatLimit: 2 },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -196,9 +195,7 @@ export function appendAttempt(cwd, state, attempt, options = {}) {
   return withScientificRecordLock(cwd, () => {
     const actualCharterHash = currentCharterHash(cwd);
     if (sha256(state?.charter ?? null) !== actualCharterHash || options.expectedCharterHash !== undefined && options.expectedCharterHash !== actualCharterHash) throw new Error('Research charter changed; reload before logging');
-    const append = () => appendAttemptUnlocked(cwd, state, attempt, actualCharterHash);
-    if (!fs.existsSync(path.join(rootDir(cwd), 'research-budget'))) return append();
-    return withResearchAttemptBudget({ cwd, charterHash: actualCharterHash }, append);
+    return appendAttemptUnlocked(cwd, state, attempt, actualCharterHash);
   });
 }
 
@@ -268,8 +265,6 @@ export function analyze(cwd, state, now = Date.now()) {
   const ledger = readLedger(cwd);
   const staleAfter = state?.budget?.staleAfter ?? 3;
   const repeatLimit = state?.budget?.repeatLimit ?? 2;
-  const configuredBudget = fs.existsSync(path.join(rootDir(cwd), 'research-budget')) ? readResearchBudget({ cwd, charterHash: currentCharterHash(cwd) }) : null;
-  const maxAttempts = configuredBudget?.limits.attempts ?? state?.budget?.maxAttempts ?? 60;
 
   const phaseLedger = currentPhaseLedger(ledger);
   const tail = phaseLedger.slice(-Math.max(staleAfter, 1));
@@ -294,14 +289,10 @@ export function analyze(cwd, state, now = Date.now()) {
   const hoursSince = lastAt ? (now - lastAt) / 3600000 : null;
 
   const reasons = [];
-  if (ledger.length >= maxAttempts) reasons.push(`attempt budget exhausted (${ledger.length}/${maxAttempts})`);
   if (sincePositive >= staleAfter) reasons.push(`no positive signal in the last ${sincePositive} attempts of the current phase`);
   if (repeated.length) reasons.push(`repeated attempt fingerprint in the current phase: ${repeated.map((r) => `${r.key} x${r.count}`).join(', ')}`);
 
-  // exhausted is a distinct terminal state with its own exit; it is never
-  // treated as a scientific dead end.
   const level = ledger.length === 0 ? 'unstarted'
-    : ledger.length >= maxAttempts ? 'exhausted'
     : reasons.length ? 'stuck'
     : 'progressing';
 
@@ -321,7 +312,7 @@ export function analyze(cwd, state, now = Date.now()) {
     repeated, hoursSinceLastAttempt: hoursSince === null ? null : Math.round(hoursSince * 10) / 10,
     lastSignal: ledger.length ? ledger[ledger.length - 1].signal : null,
     claims,
-    thresholds: { staleAfter, repeatLimit, maxAttempts },
+    thresholds: { staleAfter, repeatLimit, maxAttempts: null },
   };
 }
 

@@ -24,7 +24,9 @@ import { ResearchAgentDetail, instanceKey } from "./ResearchAgentDetail.js";
 import { ResWorkflowAdoption } from "./ResWorkflowAdoption.js";
 import { ScienceInstances } from "./ScienceInstances.js";
 import { ResearchStartGuide } from "./ResearchStartGuide.js";
-import { executionRoleName, ResearchExecutionPanels } from "./ResearchExecutionPanels.js";
+import { executionRoleName, ResearchExecutionPanels, type ResearchExecutionPanelsHandle } from "./ResearchExecutionPanels.js";
+import { ResearchMainAgentControls, useResearchMainAgent } from "./ResearchMainAgentControls.js";
+import { ResearchAccessControls } from "./ResearchAccessControls.js";
 import { ResearchClaimPanels } from "./ResearchClaimPanels.js";
 import { ResearchOverviewAndBudget, STAGES } from "./ResearchOverviewAndBudget.js";
 import { CollapsibleSection } from "./CollapsibleSection.js";
@@ -82,6 +84,8 @@ export function ResearchPipelinePage({
 }) {
   const { t } = useI18n(), apiBase = useApiBase();
   const splitWorkspace = useOptionalSplitWorkspace();
+  const mainAgent = useResearchMainAgent({ cwd, activeSessionId, visible, connectionGeneration, refreshSignal });
+  const stageLauncher = useRef<ResearchExecutionPanelsHandle>(null);
   const { snapshot, adoption, adopted, loading, refreshing, error, checkedAt, refresh, workbench, observationStatus, observationError } = useResearchLoopLive({ cwd, refreshSignal, connectionGeneration, resyncWatch });
   const projection = useMemo(() => projectResearch(snapshot ?? EMPTY, workbench), [snapshot, workbench]);
   const state = snapshot?.state, attempts = snapshot?.attempts ?? [], claims = state?.claims ?? [];
@@ -183,9 +187,8 @@ export function ResearchPipelinePage({
     },
     {
       key: "overview",
-      label: "总览与预算",
+      label: "研究总览",
       icon: mdiChartBoxOutline,
-      badge: state?.budget?.maxAttempts !== undefined ? `${state.budget.maxAttempts} 次` : undefined,
     },
     {
       key: "claims",
@@ -418,8 +421,12 @@ export function ResearchPipelinePage({
           ========================================================================= */}
       <div className={surface === "legacy" ? "contents" : "research-workspace-layout"}>
       <div className={surface === "legacy" ? "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-5" : "research-workspace-main"}>
-        {surface === "workbench" && !adopted && <div className="research-intake-hint"><div><strong>接入已有研究资料</strong><p>选择目录资料与历史会话，核对来源和预算后确认接入。</p></div><button type="button" className="research-workspace-action" onClick={openIntake}>开始接入</button></div>}
-        {surface === "workbench" && (activeTab === "workflow" || activeTab === "all") && <ResearchStageOverview projection={projection} objective={objective} viewStage={viewStage} onSelectStage={setViewStage} onOpenArtifact={onOpenArtifact} />}
+        <div className="research-execution-controls">
+          <ResearchMainAgentControls key={mainAgent.scope} controller={mainAgent} />
+          <ResearchAccessControls cwd={cwd} connectionGeneration={connectionGeneration} />
+        </div>
+        {surface === "workbench" && !adopted && <div className="research-intake-hint"><div><strong>接入已有研究资料</strong><p>选择目录资料与历史会话，核对来源后确认接入。</p></div><button type="button" className="research-workspace-action" onClick={openIntake}>开始接入</button></div>}
+        {surface === "workbench" && (activeTab === "workflow" || activeTab === "all") && <ResearchStageOverview projection={projection} objective={objective} viewStage={viewStage} onSelectStage={setViewStage} onStartStage={stage => stageLauncher.current?.openStage(stage)} onOpenArtifact={onOpenArtifact} />}
         {/* TAB 1: Agent 协作网络 (Teams View) */}
         {keeps("teams") && (
           <div hidden={!shows("teams")}>
@@ -432,6 +439,7 @@ export function ResearchPipelinePage({
               includeUnstaged={surface === "agents" || viewStage === null}
               stale={observationStale}
               activeSessionId={activeSessionId}
+              mainAgentId={mainAgent.selectedId}
               onAgent={(role, execution) => setSelection({ scope, role, execution, stage: surface === "agents" ? null : selectedStage })}
             />
           </div>
@@ -441,6 +449,7 @@ export function ResearchPipelinePage({
         {keeps("workflow") && (
           <div hidden={!shows("workflow")}>
             <ResearchExecutionPanels
+              ref={stageLauncher}
               mode="workflow"
               compactStages={surface !== "legacy"}
               visible={visible && shows("workflow")}
@@ -450,12 +459,13 @@ export function ResearchPipelinePage({
               includeUnstaged={viewStage === null}
               stale={observationStale}
               activeSessionId={activeSessionId}
+              mainAgentId={mainAgent.selectedId}
               onAgent={(role, execution) => setSelection({ scope, role, execution, stage: selectedStage })}
             />
           </div>
         )}
 
-        {/* TAB 3: 总览与预算 (Overview & Budget View) */}
+        {/* TAB 3: 研究总览 */}
         {keeps("overview") && (
           <div hidden={!shows("overview")} className="space-y-4">
             {/* Windows 11 Hero Card: Current Stage & Research Objective */}

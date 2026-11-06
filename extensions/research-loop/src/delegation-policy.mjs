@@ -196,9 +196,9 @@ export function buildDelegationGuidance({ selectedTools, restrictions, env } = {
   lines.push(
     'Guidelines:',
     '- For pi-subagents, put `agent` and `task` at the top level and other controls under `options`; do not use the old `subagent(agentName, prompt)` form. Check the actual agent/workflow list before naming one.',
-    '- Give each child a bounded question, expected output, and evidence paths. Never ask a child to run model training/serving or other unauthorized or unbudgeted model work.',
+    '- Give each child a bounded question, expected output, and evidence paths. Never ask a child to run model training/serving or other unauthorized model work.',
     '- Keep the lead context small: request a short conclusion plus file paths, then verify key claims yourself; do not import full child transcripts or dumps.',
-    '- Collaborators may recursively delegate separable work inside the same owner, workspace, charter and permission scope. Respect installed depth, role and shared task budgets; SSH, agy and supervisor roles remain leaves.',
+    '- Collaborators may recursively delegate separable work inside the same owner, workspace, charter and permission scope. Respect installed depth, role and concurrency limits; SSH, agy and supervisor roles remain leaves.',
     `- Use read/grep/find/ls for planning and verification. Managed collaborators must declare a plan or an indivisible-task reason before bulk work; coordinators wait for child receipts before completion.${restriction.readOnly ? ' In read-only mode, use only read-only commands and do not modify files.' : ''}`,
   );
   if (caps.researchSession) {

@@ -1,5 +1,7 @@
 # 长任务授权、递归分发与协作画布
 
+> 历史实施记录。当前版本使用“默认权限 / 完全访问”，恢复主 Agent 与五阶段启动入口，移除常规研究的预算前置。当前操作见[工作流控制说明](../workflow-controls/implementation.md)。下文保留旧 task-grant 设计、截图和当时验证数据，供追溯。
+
 本次修改基于 `main` 的 `36a5540`，交付分支为 `feat/autonomous-collaboration-20261106`。Dashboard 仍以固定上游提交 `65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0` 为基线。本文说明实际执行方式和验证边界；合成演示中的任务、结果和授权均不是科研运行记录。
 
 同日后续增加了完整目标委托和有限上下文回执，详见[主 agent 上下文减负](context-offload.md)与[跟进验证](context-offload-validation.json)。本文末尾保留六项原始修改的首轮验证记录；后续的 627 文件覆盖层和 308 项 Harness 回归以跟进记录为准。

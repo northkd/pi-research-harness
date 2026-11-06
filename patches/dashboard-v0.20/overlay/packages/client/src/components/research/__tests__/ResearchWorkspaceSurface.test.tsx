@@ -31,14 +31,14 @@ describe("research workspace surfaces", () => {
     expect(screen.getByTestId("research-stage-3-review").getAttribute("aria-current")).toBeNull();
     fireEvent.click(screen.getByTestId("research-tab-all"));
     for (const id of ["research-agent-topology", "research-run-status", "research-overview-and-budget", "research-claims", "research-attempts-ledger"]) expect(screen.getByTestId(id)).toBeTruthy();
-    expect(screen.getByTestId("research-tab-overview").textContent).toContain("12 次");
+    expect(screen.getByTestId("research-tab-overview").textContent).toBe("研究总览");
     expect(screen.getByTestId("research-tab-overview").textContent).not.toContain("¥");
   });
 
   it("retains an edited stage prompt across hidden panes and a visit to the agents surface", () => {
     const props = { cwd: "/test/project", surface: "workbench" as const };
     const view = render(<ResearchPipelinePage {...props} />);
-    fireEvent.click(screen.getByRole("button", { name: /^调研与发散$/ }));
+    fireEvent.click(screen.getByTestId("research-stage-start-1-idea"));
     const prompt = screen.getByPlaceholderText("输入该阶段新智能体的第一条启动 Prompt…");
     fireEvent.change(prompt, { target: { value: "仅整理已存在的材料，并列出待确认问题。" } });
     view.rerender(<ResearchPipelinePage {...props} visible={false} />);

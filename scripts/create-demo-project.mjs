@@ -20,7 +20,7 @@ const documents = {
   '03-合成实验.csv': `# 演示数据：全部数值为虚构，不可作为实验结果\n样本,条件,示例指标,重复编号\nDEMO-A,基线,0.42,1\nDEMO-A,基线,0.45,2\nDEMO-B,对照,0.58,1\nDEMO-B,对照,0.61,2\nDEMO-C,扰动,0.50,1\nDEMO-C,扰动,0.47,2\n`,
   '04-反例与评审.md': `# 【演示】反例与评审\n\n- 模拟评审甲：示例数据中的趋势可展示，但不能外推。\n- 模拟评审乙：样本量、温度范围和真实结构均未验证。\n- 模拟反例：当样本 C 的标签交换时，简单排序不再稳定。\n\n这些是人为编写的演示意见，没有调用任何评审模型。\n`,
   '05-总结草稿.md': `# 【演示】总结草稿\n\n本文件展示从尝试记录到主张的证据链。样例表格中的数值、结论与评审均为虚构。\n\n真实研究应保留原始输入、运行日志与独立核验，再决定能否支持相应主张。\n`,
-  '06-预算示意.md': `# 【演示】预算示意\n\n- 假设最多记录 24 次研究尝试。\n- 初始样例包含 7 条人工构造的尝试记录。\n- 预算和次数只用于展示，不是已消费费用。\n- 当前代理未提供可核实的价格信息。\n\n真实预算控制需要在工作台按接入流程配置；本文件不会授权、启动或扣费。\n`,
+  '06-用量示意.md': `# 【演示】用量示意\n\n- 初始样例包含 7 条人工构造的尝试记录。\n- 响应次数和 token 数只用于展示，不是已消费费用。\n- 当前代理未提供可核实的价格信息。\n\n研究总览只读展示用量，不需要配置研究预算。访问权限由工作流顶部的默认权限／完全访问选择控制；本文件不会改变权限或启动任务。\n`,
 };
 for (const [name, content] of Object.entries(documents)) fs.writeFileSync(path.join(materials, name), content, { mode: 0o600 });
 const linkedArtifacts = {
@@ -33,7 +33,7 @@ for (const [name, content] of Object.entries(linkedArtifacts)) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, content, { mode: 0o600, flag: 'wx' });
 }
-fs.writeFileSync(path.join(project, 'README-演示.md'), `# 【虚构演示】科研工作台\n\n这是用于试用 Dashboard 的独立示例项目。所有任务、评审、模型名称和数据均为模拟记录，不代表真实执行或科研结论。\n\n## 推荐浏览顺序\n\n1. 在顶部打开“研究工作台”，查看课题目标与阶段记录。\n2. 打开“智能体”，切换画布、列表与角色矩阵，并点击会话或角色查看详情。\n3. 在“工作流进度”查看五个阶段和任务详情。\n4. 在“总览与预算”核对尝试次数和观测用量；预算设置仍按真实接入流程配置。\n5. 在“主张与评审”打开演示证据；在“历史与审计”查看尝试。\n6. 在“布局”菜单尝试分屏，在“文件”中打开文件树，并查看独立的 Science 入口。\n\n“新建会话”“独立启动阶段”等按钮会使用本机真实配置，可能调用模型；本项目的静态样例不会替你启动这些操作。Science 服务和部分并行内存检查在本机仍未配置。\n`, { mode: 0o600 });
+fs.writeFileSync(path.join(project, 'README-演示.md'), `# 【虚构演示】科研工作台\n\n这是用于试用 Dashboard 的独立示例项目。所有任务、评审、模型名称和数据均为模拟记录，不代表真实执行或科研结论。\n\n## 推荐浏览顺序\n\n1. 在顶部打开“研究工作台”，查看课题目标与阶段记录。\n2. 打开“智能体”，切换画布、列表与角色矩阵，并点击会话或角色查看详情。\n3. 在“工作流进度”指定主 Agent、选择访问权限，并从五个阶段卡片各自启动任务。\n4. 在“研究总览”核对尝试次数和观测用量，无需填写预算或长任务授权表单。\n5. 在“主张与评审”打开演示证据；在“历史与审计”查看尝试。\n6. 在“布局”菜单尝试分屏，在“文件”中打开文件树，并查看独立的 Science 入口。\n\n带“本地模拟演示”横幅的页面仅在内存中模拟任务和权限；普通页面中的“新建会话”“独立启动阶段”按本机真实配置执行。本项目的静态样例不会自动启动任务。Science 服务和部分并行内存检查在本机仍未配置。\n`, { mode: 0o600 });
 
 const charter = ledger.charterFrom({
   objective: '【演示】用虚构钠离子导体数据体验从调研、实验到主张评审的完整科研工作台。',
@@ -43,7 +43,7 @@ const charter = ledger.charterFrom({
   constraints: ['【演示】所有数值、任务记录及评审意见均为模拟数据。'],
 });
 const state = ledger.newState(charter);
-state.budget = { maxAttempts: 24, staleAfter: 3, repeatLimit: 2 };
+state.budget = { staleAfter: 3, repeatLimit: 2 };
 ledger.saveState(project, state);
 
 const attempts = [

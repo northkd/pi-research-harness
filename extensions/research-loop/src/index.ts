@@ -9,8 +9,8 @@ import {
   upsertClaim, writePrivate,
 } from './ledger.mjs';
 import { createWorkflowObserver, readEventsTolerant, validateRunIdentity } from './workflow-progress.mjs';
-import { configureResearch, charterHash, withScientificRecordLock } from './adoption.mjs';
-import { spawnBudgetedResearchWorkflow } from './research-budget-bridge.mjs';
+import { configureResearch, withScientificRecordLock } from './adoption.mjs';
+import { spawnResearchWorkflow } from './workflow-launch.mjs';
 import { readWorkbenchRecordContext, registerWorkbenchContext } from './workbench-context.mjs';
 import { observeStageTurn } from './stage-observer.mjs';
 import { registerDelegationPolicy } from './delegation-policy.mjs';
@@ -159,14 +159,11 @@ function updateResearchState(cwd: string, params: any, update: (state: any) => a
 }
 
 /**
- * Each health level has exactly one recommended exit. In particular,
- * `exhausted` stops new dispatch instead of turning into another advice call,
- * and `blocked` from infrastructure is never treated as a scientific dead end.
+ * Each health level has exactly one recommended exit. A block from
+ * infrastructure is never treated as a scientific dead end.
  */
 function recommendationFor(health: any) {
   switch (health.level) {
-    case 'exhausted':
-      return 'Budget exhausted. Stop dispatching new work, collect results of already running tasks, and ask the user whether to raise the budget. Do not call advise as a substitute for a decision.';
     case 'stuck':
       return 'Loop is stuck. Call advise with intent="unstick" (the default) to get a diagnosis packet, then have research-critic attribute the failure before changing method. Do not repeat the same action.';
     case 'unstarted':
@@ -228,7 +225,7 @@ async function launchAuto(pi: any, ctx: any, cwd: string, state: any, params: an
   let result: any;
   let error: string | undefined;
   try {
-    result = await spawnBudgetedResearchWorkflow({ pi, ctx, cwd, charterHash: charterHash(cwd), launchId, params: { workflow: AUTO_WORKFLOW, args: runArgs, cwd, async: true } });
+    result = await spawnResearchWorkflow({ pi, ctx, cwd, params: { workflow: AUTO_WORKFLOW, args: runArgs, cwd, async: true } });
   } catch (e: any) {
     error = e?.message ?? String(e);
   }

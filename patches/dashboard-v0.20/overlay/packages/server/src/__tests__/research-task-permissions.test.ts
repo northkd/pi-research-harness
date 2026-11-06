@@ -8,7 +8,6 @@ import { assertResearchTaskDelegation, createResWorkflowTaskPermissionService, d
 import type { ResWorkflowAccess } from '../res-workflow/adoption-service.js';
 import { createResearchDispatchService, createResearchDispatchStore } from '../res-workflow/research-dispatch-service.mjs';
 import { ResearchSessionError } from '../res-workflow/research-session-service.mjs';
-import { handleResearchTaskPathRequest } from '../res-workflow/research-task-path-handler.js';
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 const json = (file: string, value: unknown) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
@@ -47,7 +46,7 @@ async function fixture() {
   return { cwd, data, outside, b, request, permissions, join, adoptionId, options: { researchLoopRoot, contextOptions: { storeDir, privateDir } }, storeDir, ownerKey };
 }
 
-describe('real joined research authorization at the native path and queued-dispatch boundaries', () => {
+describe('legacy task-permission record compatibility (not the active access-mode gate)', () => {
   it('uses the real context verifier, canonical paths, scope and per-launch live revocation', async () => {
     const f = await fixture(), parent = f.join('parent'), child = f.join('child');
     const grant = f.permissions.updateTaskPermissions({ ...f.request, ...f.b });
@@ -84,12 +83,6 @@ describe('real joined research authorization at the native path and queued-dispa
       expect(() => f.permissions.recordTaskPermissionBlock({ ...f.b, code: 'synthetic', tool: 'read' })).toThrow('busy');
       const target = path.join(status === 'active' ? f.outside : f.data, 'result.txt');
       expect(await decideResearchTaskPath(session, target, 'r', 'read', f.options)).toBe('task-blocked');
-      const message = { type: 'path_yolo_request' as const, sessionId: session.id, requestId: 'known-denial', path: target, access: 'r' as const, tool: 'read' };
-      const result = await handleResearchTaskPathRequest(session.id, message, session, {} as never, {
-        refused: () => false,
-        decideTaskPath: (...args) => decideResearchTaskPath(args[0], args[1], args[2], args[3], f.options),
-      });
-      expect(result.verdict).toBe('task-blocked');
     }
   });
   it('rechecks the real grant before a queued launch and does not retain a reservation for a known refusal', async () => {
@@ -132,19 +125,5 @@ describe('real joined research authorization at the native path and queued-dispa
     adopted = true;
     expect((await service.update(access, f.request)).status).toBe('active');
     await expect(service.update({ ...access, write: false }, f.request)).rejects.toThrow('write-required');
-  });
-  it('checks socket identity, protected locations and prior refusal before using a task grant', async () => {
-    const f = await fixture(), session = f.join('parent');
-    f.permissions.updateTaskPermissions({ ...f.b, ...f.request });
-    const msg = { type: 'path_yolo_request' as const, sessionId: session.id, requestId: 'path-request', path: path.join(f.data, 'result.txt'), access: 'w' as const, tool: 'write' };
-    let calls = 0;
-    const test = { refused: () => false, decideTaskPath: async (...args: Parameters<typeof decideResearchTaskPath>) => { calls++; return decideResearchTaskPath(args[0], args[1], args[2], args[3], f.options); } };
-    const deps = {} as never; // These outcomes must not reach the legacy YOLO fallback.
-    expect((await handleResearchTaskPathRequest(session.id, msg, session, deps, test)).verdict).toBe('auto-allow');
-    expect((await handleResearchTaskPathRequest(session.id, { ...msg, sessionId: 'different' }, session, deps, test)).verdict).toBe('decline');
-    expect((await handleResearchTaskPathRequest(session.id, msg, session, deps, { ...test, refused: () => true })).verdict).toBe('refused');
-    expect(calls).toBe(1);
-    expect((await handleResearchTaskPathRequest(session.id, { ...msg, path: '/etc/passwd' }, session, deps, test)).verdict).toBe('decline');
-    expect(calls).toBe(1);
   });
 });

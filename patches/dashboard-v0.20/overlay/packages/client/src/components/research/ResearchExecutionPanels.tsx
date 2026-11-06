@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect, type ForwardedRef } from "react";
 import {
   mdiCrown,
   mdiAccountGroup,
@@ -6,7 +6,6 @@ import {
   mdiClockOutline,
   mdiAlertCircle,
   mdiArrowRight,
-  mdiHelpCircleOutline,
   mdiLightningBolt,
   mdiRocketLaunchOutline,
   mdiSync,
@@ -93,9 +92,9 @@ export function getAgentRelation(
 ): { tag: string; label: string; linkText: string; tintClass: string } {
   if (isCaptain) {
     return {
-      tag: "当前交互入口",
-      label: "当前选中的独立会话；仅改变界面入口，不改变调度职责",
-      linkText: "当前交互入口",
+      tag: "主 Agent",
+      label: "在本工作区选定、接收主任务的 Pi 会话",
+      linkText: "主 Agent",
       tintClass: "tint-action-blue",
     };
   }
@@ -147,13 +146,15 @@ const STAGE_LABELS: Record<StageId, { name: string; desc: string }> = {
   "5-writing": { name: "5. 论文与审计", desc: "论文撰写、引用真实性审计与产物打包" },
 };
 
-export function ResearchExecutionPanels({
+export interface ResearchExecutionPanelsHandle { openStage: (stage: StageId) => void; }
+
+export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPanels({
   projection,
   stage,
   includeUnstaged,
   stale,
   onAgent,
-  activeSessionId,
+  mainAgentId = null,
   mode = "all",
   cwd,
   compactStages = false,
@@ -165,11 +166,12 @@ export function ResearchExecutionPanels({
   stale: boolean;
   onAgent: (role: ConfiguredRole, execution?: ResearchExecution) => void;
   activeSessionId?: string;
+  mainAgentId?: string | null;
   mode?: "all" | "workflow" | "teams";
   cwd?: string;
   compactStages?: boolean;
   visible?: boolean;
-}) {
+}, ref: ForwardedRef<ResearchExecutionPanelsHandle>) {
   const apiBase = useApiBase();
   const live = (row: ResearchExecution) => !(stale && row.source === "observation") && hasRunningStatus(row);
   const executions = projection.executions.filter(
@@ -255,33 +257,16 @@ export function ResearchExecutionPanels({
       const clean = info.firstMessage.replace(/[#*`>-]/g, "").replace(/\s+/g, " ").trim();
       return clean.length > 28 ? clean.slice(0, 28) + "…" : clean;
     }
-    return isCaptain ? "当前交互会话" : "协作会话";
+    return isCaptain ? "主 Agent 会话" : "协作会话";
   };
 
   const getSessionWorkflowDuty = (sessionExec: ResearchExecution, isCaptain: boolean) => {
     return getAgentMission(roleNameOf(sessionExec), isCaptain, sessionExec.kind, sessionExec, cwd);
   };
 
-  // Main Agent (Captain) Selection & User Confirmation
-  const [mainAgentId, setMainAgentId] = useState<string | null>(null);
-  const [pendingMainAgentId, setPendingMainAgentId] = useState<string | null>(null);
-  const [dismissedEntryId, setDismissedEntryId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (activeSessionId && activeSessionId !== dismissedEntryId && activeSessionId !== mainAgentId && pendingMainAgentId !== activeSessionId) {
-      if (!mainAgentId) {
-        setPendingMainAgentId(activeSessionId);
-      }
-    }
-  }, [activeSessionId, mainAgentId, pendingMainAgentId, dismissedEntryId]);
-
-  const captainExecution = useMemo(() => {
-    if (mainAgentId) {
-      const found = executions.find((ex) => ex.kind === "pi-session" && (sessionIdFor(ex) === mainAgentId || ex.id === mainAgentId));
-      if (found) return found;
-    }
-    return executions.find(ex => ex.kind === "pi-session" && sessionIdFor(ex) === activeSessionId) ?? null;
-  }, [executions, mainAgentId, activeSessionId]);
+  const captainExecution = useMemo(() => mainAgentId
+    ? executions.find(ex => ex.kind === "pi-session" && (sessionIdFor(ex) === mainAgentId || ex.id === mainAgentId)) ?? null
+    : null, [executions, mainAgentId]);
 
   const [topoViewMode, setTopoViewMode] = useState<"topology" | "swimlanes">("topology");
   const [fusionFilter, setFusionFilter] = useState<"all" | "with-subs" | "standalone">("all");
@@ -326,6 +311,18 @@ export function ResearchExecutionPanels({
     type: "success" | "error";
   } | null>(null);
 
+  const launchScope = JSON.stringify([apiBase, cwd]);
+  const launchRequest = useRef(0);
+  const launchInFlight = useRef(false);
+  useEffect(() => {
+    setStageDrafts({});
+    setEditingStagePrompt(null);
+    setStageStartNotification(null);
+    setStartingStageId(null);
+    launchInFlight.current = false;
+    return () => { launchRequest.current += 1; };
+  }, [launchScope]);
+
   const getDefaultStagePrompt = (stageId: StageId, stageName: string, stageIndex: number) => {
     return `【阶段独立启动任务】用户要求独立/提前启动科研工作流的阶段：${stageName}（阶段 ${stageIndex + 1}/5：${stageId}）。
 
@@ -341,6 +338,8 @@ export function ResearchExecutionPanels({
   };
 
   const handleOpenStagePromptEditor = (stageId: StageId, stageName: string, stageIndex: number) => {
+    if (launchInFlight.current) return;
+    setStageStartNotification(null);
     setEditingStagePrompt({
       stageId,
       stageName,
@@ -349,44 +348,43 @@ export function ResearchExecutionPanels({
     });
   };
 
+  useImperativeHandle(ref, () => ({ openStage(stageId) {
+    handleOpenStagePromptEditor(stageId, STAGE_LABELS[stageId].name, RESEARCH_STAGE_IDS.indexOf(stageId));
+  } }));
+
   const handleConfirmStartIndependentStage = async () => {
-    if (!editingStagePrompt || startingStageId) return;
+    if (!editingStagePrompt || !editingStagePrompt.promptText.trim() || launchInFlight.current) return;
     const { stageId, stageName, promptText } = editingStagePrompt;
+    const request = ++launchRequest.current;
+    launchInFlight.current = true;
     setStartingStageId(stageId);
     setStageStartNotification(null);
-    setEditingStagePrompt(null);
-
-    const targetCwd = cwd || (projection as any).cwd;
-
     try {
+      if (!cwd) throw new Error("未选择工作目录");
       const res = await fetch(`${apiBase}/api/session/spawn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          cwd: targetCwd,
-          initialPrompt: promptText,
-          joinResWorkflow: true,
-        }),
+        body: JSON.stringify({ cwd, initialPrompt: promptText, joinResWorkflow: true }),
       });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || `HTTP ${res.status}`);
-      }
-
+      const receipt = await res.json().catch(() => ({}));
+      if (!res.ok || receipt.success !== true) throw new Error(receipt.error || `创建请求未确认（HTTP ${res.status}）`);
+      if (request !== launchRequest.current) return;
+      setEditingStagePrompt(null);
       setStageStartNotification({
         stageName,
-        message: `已成功为「${stageName}」创建新会话！新智能体已接收自定义首条指令，并将主动向您询问当前阶段的工作指示。`,
+        message: receipt.simulated === true
+          ? `已完成「${stageName}」的模拟启动；未创建真实会话、未调用模型。`
+          : `已提交「${stageName}」的新会话启动请求与首条指令；执行结果请在会话与协作记录中查看。`,
         type: "success",
       });
-    } catch (err: any) {
-      setStageStartNotification({
-        stageName,
-        message: `创建新会话失败：${err?.message || "网络请求异常"}`,
-        type: "error",
-      });
+    } catch (error) {
+      if (request !== launchRequest.current) return;
+      setStageStartNotification({ stageName, message: `创建新会话失败：${error instanceof Error ? error.message : "网络请求异常"}。首条指令已保留。`, type: "error" });
     } finally {
-      setStartingStageId(null);
+      if (request === launchRequest.current) {
+        launchInFlight.current = false;
+        setStartingStageId(null);
+      }
     }
   };
 
@@ -559,6 +557,127 @@ export function ResearchExecutionPanels({
 
   return (
     <div className="research-execution-panels space-y-4">
+      {/* Stage Start Notification Banner */}
+      {stageStartNotification && !editingStagePrompt && (
+        <div
+          role={stageStartNotification.type === "error" ? "alert" : "status"}
+          className={`win11-card-subtle flex items-start gap-3 border-l-4 p-4 text-xs ${
+            stageStartNotification.type === "success"
+              ? "border-l-[var(--accent-green)]"
+              : "border-l-[var(--accent-red)]"
+          }`}
+        >
+          <Icon
+            path={stageStartNotification.type === "success" ? mdiCheckCircle : mdiAlertCircle}
+            size={0.8}
+            className={
+              stageStartNotification.type === "success"
+                ? "text-[var(--accent-green)]"
+                : "text-[var(--accent-red)]"
+            }
+          />
+          <div className="min-w-0 flex-1">
+            <strong className="block font-semibold text-[var(--text-primary)]">
+              {stageStartNotification.stageName} 启动反馈：
+            </strong>
+            <span className="mt-0.5 block leading-relaxed text-[var(--text-secondary)]">
+              {stageStartNotification.message}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setStageStartNotification(null)}
+            className="win11-btn px-2 py-0.5 text-xs"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Prompt Editing Modal for Independent Stage Start */}
+      {editingStagePrompt && (
+        <Dialog open={visible} onClose={() => { if (!launchInFlight.current) setEditingStagePrompt(null); }} size="full" flush ariaLabel="独立启动阶段会话">
+          <div className="win11-card w-full max-h-[88vh] overflow-y-auto p-5 space-y-4 border border-[var(--border-primary)]">
+            <div className="flex items-center justify-between border-b border-[var(--border-primary)] pb-3">
+              <div className="flex items-center gap-2">
+                <Icon path={mdiRocketLaunchOutline} size={0.7} className="text-[var(--accent-primary)]" />
+                <h3 className="text-sm font-bold text-[var(--text-primary)]">
+                  独立启动阶段会话 · 编辑首条 Prompt（{editingStagePrompt.stageName}）
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={Boolean(startingStageId)}
+                onClick={() => setEditingStagePrompt(null)}
+                aria-label="关闭阶段启动编辑器"
+                className="rounded p-1 hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+              即将为「<strong>{editingStagePrompt.stageName}</strong>」创建独立科研会话，沿用 Pi 的会话配置。您可以在启动前自由修改或补充对新智能体的第一条指令、研究假设、约束条件或提问方向：
+            </p>
+
+            {stageStartNotification?.type === "error" && <p role="alert" className="research-warning text-xs">{stageStartNotification.message}</p>}
+            <textarea
+              data-testid="research-stage-prompt"
+              aria-label="阶段首条 Prompt"
+              disabled={Boolean(startingStageId)}
+              value={editingStagePrompt.promptText}
+              onChange={(e) => {
+                setStageDrafts(drafts => ({ ...drafts, [editingStagePrompt.stageId]: e.target.value }));
+                setEditingStagePrompt({
+                  ...editingStagePrompt,
+                  promptText: e.target.value,
+                });
+              }}
+              rows={12}
+              className="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 font-mono text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+              placeholder="输入该阶段新智能体的第一条启动 Prompt…"
+            />
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--border-primary)]">
+              <button
+                type="button"
+                disabled={Boolean(startingStageId)}
+                onClick={() => {
+                  const promptText = getDefaultStagePrompt(editingStagePrompt.stageId, editingStagePrompt.stageName, editingStagePrompt.stageIndex);
+                  setStageDrafts(drafts => ({ ...drafts, [editingStagePrompt.stageId]: promptText }));
+                  setEditingStagePrompt({ ...editingStagePrompt, promptText });
+                }}
+                className="win11-btn px-3 py-1.5 text-xs text-[var(--text-secondary)]"
+              >
+                恢复默认模板
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={Boolean(startingStageId)}
+                  onClick={() => setEditingStagePrompt(null)}
+                  className="win11-btn px-3.5 py-1.5 text-xs"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  data-testid="research-stage-launch"
+                  disabled={Boolean(startingStageId) || !editingStagePrompt.promptText.trim()}
+                  onClick={handleConfirmStartIndependentStage}
+                  className="win11-btn-accent px-4 py-1.5 text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <Icon path={mdiRocketLaunchOutline} size={0.55} />
+                  <span>{startingStageId ? "正在提交…" : "确认并新建会话启动"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </Dialog>
+      )}
+
+
       {/* =========================================================================
           TAB 2 (or ALL): 工作流进度 · 5大流程进度与独立启动
           ========================================================================= */}
@@ -572,86 +691,6 @@ export function ResearchExecutionPanels({
           subtitle="查看真实运行、按阶段新建会话；独立启动不会改写正式阶段或科学验收"
         >
           <div className="space-y-4">
-            {/* Main Agent Confirmation Prompt Banner (WinUI 3 InfoBar) */}
-            {pendingMainAgentId && (
-              <div
-                role="alert"
-                className="win11-card-subtle border-l-4 border-l-[var(--accent-primary)] p-4 text-xs"
-              >
-                <div className="flex items-start gap-3">
-                  <Icon
-                    path={mdiHelpCircleOutline}
-                    size={0.85}
-                    className="mt-0.5 shrink-0 text-[var(--accent-primary)]"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[var(--text-primary)]">
-                      将当前对话设为界面交互入口？
-                    </p>
-                    <p className="mt-1 font-mono text-[11px] text-[var(--text-secondary)]">
-                      当前会话：{pendingMainAgentId}。仅更新本界面选择，不任命调度主控。
-                    </p>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMainAgentId(pendingMainAgentId);
-                          setPendingMainAgentId(null);
-                        }}
-                        className="win11-btn-accent px-3.5 py-1.5 text-xs"
-                      >
-                        设为交互入口
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setDismissedEntryId(pendingMainAgentId); setPendingMainAgentId(null); }}
-                        className="win11-btn px-3.5 py-1.5 text-xs"
-                      >
-                        保持现状
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Stage Start Notification Banner */}
-            {stageStartNotification && (
-              <div
-                role="alert"
-                className={`win11-card-subtle flex items-start gap-3 border-l-4 p-4 text-xs ${
-                  stageStartNotification.type === "success"
-                    ? "border-l-[var(--accent-green)]"
-                    : "border-l-[var(--accent-red)]"
-                }`}
-              >
-                <Icon
-                  path={stageStartNotification.type === "success" ? mdiCheckCircle : mdiAlertCircle}
-                  size={0.8}
-                  className={
-                    stageStartNotification.type === "success"
-                      ? "text-[var(--accent-green)]"
-                      : "text-[var(--accent-red)]"
-                  }
-                />
-                <div className="min-w-0 flex-1">
-                  <strong className="block font-semibold text-[var(--text-primary)]">
-                    {stageStartNotification.stageName} 启动反馈：
-                  </strong>
-                  <span className="mt-0.5 block leading-relaxed text-[var(--text-secondary)]">
-                    {stageStartNotification.message}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setStageStartNotification(null)}
-                  className="win11-btn px-2 py-0.5 text-xs"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-
             {/* Current Run Summary Header */}
             <div className="win11-card-subtle flex flex-wrap items-center justify-between gap-3 p-3.5 text-xs">
               <div className="space-y-1">
@@ -671,13 +710,12 @@ export function ResearchExecutionPanels({
               {captainExecution && (
                 <div className="tint-action-orange inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold">
                   <Icon path={mdiCrown} size={0.6} />
-                  <span>当前交互入口：{getSessionDisplayName(captainExecution, true)}</span>
+                  <span>主 Agent：{getSessionDisplayName(captainExecution, true)}</span>
                 </div>
               )}
             </div>
 
             {/* 5-Stage Progression Auto-Fit Grid */}
-            {compactStages && <div className="flex flex-wrap gap-2"><span className="text-xs text-[var(--text-tertiary)] self-center">独立启动：</span>{stageProgression.map((item, index) => <button key={item.id} type="button" className="win11-btn px-3 py-1.5 text-xs" disabled={startingStageId === item.id} onClick={() => handleOpenStagePromptEditor(item.id, item.info.name, index)}>{item.info.name.slice(3)}</button>)}</div>}
             {!compactStages && <div className="win11-grid-stages">
               {stageProgression.map((item, index) => {
                 const isStarting = startingStageId === item.id;
@@ -749,86 +787,6 @@ export function ResearchExecutionPanels({
                 );
               })}
             </div>}
-
-            {/* Prompt Editing Modal for Independent Stage Start */}
-            {editingStagePrompt && (
-              <Dialog open={visible} onClose={() => setEditingStagePrompt(null)} size="full" flush ariaLabel="独立启动阶段会话">
-                <div className="win11-card w-full max-h-[88vh] overflow-y-auto p-5 space-y-4 border border-[var(--border-primary)]">
-                  <div className="flex items-center justify-between border-b border-[var(--border-primary)] pb-3">
-                    <div className="flex items-center gap-2">
-                      <Icon path={mdiRocketLaunchOutline} size={0.7} className="text-[var(--accent-primary)]" />
-                      <h3 className="text-sm font-bold text-[var(--text-primary)]">
-                        独立启动阶段会话 · 编辑首条 Prompt（{editingStagePrompt.stageName}）
-                      </h3>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setEditingStagePrompt(null)}
-                      aria-label="关闭阶段启动编辑器"
-                      className="rounded p-1 hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                    即将为「<strong>{editingStagePrompt.stageName}</strong>」创建独立科研会话。您可以在启动前自由修改或补充对新智能体的第一条指令、研究假设、约束条件或提问方向：
-                  </p>
-
-                  <textarea
-                    value={editingStagePrompt.promptText}
-                    onChange={(e) => {
-                      setStageDrafts(drafts => ({ ...drafts, [editingStagePrompt.stageId]: e.target.value }));
-                      setEditingStagePrompt({
-                        ...editingStagePrompt,
-                        promptText: e.target.value,
-                      });
-                    }}
-                    rows={12}
-                    className="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 font-mono text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-                    placeholder="输入该阶段新智能体的第一条启动 Prompt…"
-                  />
-
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--border-primary)]">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEditingStagePrompt({
-                          ...editingStagePrompt,
-                          promptText: getDefaultStagePrompt(
-                            editingStagePrompt.stageId,
-                            editingStagePrompt.stageName,
-                            editingStagePrompt.stageIndex
-                          ),
-                        })
-                      }
-                      className="win11-btn px-3 py-1.5 text-xs text-[var(--text-secondary)]"
-                    >
-                      恢复默认模板
-                    </button>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setEditingStagePrompt(null)}
-                        className="win11-btn px-3.5 py-1.5 text-xs"
-                      >
-                        取消
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!editingStagePrompt.promptText.trim()}
-                        onClick={handleConfirmStartIndependentStage}
-                        className="win11-btn-accent px-4 py-1.5 text-xs font-semibold flex items-center gap-1.5"
-                      >
-                        <Icon path={mdiRocketLaunchOutline} size={0.55} />
-                        <span>确认并新建会话启动</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </Dialog>
-            )}
 
             {/* Detailed Executions List */}
             <div className="space-y-2.5 pt-2">
@@ -2022,4 +1980,4 @@ export function ResearchExecutionPanels({
       )}
     </div>
   );
-}
+});

@@ -78,7 +78,7 @@ describe("research scientific panels", () => {
       const canvas = screen.getByRole("region", { name: "协作拓扑画布" });
       await waitFor(() => expect(within(canvas).getAllByText("实验协作者").length).toBeGreaterThan(0));
       expect(canvas.textContent).toContain("创建者：研究主会话");
-      expect(canvas.textContent).toContain("Lead 创建");
+      expect(canvas.textContent).toContain("Agent 创建");
       expect(canvas.textContent).toContain("暂无已记录的任务职责");
       expect(canvas.textContent).not.toContain("全流程主控协调");
       expect(canvas.textContent).not.toMatch(/parent-uuid|child-uuid|DO_NOT_USE_RAW_FIRST_PROMPT/);

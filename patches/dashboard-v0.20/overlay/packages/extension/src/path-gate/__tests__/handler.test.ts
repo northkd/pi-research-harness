@@ -410,6 +410,52 @@ describe("path-gate × YOLO (change: yolo-covers-agent-path-gate)", () => {
     expect(h.counters).toMatchObject({ yoloAllowed: 1 });
   });
 
+  it("workspace full access covers read, write and edit outside roots, including sensitive locations, without a UI", async () => {
+    const h = yolo({ hasUI: false });
+    h.deps.fullAccessSupported = () => true;
+    for (const tool of ["read", "write", "edit"]) {
+      expect(await h.call(tool, "/h/.ssh/config")).toBeUndefined();
+      expect(await h.call(tool, "/h/other.txt")).toBeUndefined();
+    }
+    expect(h.asks).toHaveLength(6);
+    expect(h.selects).toHaveLength(0);
+    expect(h.grantCalls).toHaveLength(0);
+  });
+
+  it("switching to full access supersedes a previous denial, and default restores it immediately", async () => {
+    const h = yolo({ answers: ["Deny"] }, "decline");
+    h.deps.fullAccessSupported = () => true;
+    expect(await h.call("write", "/h/.ssh/config")).toMatchObject({ block: true });
+    h.deps.yoloDecide = async () => "auto-allow";
+    expect(await h.call("write", "/h/.ssh/config")).toBeUndefined();
+    h.deps.yoloDecide = async () => "decline";
+    expect(await h.call("write", "/h/.ssh/config")).toMatchObject({ block: true, reason: expect.stringContaining("recently-denied") });
+    expect(h.selects).toHaveLength(1);
+  });
+
+  it("full-access capability never substitutes for a same-host store or an available decision", async () => {
+    const remote = yolo({ hasUI: false, storeMatch: false });
+    remote.deps.fullAccessSupported = () => true;
+    expect(await remote.call("read", "/h/.ssh/config")).toMatchObject({ block: true });
+    expect(remote.asks).toHaveLength(0);
+    const unavailable = yolo({ answers: ["Allow once"] }, "throw");
+    unavailable.deps.fullAccessSupported = () => true;
+    expect(await unavailable.call("read", "/h/.ssh/config")).toBeUndefined();
+    expect(unavailable.selects).toHaveLength(1);
+  });
+
+  it("full-access capability is explicitly negotiated and cleared when the link resets", () => {
+    const link = createYoloLink({ send: () => true, sessionId: () => "S1" });
+    expect(link.fullAccessSupported()).toBe(false);
+    link.handleIdentity({ features: ["path-yolo"] });
+    expect(link.fullAccessSupported()).toBe(false);
+    link.handleIdentity({ features: ["path-yolo", "workspace-full-access"] });
+    expect(link.fullAccessSupported()).toBe(true);
+    link.reset();
+    expect(link.fullAccessSupported()).toBe(false);
+    expect(link.supported()).toBe(false);
+  });
+
   it("a host-verified task grant works headlessly; an unavailable scope never opens a dialog", async () => {
     const granted = yolo({ hasUI: false });
     expect(await granted.call("write", "/w/other/result.txt")).toBeUndefined();

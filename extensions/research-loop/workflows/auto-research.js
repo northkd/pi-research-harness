@@ -34,13 +34,14 @@ function reportStep(key, phase, agent, result) {
   });
 }
 
-// The host must install its scoped native adapter before this script may launch children.
+// Older callers may explicitly supply a scoped quota adapter. Routine launches
+// use the native workflow host directly and do not require one.
 const researchBudget = args?.researchBudget;
-if (researchBudget?.version !== 1 || typeof researchBudget.scopeId !== 'string' || typeof researchBudget.extension !== 'string' || !researchBudget.extension.endsWith('/extension.mjs')) {
+if (researchBudget !== undefined && (researchBudget?.version !== 1 || typeof researchBudget.scopeId !== 'string' || typeof researchBudget.extension !== 'string' || !researchBudget.extension.endsWith('/extension.mjs'))) {
   return finish({ status: 'blocked', reason: 'research-budget-bridge-unavailable-open-new-session' });
 }
-const budgeted = input => ({ ...input, async: true, extensions: [...(input.extensions ?? []), researchBudget.extension] });
-const budgetedRuns = { run: (key, input) => runs.run(key, budgeted(input)), all: inputs => runs.all(inputs.map(budgeted)) };
+const childInput = input => ({ ...input, async: true, ...(researchBudget ? { extensions: [...(input.extensions ?? []), researchBudget.extension] } : {}) });
+const workflowRuns = { run: (key, input) => runs.run(key, childInput(input)), all: inputs => runs.all(inputs.map(childInput)) };
 
 const topic = String(args?.topic ?? '').trim();
 if (!topic) return finish({ status: 'blocked', reason: 'topic is required' });
@@ -124,7 +125,7 @@ const REVIEW_SCHEMA = {
 
 // ── Stage 1: independent exploration ─────────────────────────────────────
 const angles = ANGLE_POOL.slice(0, MAX_EXPLORERS);
-const explorations = await budgetedRuns.all(angles.map((angle, index) => ({
+const explorations = await workflowRuns.all(angles.map((angle, index) => ({
   key: `explorer-${index + 1}`,
   agent: 'research-explorer',
   phase: '1-idea', label: `独立探索 ${index + 1}`,
@@ -141,7 +142,7 @@ explorations.forEach((result, index) => reportStep(`explorer-${index + 1}`, '1-i
 const cards = explorations.flatMap((r, i) => (r?.structuredOutput?.cards ?? []).map((c) => ({ ...c, angle: c.angle || angles[i] })));
 if (!cards.length) return finish({ status: 'blocked', reason: 'no hypothesis cards produced', explorations: explorations.map((r) => ({ ok: r?.ok, error: r?.error })) });
 
-const screen = await budgetedRuns.run('screen', {
+const screen = await workflowRuns.run('screen', {
   agent: 'research-critic', phase: '1-idea', label: '新颖性与可证伪性筛选',
   context: 'fresh',
   task: [
@@ -155,7 +156,7 @@ const screen = await budgetedRuns.run('screen', {
 reportStep('screen', '1-idea', 'research-critic', screen);
 
 // ── Direction choice and milestone plan ──────────────────────────────────
-const plan = await budgetedRuns.run('plan', {
+const plan = await workflowRuns.run('plan', {
   agent: 'research-strategist', phase: '1-idea', label: '方向选择与里程碑规划',
   context: 'fresh',
   outputSchema: PLAN_SCHEMA,
@@ -180,7 +181,7 @@ if (stopAfter === 'plan') return finish({ status: 'planned', cards, screen: scre
 // ── Stage 2: sequential experiments ─────────────────────────────────────
 const experiments = [];
 for (const [index, milestone] of chosenPlan.milestones.slice(0, MAX_MILESTONES).entries()) {
-  const run = await budgetedRuns.run(`experiment-${index + 1}`, {
+  const run = await workflowRuns.run(`experiment-${index + 1}`, {
     agent: milestone.executor === 'ssh' ? 'research-ssh' : 'research-numerics',
     phase: '2-experiment', label: `实验 ${index + 1} · ${milestone.id}`,
     context: 'fresh',
@@ -206,7 +207,7 @@ if (stopAfter === 'experiment') return finish({ status: 'experiments_completed',
 const rounds = [];
 let memory = '';
 for (let round = 1; round <= MAX_ROUNDS; round += 1) {
-  const review = await budgetedRuns.run(`review-${round}`, {
+  const review = await workflowRuns.run(`review-${round}`, {
     agent: 'research-critic', phase: '3-review', label: `对抗评审 · 第 ${round} 轮`,
     context: 'fresh',
     ...(reviewerModel ? { model: reviewerModel } : {}),

@@ -610,7 +610,7 @@ export function wireEvents(deps: EventWiringDeps): void {
       piGateway.sendToSession(sessionId, {
         type: "dashboard_identity",
         ...(grantStoreId ? { grantStoreId } : {}),
-        features: deps.vaultDelivery ? ["path-yolo", VAULT_DELIVERY_FEATURE] : ["path-yolo"],
+        features: deps.vaultDelivery ? ["path-yolo", "workspace-full-access", VAULT_DELIVERY_FEATURE] : ["path-yolo", "workspace-full-access"],
       });
     }
 

@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { readResearchBudget } from './research-budget.mjs';
 import { buildDelegationGuidance, mergeDelegationRestrictions } from './delegation-policy.mjs';
 
 export const WORKBENCH_CONTEXT_SECTION = 'res_workflow_records';
@@ -144,18 +143,6 @@ export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.home
   const candidates = owners.map(owner => confirmedOwnerAdoption(root, cwd, JSON.stringify(owner), hash)).filter(Boolean);
   if (candidates.length !== 1) return null;
   const adoptionId = candidates[0];
-  let budget = null;
-  try {
-    const current = readResearchBudget({ cwd, charterHash: hash });
-    budget = {
-      limits: current.limits,
-      used: current.usage,
-      attemptsEnforced: current.enforcement.attempts === true,
-      modelRequestsEnforced: current.enforcement.modelRequests === true,
-      scope: 'native-research-workflow',
-    };
-  } catch { /* Unavailable budget is unknown, never fabricated as zero or unlimited. */ }
-
   const researchSession = meta.researchSession ?? meta.pluginRefs?.['res-workflow']?.researchSession;
   const collaborator = object(researchSession) && researchSession.schema === 'pi-research-session.v1' && researchSession.workflowCwd === cwd && researchSession.charterHash === hash && researchSession.adoptionId === adoptionId && ID.test(researchSession.parentSessionId ?? '');
   const includeHistory = !collaborator && env?.PI_SUBAGENT_CHILD !== '1';
@@ -169,7 +156,7 @@ export function readWorkbenchRecordContext(ctx, { privateDir = path.join(os.home
     recentFindings: includeHistory ? readRecentFindings(cwd) : '',
     historyPolicy: includeHistory ? 'bounded-lead-preview' : 'references-only',
   };
-  return { ...(collaborator ? { researchSession: { parentSessionId: researchSession.parentSessionId, spawnToken: researchSession.spawnToken, depth: researchSession.depth, role: researchSession.role, readOnly: researchSession.readOnly === true, declaredTasks: researchSession.tasks?.length ?? 0 } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, budget, memory };
+  return { ...(collaborator ? { researchSession: { parentSessionId: researchSession.parentSessionId, spawnToken: researchSession.spawnToken, depth: researchSession.depth, role: researchSession.role, readOnly: researchSession.readOnly === true, declaredTasks: researchSession.tasks?.length ?? 0 } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, memory };
 }
 
 function utf8Prefix(value, maximum) {
@@ -248,7 +235,7 @@ export function buildWorkbenchMemory(context, memory = context?.memory ?? {}, op
 export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?? {}, options = {}) {
   // Direct callers may pass context.memory. Never serialize that unbounded
   // payload again beside its budgeted rendering (the hook already separates it).
-  const { memory: _memory, ...recordContext } = object(context) ? context : {};
+  const { memory: _memory, budget: _budget, ...recordContext } = object(context) ? context : {};
   const mem = buildWorkbenchMemory(recordContext, memory, options);
   const delegation = buildDelegationGuidance({
     selectedTools: options.selectedTools,
@@ -272,13 +259,13 @@ export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?
     '- 5-writing (撰写与定稿)：论文撰写、引用真实性审计、产物打包。',
     '当您检测到对话与任务已进入对应阶段时，请及时调用 research_loop action="stage" 推进阶段状态。',
     '',
-    'Keep the workbench synchronized through the existing research_loop tool while doing the user-authorized research. This section does not authorize starting or restarting research, replacing the charter, raising budgets, installing software, or publishing.',
+    'Keep the workbench synchronized through the existing research_loop tool while doing the user-authorized research. This section does not authorize starting or restarting research, replacing the charter, installing software, or publishing.',
     'Before completing a turn that actually finishes a meaningful research attempt, call research_loop action="log" with a stable attemptId, expectedCharterHash equal to this context charterHash, the actionText, kind, expected, observed, lesson, signal and project-relative evidence paths. Reuse the same attemptId only to retry the same already-completed attempt. Do not count every tool call, file read, status query or model response as a scientific attempt.',
     'Record an actual stage change with action="stage". Do not select a stage merely because the dashboard has a template for it. Use action="narrow" only for an explicit evidence-backed narrowing decision.',
     'When the evidence supports stating or revising a research claim, call action="claim" with a stable id, statement, evidence, limitations and the actual supported/partially_supported/refuted/undetermined/failed status. Check existing records first. Do not re-upsert an unchanged accepted claim or generate claims from a task-completed signal.',
     'After a real review, record review-round with its observed reviewer model and response, then review-gate with the actual author model. For each claim acceptance use claim-gate with the actual cross-family jury, completed counterexample evidence and unresolved obligations. Missing evidence means undetermined or blocked, never accepted. A tool success or native subagent completed status is not scientific acceptance.',
     'Only explicit user authorization permits action="publish". Internal acceptance does not authorize publication.',
-    'Budget used counts are scoped to the native research workflow. Saved limits do not prove ordinary chat or direct subagent requests are physically intercepted. If the budget is unavailable or modelRequestsEnforced is false, report that fact; do not label the gate active or invent historical request reservations. Use the budgeted research_loop run path only when starting such a run is already authorized by the user.',
+    'Routine research_loop runs do not require a research budget. Observe actual usage from saved model responses; missing failures and retries remain unknown. Start a run only when the user has authorized that work.',
     'Use action="status" to inspect existing records when needed. Preserve existing research and return to the current task; do not restart a workflow to make an empty panel look populated.',
   ].join('\n');
 }

@@ -227,7 +227,7 @@ test('each registered turn replaces its bounded memory and never appends prior h
   assert.match(first, /\.pi\/research-loop\/state\.json#\/charter\/successCriteria/);
 });
 
-test('scientific, budget and publish gates are preserved', () => {
+test('scientific and publish gates remain without demanding a research budget', () => {
   const text = buildWorkbenchRecordProtocol(CONTEXT, {});
   assert.match(text, /research_loop action="log"/);
   assert.match(text, /expectedCharterHash/);
@@ -236,8 +236,8 @@ test('scientific, budget and publish gates are preserved', () => {
   assert.match(text, /review-gate/);
   assert.match(text, /claim-gate/);
   assert.match(text, /task-completed signal/);
-  assert.match(text, /Budget used counts are scoped to the native research workflow/);
-  assert.match(text, /If the budget is unavailable or modelRequestsEnforced is false, report that fact/);
+  assert.match(text, /Routine research_loop runs do not require a research budget/);
+  assert.doesNotMatch(text, /modelRequestsEnforced|attemptsEnforced|budgeted research_loop|"budget"/);
   assert.match(text, /Only explicit user authorization permits action="publish"/);
   assert.match(text, /Internal acceptance does not authorize publication/);
   assert.doesNotMatch(text, /CRITICAL/);
@@ -250,7 +250,7 @@ test('delegation guidance is dynamic and schema-accurate for each active family'
   assert.doesNotMatch(pi, /SubagentWorkflow\(\{/);
   assert.match(pi, /Collaborators may recursively delegate separable work/);
   assert.match(pi, /same owner, workspace, charter and permission scope/);
-  assert.match(pi, /depth, role and shared task budgets/);
+  assert.match(pi, /depth, role and concurrency limits/);
   assert.match(pi, /SSH, agy and supervisor roles remain leaves/);
   assert.match(pi, /do not import full child transcripts or dumps/);
 

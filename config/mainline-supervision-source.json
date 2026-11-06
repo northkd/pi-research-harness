@@ -87,7 +87,7 @@
     },
     {
       "path": "src/index.ts",
-      "sha256": "4e93f9ae57f7671ed0216f5b077d3f8bde13a96a764540f20bc80d37c2f48720",
+      "sha256": "baece39e40faeadeaa6bc17b2edc4f3cbf4cb35464e5a8ffa393a3fbfb3078b7",
       "localSourceSha256": "9f234eb5f932d4d518de7b796a9a2db556dc2bf48ca53df6a8569fa915fc5d5a"
     },
     {
@@ -97,7 +97,7 @@
     },
     {
       "path": "test/adapter.test.mjs",
-      "sha256": "19892a0aa4fd1408458d2b65062f7e681f58c31c3afc5efcc40c27e6088d66f3",
+      "sha256": "92eded090305bc7235911990f540cbde17d230e162d17c5f30e3a9f0140735f7",
       "localSourceSha256": "bdec5458ab378c4369648e6ba16f8259ffc1e3bb7f7be0cefabe45025f9016fe"
     },
     {

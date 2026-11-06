@@ -6,10 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { MockStore } from './mock-core.mjs';
 import { MainlineStore } from '../src/core.mjs';
-import { createHash } from 'node:crypto';
-import { charterHash } from '../../research-loop/src/adoption.mjs';
-import { readTaskPermissionContext } from '../../research-loop/src/task-permission-context.mjs';
-import { updateTaskPermissions } from '../../research-loop/src/task-permissions.mjs';
+import { readResearchAccessModeContext, updateResearchAccessMode } from '../../research-loop/src/access-mode.mjs';
 import { autoApproveStatePath, writeAutoApproveState } from '../src/auto-approve.mjs';
 import { loadAdapter } from '../scripts/host-env.mjs';
 const imported = await loadAdapter();
@@ -39,7 +36,7 @@ function harness(t, options = {}) {
   });
   if (options.prepare) options.prepare(cwd);
   const Store = options.Store ?? MockStore;
-  createMainlineAdapter(pi, { Store, env: options.env ?? {}, autoApprove: options.autoApprove, readTaskPermissionContext: options.readTaskPermissionContext });
+  createMainlineAdapter(pi, { Store, env: options.env ?? {}, autoApprove: options.autoApprove, readResearchAccessModeContext: options.readResearchAccessModeContext });
   const fire = (name, event = {}) => hooks.get(name)?.(event, ctx);
   if (!options.skipSessionStart) fire('session_start');
   const act = p => tool.execute('call', p, null, null, ctx);
@@ -261,74 +258,68 @@ test('MOCK failed toggle persistence is surfaced in the result and command notic
   assert.match(last.text, /未保存/);
 });
 
-// These adapter checks mock the supervisor state; the separate task-permissions suite
-// uses real on-disk adoption, session membership, owner and authorization records.
-test('MOCK live task profile avoids repeat dialogs and immediately honors narrowed/revoked scope', async t => {
-  let profile = { status: 'active', cwd: '/', additionalRoots: [], capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: false } };
-  const h = harness(t, { readTaskPermissionContext: () => ({ profile }) });
+// The adapter exercises actual tool_call and before_agent_start hooks. Store-level
+// tests separately cover native session identity, owner isolation and persistence.
+test('MOCK live full access skips ordinary confirmations; switching back to default restores them', async t => {
+  let profile = { mode: 'full-access', cwd: '/', revision: 'saved-choice' };
+  const h = harness(t, { readResearchAccessModeContext: () => ({ profile }) });
   await makeLimited(h);
   assert.equal(h.fire('tool_call', GATE_BASH), undefined);
   assert.equal(h.confirms.includes(GATE_TITLE), false);
-  profile = { ...profile, capabilities: { ...profile.capabilities, localExecution: false } };
-  assert.equal(h.fire('tool_call', GATE_BASH)?.block, true);
-  assert.equal(h.confirms.includes(GATE_TITLE), false);
-  profile = { ...profile, status: 'revoked' };
-  assert.match(h.fire('tool_call', GATE_BASH)?.reason, /authorization-revoked/);
-  profile = { ...profile, status: 'expired' };
-  assert.match(h.fire('tool_call', GATE_BASH)?.reason, /authorization-expired/);
+  profile = { ...profile, mode: 'default' };
+  assert.equal(await h.fire('tool_call', GATE_BASH), undefined);
+  assert.equal(h.confirms.filter(title => title === GATE_TITLE).length, 1);
+  profile = { ...profile, mode: 'full-access' };
+  assert.equal(h.fire('tool_call', GATE_BASH), undefined);
+  assert.equal(h.confirms.filter(title => title === GATE_TITLE).length, 1);
 });
-test('MOCK task grant preserves hard denials and explicit operator auto-approval disable', async t => {
-  const context = () => ({ profile: { status: 'active', cwd: '/', additionalRoots: [], capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: true } } });
-  const h = harness(t, { readTaskPermissionContext: context, autoApprove: false });
+test('MOCK full access overrides the retired auto-approval toggle, while explicit policy denial remains', async t => {
+  const h = harness(t, { readResearchAccessModeContext: () => ({ profile: { mode: 'full-access' } }), autoApprove: false });
   await makeLimited(h);
-  assert.match(h.fire('tool_call', GATE_BASH)?.reason, /auto-approve-disabled/);
+  assert.equal(h.fire('tool_call', GATE_BASH), undefined);
   assert.equal(h.confirms.includes(GATE_TITLE), false);
-  const other = harness(t, { readTaskPermissionContext: context });
-  await makeLimited(other);
-  assert.equal(other.fire('tool_call', { toolName: 'bash', toolCallId: 'hard-deny', input: { command: 'sudo rm -rf /' } })?.block, true);
+  assert.equal(h.fire('tool_call', { toolName: 'bash', toolCallId: 'hard-deny', input: { command: 'sudo rm -rf /' } })?.block, true);
 });
-
-test('MOCK task startup exposes verified scope, expiry and one upfront prerequisite review', async t => {
-  const profile = { status: 'active', task: 'Finish the synthetic run', cwd: '/workspace/synthetic', expiresAt: '2027-01-01T00:00:00.000Z', additionalRoots: [], blockers: [{ code: 'resource-budget-unavailable', tool: 'research_dispatch' }], capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: false } };
-  const h = harness(t, { readTaskPermissionContext: () => ({ profile }) });
+test('MOCK unavailable mode falls back to ordinary confirmation and default headless operation stays blocked', async t => {
+  const h = harness(t, { readResearchAccessModeContext: () => ({ unavailable: true }) });
+  await makeLimited(h);
+  assert.equal(await h.fire('tool_call', GATE_BASH), undefined);
+  assert.equal(h.confirms.includes(GATE_TITLE), true);
+  const noUI = { ...h.ctx, hasUI: false };
+  assert.equal(h.hooks.get('tool_call')(GATE_BASH, noUI)?.block, true);
+});
+test('MOCK startup describes the saved access mode without an upfront task approval or expiry', t => {
+  const h = harness(t, { readResearchAccessModeContext: () => ({ profile: { mode: 'full-access' } }) });
   const event = h.fire('before_agent_start', { systemPrompt: 'Existing agent instructions', prompt: 'Run the task' });
   assert.ok(event.systemPrompt.startsWith('Existing agent instructions'));
-  assert.ok(event.systemPrompt.includes(profile.task));
-  assert.ok(event.systemPrompt.includes(profile.expiresAt));
-  assert.ok(event.systemPrompt.includes('one concrete upfront request'));
-  assert.ok(event.systemPrompt.includes('resource-budget-unavailable'));
+  assert.match(event.systemPrompt, /Pi access mode: full access/);
+  assert.match(event.systemPrompt, /Operating-system rights/);
+  assert.doesNotMatch(event.systemPrompt, /one concrete upfront request|Current recorded blockers|expiresAt/);
   assert.equal(h.confirms.length, 0);
 });
-
-test('DISK a joined workspace receives live task guidance with unconfigured dormant supervision', async t => {
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'dormant-task-grant-'));
-  const cwd = path.join(root, 'project'), storeDir = path.join(root, 'grants'), privateDir = path.join(root, 'adoptions');
-  const hash = value => createHash('sha256').update(value).digest('hex');
-  const json = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
+test('DISK native unadopted workspace receives live mode guidance with dormant supervision', async t => {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'dormant-access-mode-'));
+  const cwd = path.join(root, 'project'), storeDir = path.join(root, 'access-modes');
+  fs.mkdirSync(cwd);
   const ownerKey = JSON.stringify(['host', 'inert-operator']);
-  json(path.join(cwd, '.pi/research-loop/state.json'), { schema: 'pi-research-state.v1', charter: { revision: 1, objective: 'Synthetic preflight', successCriteria: ['Deliver measured results'] } });
-  const charter = charterHash(cwd), adoptionId = 'adopt-' + hash(cwd).slice(0, 24), confirmationHash = 'sha256:' + hash('confirmation');
   const sessionFile = path.join(cwd, 'parent-session.jsonl');
   fs.writeFileSync(sessionFile, JSON.stringify({ type: 'session', id: 'parent-1', cwd }) + '\n');
-  json(sessionFile.slice(0, -6) + '.meta.json', { resWorkflow: { canonicalCwd: cwd, joinedAt: '2026-01-01T00:00:00.000Z', via: 'adoption' } });
-  const location = path.join(privateDir, hash(ownerKey), hash(cwd));
-  json(path.join(location, 'adopted.json'), { confirmed: true, id: adoptionId, confirmationHash });
-  json(path.join(location, adoptionId + '.json'), { schema: 'pi-res-workflow-operation.v1', ownerKey, cwd, adoption: { id: adoptionId, cwd, status: 'confirmed' } });
-  json(path.join(cwd, '.pi/research-loop/adoptions', adoptionId, 'confirmation.json'), { schema: 'pi-research-adoption-confirmation.v1', adoptionId, confirmationHash, charterHash: charter, autoRun: false });
-  const grant = updateTaskPermissions({ cwd, storeDir, ownerKey, charterHash: charter, action: 'authorize', confirmed: true, expectedRevision: null, requestId: 'dormant-guidance-grant', task: 'Run the synthetic analysis and return its evidence', durationHours: 24, capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: false }, additionalRoots: [] });
-  const h = harness(t, { cwd, Store: MainlineStore, readTaskPermissionContext: ctx => readTaskPermissionContext(ctx, { storeDir, privateDir }) });
+  fs.writeFileSync(sessionFile.slice(0, -6) + '.meta.json', JSON.stringify({ cwd }));
+  const choice = updateResearchAccessMode({ cwd, storeDir, ownerKey, mode: 'full-access', expectedRevision: null, requestId: 'dormant-guidance-full' });
+  const h = harness(t, { cwd, Store: MainlineStore, readResearchAccessModeContext: ctx => readResearchAccessModeContext(ctx, { storeDir }) });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.equal(h.get().enabled, false);
   assert.equal(h.get().authorized, false);
   assert.equal(h.get().coreRevision, 0);
-  assert.equal(readTaskPermissionContext(h.ctx, { storeDir, privateDir })?.profile?.revision, grant.revision);
+  assert.equal(readResearchAccessModeContext(h.ctx, { storeDir })?.profile?.revision, choice.revision);
   const result = h.fire('before_agent_start', { systemPrompt: 'Original instructions', prompt: 'Begin the analysis' });
   assert.ok(result.systemPrompt.startsWith('Original instructions'));
-  assert.ok(result.systemPrompt.includes(grant.task));
-  assert.ok(result.systemPrompt.includes(grant.expiresAt));
+  assert.match(result.systemPrompt, /Pi access mode: full access/);
   assert.equal(result.message, undefined, 'no supervisor configuration or review is required');
   assert.equal(h.confirms.length, 0);
   await flush();
-  assert.equal(h.requests.length, 0, 'preflight does not activate the supervisor or a model');
+  assert.equal(h.requests.length, 0, 'mode guidance does not activate the supervisor or a model');
+  updateResearchAccessMode({ cwd, storeDir, ownerKey, mode: 'default', expectedRevision: choice.revision, requestId: 'dormant-guidance-default' });
+  assert.match(h.fire('before_agent_start', { prompt: 'Continue' }).systemPrompt, /Pi access mode: default/);
   assert.equal(h.get().enabled, false);
 });

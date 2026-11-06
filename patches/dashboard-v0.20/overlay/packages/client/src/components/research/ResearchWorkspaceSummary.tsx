@@ -1,5 +1,5 @@
 import { Icon } from "@mdi/react";
-import { mdiArrowRight, mdiClose, mdiFileDocumentOutline } from "@mdi/js";
+import { mdiArrowRight, mdiClose, mdiFileDocumentOutline, mdiPlayOutline } from "@mdi/js";
 import { useCallback, useId, useRef, useState, type ReactNode } from "react";
 import { DialogPortal } from "@blackbelt-technology/pi-dashboard-client-utils/DialogPortal";
 import { LayerHostProvider } from "@blackbelt-technology/pi-dashboard-client-utils/LayerPortal";
@@ -9,11 +9,12 @@ import type { ResearchWorkbenchObservation } from "@blackbelt-technology/pi-dash
 import { claimEvidence, type Claim, type ResearchProjection, type StageId } from "./research-projection.js";
 import { STAGES } from "./ResearchOverviewAndBudget.js";
 
-export function ResearchStageOverview({ projection, objective, viewStage, onSelectStage, onOpenArtifact }: {
+export function ResearchStageOverview({ projection, objective, viewStage, onSelectStage, onStartStage, onOpenArtifact }: {
   projection: ResearchProjection;
   objective: string | null;
   viewStage: StageId | null;
   onSelectStage: (stage: StageId | null) => void;
+  onStartStage?: (stage: StageId) => void;
   onOpenArtifact?: (path: string) => void;
 }) {
   const selectedStage = viewStage ?? projection.stage;
@@ -28,12 +29,13 @@ export function ResearchStageOverview({ projection, objective, viewStage, onSele
     </div>
     <ol className="research-stage-track">
       {STAGES.map((stage, index) => <li key={stage.id}>
-        <button type="button" data-testid={`research-stage-${stage.id}`} aria-label={`查看阶段：${stage.short}`}
+        <button type="button" className="research-stage-select" data-testid={`research-stage-${stage.id}`} aria-label={`查看阶段：${stage.short}`}
           aria-pressed={selectedStage === stage.id} aria-current={projection.stage === stage.id ? "step" : undefined}
           onClick={() => onSelectStage(stage.id)}>
           <span className="research-stage-number">{index + 1}</span>
           <span><strong>{stage.short}</strong><small>{projection.stage === stage.id ? "最近进入" : projection.enteredStages.has(stage.id) ? "此前进入" : "无进入记录"}</small></span>
         </button>
+        {onStartStage && <button type="button" className="research-stage-start" data-testid={`research-stage-start-${stage.id}`} aria-label={`独立启动${stage.short}`} onClick={() => onStartStage(stage.id)}><Icon path={mdiPlayOutline} size={0.65} />独立启动</button>}
       </li>)}
     </ol>
     <div className="research-stage-caption">
@@ -72,7 +74,7 @@ export function ResearchTaskOverview({ projection, claims, observation, stale, a
     <section><h3>当前研究</h3><dl><div><dt>实际阶段</dt><dd>{current?.short ?? "未登记"}</dd></div><div><dt>运行记录</dt><dd>{projection.currentRun?.status ?? "暂无正式运行"}</dd></div><div><dt>待解决主张</dt><dd>{blocked.length} 条</dd></div></dl></section>
     <section><h3>协作状态</h3><p className={stale ? "research-warning" : "research-summary-number"}>{stale ? "执行观测待同步" : `${active.length} 项活动执行`}</p><p className="research-muted">独立会话 {projection.executions.filter(row => row.kind === "pi-session").length} · 原生子代理 {projection.executions.filter(row => row.kind === "native-subagent").length}</p>{onOpenAgents && <button type="button" className="research-text-link" onClick={onOpenAgents}>打开协作页 <Icon path={mdiArrowRight} size={0.6} /></button>}</section>
     <section><h3>当前交互入口</h3><p>{conversation ? "已选中的独立会话" : activeSessionId ? "导航中选中的会话，暂无执行观测" : "尚未选择会话"}</p>{activeSessionId && <p className="research-muted font-mono" title={activeSessionId}>{activeSessionId}</p>}{onOpenConversation && <button type="button" className="research-text-link" onClick={onOpenConversation}>回到对话 <Icon path={mdiArrowRight} size={0.6} /></button>}</section>
-    <section><h3>使用量与预算</h3><p>{observation ? `${observation.observedUsage.responses} 次已观测响应` : "尚无使用量观测"}</p><p className="research-muted">费用在会话账单中核对；研究预算按尝试与请求计数。</p>{onOpenBudget && <button type="button" className="research-text-link" onClick={onOpenBudget}>查看总览与预算 <Icon path={mdiArrowRight} size={0.6} /></button>}</section>
+    <section><h3>使用量</h3><p>{observation ? `${observation.observedUsage.responses} 次已观测响应` : "尚无使用量观测"}</p><p className="research-muted">费用在计费明细中核对；已保存响应不等于完整物理请求次数。</p>{onOpenBudget && <button type="button" className="research-text-link" onClick={onOpenBudget}>查看研究总览 <Icon path={mdiArrowRight} size={0.6} /></button>}</section>
     <footer><span className={stale ? "research-warning" : "research-muted"}>{stale ? "执行状态尚未确认" : "执行观测已同步"}</span>{checkedAt && <time>正式记录核对于 {new Date(checkedAt).toLocaleTimeString("zh-CN")}</time>}</footer>
   </aside>;
 }

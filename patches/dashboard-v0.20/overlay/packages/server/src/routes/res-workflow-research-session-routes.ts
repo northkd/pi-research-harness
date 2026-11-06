@@ -24,7 +24,6 @@ import type { SpawnResult } from "../spawn-process/process-manager.js";
 import type { SpawnStrategy } from "@blackbelt-technology/pi-dashboard-shared/config.js";
 import type { NetworkGuard } from "./route-deps.js";
 import { createResearchDispatchService, createResearchDispatchStore } from "../res-workflow/research-dispatch-service.mjs";
-import { assertResearchTaskDelegation } from "../res-workflow/task-permission-service.js";
 import { createResearchSessionService, ResearchSessionError } from "../res-workflow/research-session-service.mjs";
 
 export interface ResearchSessionInitialPromptRegistry {
@@ -125,7 +124,8 @@ export function createDefaultResearchSessionVerifier(deps: Pick<ResearchSessionR
 export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstance, deps: ResearchSessionRouteDeps) {
   const verifyParent = createDefaultResearchSessionVerifier(deps);
   const verifyLaunch = async ({ parent }: { parent: any }) => {
-    await assertResearchTaskDelegation(parent, { researchLoopRoot: deps.researchLoopRoot });
+    // Ordinary session ownership/membership still governs dispatch. The retired
+    // task grant is not a second authorization or expiry gate for either mode.
     // Background launches retain the exact existing mainline resource floor;
     // an earlier successful plan call is not an enduring resource permit.
     const root = deps.researchLoopRoot ?? await resolveInstalledResearchLoopRoot();

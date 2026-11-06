@@ -117,15 +117,15 @@
         { id: 'DEMO-G2', cwd, objective: '【模拟】建立可查看的主张与证据链', status: 'achieved', criteria: [{ text: '【模拟】登记三条示例主张', done: true }], budget: { maxTurns: 6 }, autoRespawn: false, sessionIds: [], createdAt: now, updatedAt: now },
       ];
     };
-    const state = { tick: 0, charter: null, budget: { attempts: 24, modelRequests: 12 }, revision: 1, goals: initialGoals(), permissions: null };
+    const state = { tick: 0, charter: null, budget: { attempts: 24, modelRequests: 12 }, revision: 1, goals: initialGoals(), accessMode: null, prompts: [] };
     const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
     const budget = () => ({ cwd, revision: `DEMO-${state.revision}`, limits: { ...state.budget }, usage: { attempts: 7, modelRequests: 0, inFlight: 0, unknown: 0 }, updatedAt: new Date().toISOString(), enforcement: { attempts: false, modelRequests: false, scope: 'native-research-workflow', physicalTransport: 'sse-http' } });
-    const permissions = async () => ({
-      cwd, charterHash: await sha256(JSON.stringify(state.charter ?? {})), revision: null, status: 'unconfigured', task: '',
-      capabilities: { localExecution: true, delegation: true, publicResearch: true, projectDependencies: false },
-      additionalRoots: [], durationHours: 24, authorizedAt: null, expiresAt: null,
-      inheritance: 'joined-workbench-descendants', blockers: [], ...(state.permissions ?? {}),
-    });
+    const accessMode = () => ({ cwd, mode: 'default', revision: null, updatedAt: null,
+      inheritance: 'workspace-sessions', ...(state.accessMode ?? {}) });
+    const sessions = [
+      ['DEMO:main', '【模拟】主控 Agent'], ['DEMO:literature', '【模拟】文献协作 Agent'],
+      ['DEMO:experiment', '【模拟】实验协作 Agent'], ['DEMO:review', '【模拟】评审协作 Agent'],
+    ].map(([id, name]) => ({ id, name, cwd, status: 'idle', driver: 'pi', model: 'DEMO/本地模拟（未调用）' }));
     const fakeSnapshot = async (response) => {
       if (!response.ok) return response;
       const data = await response.clone().json();
@@ -174,19 +174,22 @@
       if (method !== 'GET' && method !== 'HEAD') {
         let body = {};
         try { body = JSON.parse(typeof init.body === 'string' ? init.body : '{}'); } catch { /* fail closed */ }
-        if (url.pathname === '/api/res-workflow/task-permissions' && body.cwd === cwd && body.confirmed === true) {
-          const previous = await permissions();
-          if (body.expectedRevision !== previous.revision) return json({ code: 'task-permissions-revision-conflict' }, 409);
-          if (body.action === 'revoke') {
-            state.permissions = { ...previous, status: 'revoked', revision: globalThis.crypto.randomUUID() };
-          } else if (body.action === 'authorize' && typeof body.task === 'string' && body.task.trim()
-            && [12, 24, 48, 72].includes(body.durationHours) && body.capabilities && Array.isArray(body.additionalRoots)) {
-            state.permissions = { ...previous, status: 'active', revision: globalThis.crypto.randomUUID(),
-              task: `【模拟】${body.task.trim()}`, capabilities: body.capabilities, additionalRoots: body.additionalRoots,
-              durationHours: body.durationHours, authorizedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + body.durationHours * 3600000).toISOString() };
-          } else return json({ code: 'task-permissions-invalid' }, 400);
-          notify('已更新模拟任务授权；真实权限与运行任务没有改变。');
-          return json(await permissions());
+        if (url.pathname === '/api/res-workflow/access-mode' && method === 'POST' && body.cwd === cwd) {
+          const previous = accessMode();
+          if (body.expectedRevision !== previous.revision) return json({ code: 'access-mode-revision-conflict' }, 409);
+          if (!['default', 'full-access'].includes(body.mode) || typeof body.requestId !== 'string'
+            || Object.keys(body).some(key => !['cwd', 'mode', 'expectedRevision', 'requestId'].includes(key))) return json({ code: 'access-mode-invalid' }, 400);
+          state.accessMode = { ...previous, mode: body.mode, revision: globalThis.crypto.randomUUID(), updatedAt: new Date().toISOString() };
+          notify('【模拟】访问权限已切换；真实权限与运行任务没有改变。');
+          return json(accessMode());
+        }
+        const promptTarget = /^\/api\/session\/([^/]+)\/prompt$/.exec(url.pathname);
+        if (promptTarget && method === 'POST' && sessions.some(session => session.id === decodeURIComponent(promptTarget[1]))
+          && typeof body.text === 'string' && body.text.trim()) {
+          const sessionId = decodeURIComponent(promptTarget[1]);
+          state.prompts.push({ sessionId, text: body.text });
+          notify('【模拟】任务已交给选定的主 Agent；没有调用模型。');
+          return json({ success: true, transmitted: true, simulated: true, promptId: `DEMO-prompt-${state.prompts.length}` });
         }
         if (url.pathname === '/api/res-workflow/research-budget' && body.cwd === cwd
           && Number.isSafeInteger(body.limits?.attempts) && body.limits.attempts >= 0
@@ -202,7 +205,8 @@
         return json({ success: false, error: '演示模式：真实操作已阻止' }, 403);
       }
       if (url.pathname === '/api/res-workflow/research-budget' && isDemo) return json(budget());
-      if (url.pathname === '/api/res-workflow/task-permissions' && isDemo) return json(await permissions());
+      if (url.pathname === '/api/res-workflow/access-mode' && isDemo) return json(accessMode());
+      if (url.pathname === '/api/sessions') return json(sessions);
       if (url.pathname === '/api/res-workflow/workbench-sync' && isDemo) {
         if (!state.charter) {
           const source = await upstream(`${origin}/api/res-workflow?cwd=${encodeURIComponent(cwd)}`, { method: 'GET' });
@@ -215,7 +219,7 @@
       if (url.pathname === '/api/res-workflow' && isDemo) return fakeSnapshot(response);
       return response;
     };
-    return { fetch: wrapped, state, step() { state.tick = Math.min(8, state.tick + 1); refresh(); }, reset() { state.tick = 0; state.budget = { attempts: 24, modelRequests: 12 }; state.goals = initialGoals(); state.permissions = null; state.revision++; refresh(); } };
+    return { fetch: wrapped, state, step() { state.tick = Math.min(8, state.tick + 1); refresh(); }, reset() { state.tick = 0; state.budget = { attempts: 24, modelRequests: 12 }; state.goals = initialGoals(); state.accessMode = null; state.prompts = []; state.revision++; refresh(); } };
   }
 
   function parseDemoEntry(href) {

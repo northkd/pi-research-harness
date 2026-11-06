@@ -64,20 +64,29 @@ test('demo mode blocks real mutations and simulates only the demo project', asyn
   const changedBudget = await (await runtime.fetch('/api/res-workflow/research-budget', { method: 'POST', body: JSON.stringify({ cwd, limits: { attempts: 18, modelRequests: 9 } }) })).json();
   assert.deepEqual(changedBudget.limits, { attempts: 18, modelRequests: 9 });
   assert.equal(calls.length, before);
-  const permissionUrl = '/api/res-workflow/task-permissions';
+  const permissionUrl = '/api/res-workflow/access-mode';
   const initialPermissions = await (await runtime.fetch(permissionUrl + '?cwd=' + encodeURIComponent(cwd))).json();
-  assert.equal(initialPermissions.status, 'unconfigured');
-  const grant = { cwd, expectedRevision: null, requestId: 'demo-grant-1', action: 'authorize', confirmed: true,
-    task: '查看合成数据', capabilities: initialPermissions.capabilities, durationHours: 48, additionalRoots: [] };
+  assert.equal(initialPermissions.mode, 'default');
+  const grant = { cwd, expectedRevision: null, requestId: 'demo-mode-1', mode: 'full-access' };
   const approved = await (await runtime.fetch(permissionUrl, { method: 'POST', body: JSON.stringify(grant) })).json();
-  assert.equal(approved.status, 'active');
-  assert.match(approved.task, /模拟/);
+  assert.equal(approved.mode, 'full-access');
+  assert.equal(approved.inheritance, 'workspace-sessions');
   assert.equal((await runtime.fetch(permissionUrl, { method: 'POST', body: JSON.stringify(grant) })).status, 409);
   assert.equal((await runtime.fetch(permissionUrl, { method: 'POST', body: JSON.stringify({ ...grant, cwd: '/tmp/other-project' }) })).status, 403);
   const revoked = await (await runtime.fetch(permissionUrl, { method: 'POST', body: JSON.stringify({ cwd, expectedRevision: approved.revision,
-    requestId: 'demo-revoke-1', confirmed: true, action: 'revoke' }) })).json();
-  assert.equal(revoked.status, 'revoked');
-  assert.equal(calls.length, before, 'synthetic grants must never reach real authorization APIs');
+    requestId: 'demo-mode-2', mode: 'default' }) })).json();
+  assert.equal(revoked.mode, 'default');
+  assert.equal(calls.length, before, 'synthetic access changes must never reach real permission APIs');
+  const sessions = await (await runtime.fetch('/api/sessions')).json();
+  assert.equal(sessions.length, 4);
+  assert.ok(sessions.every(row => row.cwd === cwd && row.name.includes('模拟')));
+  const sent = await (await runtime.fetch('/api/session/' + encodeURIComponent(sessions[1].id) + '/prompt', {
+    method: 'POST', body: JSON.stringify({ text: '仅模拟委派目标' }),
+  })).json();
+  assert.equal(sent.transmitted, true);
+  assert.equal(sent.simulated, true);
+  assert.equal(runtime.state.prompts.at(-1).sessionId, sessions[1].id);
+  assert.equal(calls.length, before, 'demo main-agent prompts must stay in memory');
   const goalUrl = '/api/folders/goals?cwd=' + encodeURIComponent(cwd);
   const goals = await (await runtime.fetch(goalUrl)).json();
   assert.equal(goals.success, true);

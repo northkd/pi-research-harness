@@ -64,7 +64,7 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
       'While delegated work is running, wait for the durable completion notification instead of polling or duplicating exploration. The lead decides scope and unresolved questions; the execution coordinator owns detailed planning, implementation, debugging and evidence review.',
       'Default replies contain bounded summaries and evidence references, never whole child transcripts. Unchanged status is acknowledged briefly; refresh:true returns the current summary after compaction if needed.',
       'Report completed/failed/blocked only for your own assignment with an accurate summary and relative evidence paths. Child failures cannot be hidden behind completed.',
-      'Respect the original user scope, explicit no-delegate/no-export restrictions, shared budget and inherited permissions.',
+      'Respect the original user scope, explicit no-delegate/no-export restrictions and inherited permissions.',
     ],
     parameters: {
       type: 'object', additionalProperties: false, required: ['action'],

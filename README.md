@@ -10,7 +10,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![Node](https://img.shields.io/badge/Node-22.19%2B-green)
 
-> **当前为 0.20.0 开发源码。** 本分支基于 `main` 的 `36a5540`，增加长任务授权、递归分发执行器和协作层级画布。试用本次修改请检出 `feat/autonomous-collaboration-20261106`；[实现、使用与验证记录](docs/autonomous-collaboration/implementation.md)说明实际范围。完整自动研究、Science 和部分后端集成仍有明确的配置要求与已知缺口，见[可用范围](#可用范围与已知问题)。
+> **当前为 0.20.0 开发源码。** 本分支恢复主 Agent 指定和五阶段独立启动，使用“默认权限 / 完全访问”替代长任务授权，移除常规研究启动的预算前置。试用请检出 `feat/autonomous-collaboration-20261106`；[当前控制与验证说明](docs/workflow-controls/implementation.md)记录实际范围。递归分发执行器、协作层级画布和计费性能面板继续保留。完整自动研究、Science 和部分后端集成仍需本机配置，见[可用范围](#可用范围与已知问题)。
 
 ![项目实际运行结构：操作入口、Pi 执行、研究记录、观测回流与独立 Science 查看通道](docs/images/project-illustration.png)
 
@@ -21,7 +21,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 - [工作台能做什么](#工作台能做什么)
 - [一次研究实际怎样推进](#一次研究实际怎样推进)
 - [会话、子代理与科研角色](#会话子代理与科研角色)
-- [长任务授权与分发执行器](#长任务授权与分发执行器)
+- [访问权限与分发执行器](#访问权限与分发执行器)
 - [证据、评审与发表授权](#证据评审与发表授权)
 - [持续推进、监督与阶段识别](#持续推进监督与阶段识别)
 - [可选服务与集成](#可选服务与集成)
@@ -38,7 +38,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 | 入口 | 主要用途 | 保留的操作 |
 |---|---|---|
 | **对话** | 与当前 Pi 会话交互，查看思考、工具调用与结果 | 模型与思考级别、发送、队列、steering、停止、后台任务、历史定位、最后消息撤销并编辑 |
-| **研究工作台** | 围绕目标查看阶段、任务、产物、预算与证据 | 工作流进度、总览与预算、主张与评审、历史与审计、全部看板；资料接入和项目设置 |
+| **研究工作台** | 围绕目标查看阶段、任务、产物、用量与证据 | 主 Agent 选择、五阶段独立启动、研究总览、访问权限、主张与评审、历史与审计；资料接入和项目设置 |
 | **智能体** | 查看协作会话的真实创建层级、原生子代理与工作流步骤 | 父子连线、创建者导航、画布内展开多轮执行、列表、角色矩阵、搜索、缩放、聚焦、执行详情与文字纠偏 |
 | **文件** | 在项目目录中阅读、编辑和比较文件 | 文件树、标签、Markdown 等编辑预览、差异、搜索、专用 viewer 与插件文件处理器 |
 | **Science** | 访问另行配置的 Science 查看服务 | 原生工作区/任务画面、产物预览、原始下载与哈希核对；实例列表从工作台总览进入 |
@@ -55,7 +55,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 *截图来自实际构建的 Dashboard、原生服务和认证流程，画面内容为明确标注的合成演示数据。工作台截图保留 2026-11-05 验证，协作画布更新为本分支 2026-11-06 验证；它们不表示正在执行真实科研任务。*
 
-[画布内直接展开](docs/autonomous-collaboration/screenshots/12-subagents-spread-1440.png) · [长任务授权](docs/autonomous-collaboration/screenshots/14a-task-authorization-editor-1440.png) · [窄屏展开](docs/autonomous-collaboration/screenshots/13-subagents-spread-360.png)
+[画布内直接展开](docs/autonomous-collaboration/screenshots/12-subagents-spread-1440.png) · [当前访问权限与工作流入口](docs/workflow-controls/implementation.md) · [窄屏展开](docs/autonomous-collaboration/screenshots/13-subagents-spread-360.png)
 
 [对话](docs/ui-redesign/screenshots/10-session-chat-1440.png) · [文件](docs/ui-redesign/screenshots/03-files-1440.png) · [费用详情](docs/ui-redesign/screenshots/11-usage-drawer-1440.png) · [Science 未连接时的入口](docs/ui-redesign/screenshots/04-science-1440.png) · [深色主题](docs/ui-redesign/screenshots/09-workbench-dark-1440.png) · [手机宽度](docs/ui-redesign/screenshots/08-workbench-light-360.png)
 
@@ -73,7 +73,9 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 ### 1. 明确项目目标，或接入已有研究
 
-新问题由本目录的 Pi 会话配置研究目标、成功标准、非目标、约束与预算，保存为项目的研究约定（`charter`）。修改已冻结的目标需要按现有确认流程处理，不能为了让结果显得成功而悄悄改验收标准。
+新问题由本目录的 Pi 会话配置研究目标、成功标准、非目标与约束，保存为项目的研究约定（`charter`）。
+常规研究启动无需填写尝试次数或模型请求预算。
+修改已冻结的目标继续使用现有确认流程，保留原验收标准及变更记录。
 
 已有研究可以从工作台的“资料接入与项目设置”进入：选择目录资料和历史会话，核对材料范围、分析模型与请求预算，授权分析后检查接入草案，再确认目标和成功标准。历史选择有覆盖核查和恢复记录；确认接入保存来源关联，并在需要时建立研究约定。
 
@@ -85,12 +87,14 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 | 操作 | 实际发生什么 |
 |---|---|
+| 指定主 Agent | 选择本项目的 Pi 会话；“打开主对话”和“发送任务”使用该会话 |
 | 浏览某个阶段 | 只筛选该阶段记录；“正在查看”和正式研究阶段分别显示 |
 | 接续已有研究 / 新启动工作流 | 生成可复制指令；在当前项目 Pi 对话里检查并发送后才执行 |
 | 独立启动一个阶段 | 先编辑首条 Prompt，确认后创建加入同一工作台的独立 Pi 会话 |
 | `research_loop` 的 `run` | 在前置条件满足时，从 Stage 1 启动自动流程；不能用它冒充恢复历史进度 |
 
-接续时应先查看现有状态、运行回执、已保存产物和预算，再决定下一项任务。会话启动后可以恢复尚未结束运行的**进度观察**；这不保证进程终止或服务器重启后，原模型与计算任务仍然存在。
+接续时先查看现有状态、运行回执、已保存产物和当前权限，再决定下一项任务。
+会话启动后可以恢复尚未结束运行的**进度观察**；这不保证进程终止或服务器重启后，原模型与计算任务仍然存在。
 
 对应实现：[工作台启动指引](patches/dashboard-v0.20/overlay/packages/client/src/components/research/ResearchStartGuide.tsx)、[阶段会话入口](patches/dashboard-v0.20/overlay/packages/client/src/components/research/ResearchExecutionPanels.tsx)、[研究循环工具](extensions/research-loop/src/index.ts)。
 
@@ -110,16 +114,16 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 当前自动脚本的行为可以直接核对：
 
-1. `research_loop({action: "run"})` 或 `configure(autoRun: true)` 检查内存准入、当前会话及受控预算桥接，随后请求原生 subagents 运行 workflow。
+1. `research_loop({action: "run"})` 或 `configure(autoRun: true)` 检查内存准入和当前会话，直接请求原生 subagents 运行 workflow；常规路径不注入预算桥。
 2. Explorer 以独立上下文从不同角度提出假设卡；critic 筛选，strategist 选择方向并制定实验里程碑。
 3. 实验按里程碑**顺序**执行，由 `research-numerics` 或 `research-ssh` 承担。任一项未返回 `completed`，自动流程就返回 `blocked`。
 4. Critic 最多评审四轮，下一轮带上上一轮的评审 memory。达到代码中的停止条件，返回 `converged`；达到轮数上限，返回 `max_rounds_reached`。
 
 `stopAfter: "plan"` 和 `stopAfter: "experiment"` 可以分别在计划或实验后返回。当前评审循环会传递批评意见，**没有自动执行 fixes、修改代码并重跑实验的调用段**；补实验与改方法需要主会话组织后续动作。`converged` 只是这一脚本的停止结果，不直接授予主张验收或发表权限。
 
-**自动流程的启用条件尚未在全新安装中补齐。** 仓库的 10 个角色模板不含自动流程引用的 `research-explorer`、`research-strategist`；阶段映射还引用了未附带模板的 `research-reframer`。模型策略也包含具体 provider/model ID，需要和自己的可用模型目录对齐。使用前需补齐对应角色、模型、原生 bridge 与研究预算；不能把“有工作流源码”理解为安装后即可完整跑通。
+**自动流程的启用条件尚未在全新安装中补齐。** 仓库的 10 个角色模板不含自动流程引用的 `research-explorer`、`research-strategist`；阶段映射还引用了未附带模板的 `research-reframer`。模型策略也包含具体 provider/model ID，需要和自己的可用模型目录对齐。使用前需补齐对应角色、模型和原生 subagents 服务；不能把“有工作流源码”理解为安装后即可完整跑通。
 
-依据：[自动流程实现](extensions/research-loop/workflows/auto-research.js)、[启动与恢复](extensions/research-loop/src/index.ts)、[预算桥接](extensions/research-loop/src/research-budget-bridge.mjs)、[安装器复制角色的逻辑](scripts/configure.mjs)。
+依据：[自动流程实现](extensions/research-loop/workflows/auto-research.js)、[启动与恢复](extensions/research-loop/src/index.ts)、[原生启动请求](extensions/research-loop/src/workflow-launch.mjs)、[安装器复制角色的逻辑](scripts/configure.mjs)。
 
 ### 4. 把结果保存为可核查的研究记录
 
@@ -131,7 +135,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 | 尝试信号 | `positive`、`negative`、`inconclusive`、`blocked`、`error`；失败和未定同样保留 |
 | 主张 `claim` | 陈述、支持状态、证据路径和限制条件 |
 | 收窄 `narrow` | 为什么取舍、丢弃哪些方向、依据是什么；递增控制环 `phase`，保留旧台账，不自动切换五阶段 |
-| 状态与建议 | 根据预算、连续无正信号和重复尝试作确定性诊断，生成有界材料包与策略派发提示 |
+| 状态与建议 | 根据连续无正信号和重复尝试作确定性诊断，生成有界材料包与策略派发提示 |
 
 `advise` / `dead-ends` 提供供独立策略角色检查的材料包和派发建议，不会直接把模型意见当作证据。原始数据和日志仍放在项目产物目录，台账引用其路径。相关实现见 [ledger.mjs](extensions/research-loop/src/ledger.mjs) 与 [工作流进度观察器](extensions/research-loop/src/workflow-progress.mjs)。
 
@@ -164,19 +168,27 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 完整模板位于 [agents/](agents/)。独立上下文和不同角色有助于交叉检查，但不保证科学正确性；要按实际观察到的模型身份、来源和产物判断独立性。
 
-## 长任务授权与分发执行器
+## 访问权限与分发执行器
 
-十几个小时的工作可以在启动前集中确认授权。确认研究约定并接入项目后，打开 **研究工作台 → 总览与预算 → 长任务执行授权**，填写任务和交付要求，核对本地计算、协作分发、公开资料检索及项目依赖安装，选择 12、24、48 或 72 小时并保存。当前约定下所有已加入的研究协作会话共享授权，附加数据目录可一并列出。
+工作台提供 **访问权限 → 默认权限 / 完全访问**。
+选择按操作者和规范项目目录立即保存，直到切回默认。
+同一操作者的已注册主会话、工作台协作会话和执行协调者共用该模式。
+无需填写任务授权表、附加目录或 12–72 小时期限。
+任务目标与交付要求继续发送给主 Agent。
 
-授权接入实际的文件访问门控及主线监督确认流程。批准范围内直接继续；普通路径遇到到期、撤销或范围不符时返回明确阻塞并记录到面板，供 agent 继续其余独立工作、最后说明未完成条件。敏感及不可授予路径仍遵守原有独立门控。授权不会扩大原有计算预算、提供外部服务凭据或自动授权材料外发与发表，也不会修改全局 Pi YOLO 设置。
+“完全访问”控制应用内执行确认。
+操作系统、远程账号和模型服务继续使用运行环境已有权限与凭据。
+明确停止、只读任务约束、协作依赖、内存准入和科学证据验收继续生效。
+权限覆盖、保存范围与验证边界见[当前控制说明](docs/workflow-controls/implementation.md)。
 
 新的 `research_dispatch` 是持久化分发执行器。对于较大的目标，主 agent 优先通过 `delegate` 一次提交目标、必要约束、验收条件和材料引用，由独立的执行协调者完成详细分析、拆分、跟进、复核与汇总。协调者通过 `plan` 提交有稳定 ID 和依赖关系的任务；执行器创建真实子会话、控制并发、等待结果并通知父会话。协作者收到多个可分开的工作后也要建立计划；单一不可拆分任务使用 `atomic` 说明原因。通过 `research_session.tasks` 明确提交的工作，在子会话注册后由后台自动分发。
 
 子任务须通过 `report` 提交真实状态、摘要和证据路径。idle 不等于完成，未返回的孩子与失败回执不能被上层的成功声明覆盖。语义拆分仍由模型决定；实际调度、依赖和回执由代码执行。等待中的协调者保留驻留资源统计，但不会占满可运行工作者的名额。
 
-主 agent 的默认分发回执限制为 8 KiB UTF-8 文本，重复查询只返回简短的未变更状态；详情按需分页，每页最多 16 KiB，并核对记录版本。子会话不复制父会话全文，工作台记忆块也设有独立预算。主 agent 保留目标、关键决策和最终验收，详细材料及执行过程留在协调者与 worker 中。代码限制后续注入量，不会清除已经进入上下文的历史内容，也不承诺降低所有 agent 合计的 token 开销。
+主 agent 的默认分发回执限制为 8 KiB UTF-8 文本，重复查询只返回简短的未变更状态；详情按需分页，每页最多 16 KiB，并核对记录版本。子会话不复制父会话全文，工作台记忆块也设有独立字节上限。主 agent 保留目标、关键决策和最终验收，详细材料及执行过程留在协调者与 worker 中。代码限制后续注入量，不会清除已经进入上下文的历史内容，也不承诺降低所有 agent 合计的 token 开销。
 
-使用步骤、工具示例、限额、恢复行为和实际验证范围见 [长任务与协作实现说明](docs/autonomous-collaboration/implementation.md)及[主 agent 上下文减负说明](docs/autonomous-collaboration/context-offload.md)。
+当前操作见[主 Agent、阶段启动与访问权限](docs/workflow-controls/implementation.md)。
+分发工具、并发限制与上下文测量见[协作执行器历史实施记录](docs/autonomous-collaboration/implementation.md)及[主 agent 上下文减负说明](docs/autonomous-collaboration/context-offload.md)。
 
 ## 证据、评审与发表授权
 
@@ -215,13 +227,17 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 `/mainline-supervision pause` 暂停的是监督机制，不能当作停止全部研究进程。当前也没有实现可永久覆盖未来所有同类限制的流程级裁决。配置与边界见 [主线监督](docs/SUPERVISION.md)、[监督模块](extensions/mainline-supervision/README.md)、[空闲阶段识别](docs/IDLE-STAGE-REVIEW.md)。
 
-研究尝试次数、受控模型请求数、资料接入分析预算、Goal 累计轮数和人民币费用是不同口径，不构成统一的全项目费用硬上限。模型路由模块提供可复用的资格检查和历史记录函数，未作为自动选模或后台跑分守护服务默认启动，见[模型路由说明](integration/model-routing/README.md)。
+研究总览保留尝试次数与实际响应、token 用量，费用在计费明细核对。
+常规研究不再读取旧尝试配额，也不因默认 `maxAttempts: 60` 停止。
+已经运行并显式绑定旧预算适配器的作业仍使用原尝试次数与模型请求限额；更新工作台不热替换运行中的扩展。
+资料接入分析和 Goal 保留各自独立的调用或轮数控制；这些口径不构成全项目费用硬上限。
+模型路由模块提供可复用的资格检查和历史记录函数，未作为自动选模或后台跑分守护服务默认启动，见[模型路由说明](integration/model-routing/README.md)。
 
 ## 可选服务与集成
 
 ### Science 的当前接入位置
 
-Science 从目录工作台进入，不依赖先创建 Pi 会话。Science 主视图承接原生工作区/任务画面及产物查看；**实例列表、实例详情与观测状态位于研究工作台的“总览与预算”及“全部看板”**，从那里打开任务或已收集产物。产物提供原始下载和 SHA-256 核对。输入默认关闭，只有 host 允许且满足 frame、scope、lease 等条件时才可由用户开启。关闭视图只退订画面，不取消外部任务。
+Science 从目录工作台进入，不依赖先创建 Pi 会话。Science 主视图承接原生工作区/任务画面及产物查看；**实例列表、实例详情与观测状态位于研究工作台的“研究总览”及“全部看板”**，从那里打开任务或已收集产物。产物提供原始下载和 SHA-256 核对。输入默认关闭，只有 host 允许且满足 frame、scope、lease 等条件时才可由用户开启。关闭视图只退订画面，不取消外部任务。
 
 仓库保留了独立 host 通信、只读组合和产物跟随 worker 的源码；worker 跟随**已有且已授权的任务**，不把输入 Prompt 当作提交新 Science 任务的接口。当前公开启动入口没有自动组装通用项目绑定和完整 Science 运行环境，需要单独部署配置，端到端尚未验收。
 
@@ -261,7 +277,7 @@ Science 从目录工作台进入，不依赖先创建 Pi 会话。Science 主视
 ### 1. 克隆并检查源码
 
 ```bash
-# 本分支包含长任务授权、执行器与协作画布修改。
+# 本分支包含主 Agent 选择、阶段启动、访问权限与协作执行器。
 git clone --branch feat/autonomous-collaboration-20261106 \
   https://github.com/northkd/pi-research-harness.git
 cd pi-research-harness
@@ -339,7 +355,9 @@ pi-research-workbench-sync
 
 ### 5. 选择项目，开始或接续研究
 
-在界面选择实际项目目录；有已有资料时先完成接入和目标确认。首次使用自动工作流前，按[自动流程启用条件](#3-五阶段组织与当前自动流程)核对角色、模型、bridge 和预算。
+在界面选择实际项目目录；有已有资料时先完成接入和目标确认。
+选择主 Agent，按需要设置“完全访问”，再发送任务或独立启动阶段。
+首次使用自动工作流前，按[自动流程启用条件](#3-五阶段组织与当前自动流程)核对角色、模型和原生 subagents 服务。
 
 想先了解界面，可以生成独立合成演示项目；父目录须已存在，目标目录必须不存在，名称须包含 `demo` 或“演示”：
 
@@ -373,7 +391,7 @@ Git 仓库用于保存可发布源码与模板。账号、浏览器登录、SSH 
 
 | 目录 | 内容 |
 |---|---|
-| `extensions/research-loop/` | 研究台账、工作流、预算、阶段观察、会话协作与同步 |
+| `extensions/research-loop/` | 研究台账、工作流、访问权限、阶段观察、会话协作与同步 |
 | `extensions/mainline-supervision/` | 项目主线监督、证据捕获与分支限制 |
 | `integration/` | 检索观察、路由诊断、review/derivation gate、Feynman–ARIS 路径映射 |
 | `agents/` | 十个发布的科研角色模板 |
@@ -427,27 +445,38 @@ node scripts/ui-preview/launcher.mjs run \
 
 同日跟进增加目标委托、有限回执与记忆、只读继承和首次提示登记屏障：Harness 308 项、监督离线 64 项、原生提示/授权/事件接线 9 项通过；重新构建、原生服务部署和浏览器 29 项通过，627 个覆盖层文件校验一致。完整类型检查仍有 61 条既有诊断，本次新增 0 条。合成状态文本测量及完整范围见[减负验证结果](docs/autonomous-collaboration/context-offload-validation.json)。两轮均未运行真实模型或连续十几个小时的作业。
 
+当前主 Agent、阶段入口与完全访问修改：Harness 346 项、监督离线 64 项、实际 TypeScript adapter 28 项通过。
+客户端 40 项、服务端权限 13 项、文件门控 47 项通过；各组有重叠，不相加为总数。
+pnpm 生产构建和 642 项覆盖层核对通过。
+全量 TypeScript 保留 61 条既有诊断，相比 `d951322` 新增 0、消除 0。
+当前范围与部署结果见[工作流控制说明](docs/workflow-controls/implementation.md)。
+隔离真实服务部署与浏览器 35 项通过；访问权限使用实际服务保存及刷新，主 Agent 投递与阶段创建使用明确标注的模拟，0 模型请求。
+本轮未修改用户生产机器；[完整验证清单](docs/workflow-controls/validation.json)保留执行范围与截图。
+
 ## 可用范围与已知问题
 
 | 项目 | 当前事实与实际影响 |
 |---|---|
-| 自动研究角色与模型 | 自动流程引用的 explorer、strategist 和阶段映射中的 reframer 未附带角色模板；具体模型 ID 和预算 bridge 需本地核对。不能承诺全新安装后一键完成科研 |
+| 自动研究角色与模型 | 自动流程引用的 explorer、strategist 和阶段映射中的 reframer 未附带角色模板；具体模型 ID 和原生 subagents 服务需本地核对。不能承诺全新安装后一键完成科研 |
 | 同步代理 | workbench-sync 代理已有的工作区访问/身份转发缺口仍未在本分支完成验收。原先独立的研究后端 resolver 路径不匹配已修复并通过定向回归 |
-| 全仓类型检查 | 最终检查有 61 条既有诊断，位于五个服务端文件；相比保存的基线新增 0 条、消除 4 条。详见[诊断对比](docs/autonomous-collaboration/evidence/typescript-comparison.json)，全仓 typecheck 尚未通过 |
+| 全仓类型检查 | 最终检查有 61 条既有诊断，位于五个服务端文件；相比 `d951322` 新增 0 条、消除 0 条。详见[诊断对比](docs/workflow-controls/evidence/typescript-comparison.json)，全仓 typecheck 尚未通过 |
 | Science | 已保存查看、通信和产物跟随源码；通用 host、项目授权绑定和实际环境需另配，真实端到端未验证 |
 | 平台与资源 | Linux 是主要验证环境；macOS 能构建和展示，但部分并行/监督准入依赖 `/proc/meminfo`。Windows 原生和 WSL2 全流程未在本分支验收 |
 | 外部服务 | UI 验证没有运行真实付费模型、活跃 Pi bridge、远程 PTY 终止、Browser takeover 或所有插件的真实任务 |
 | 桌面安装包 | 保留上游 Electron 相关源码；本 README 交付的是源码和 Web 工作台说明，本次 UI 验证不代表已构建对应版本的桌面安装包 |
 | 数据与科研结论 | 代码和离线测试能验证部分行为契约，不能替代原始材料、实验、独立审查及人工发表决定 |
 
-历史问题的源码依据见 [README 核查记录](docs/README-VERIFICATION.md) 和 [UI 功能审计](docs/ui-redesign/feature-preservation.md)；本分支的修复与当前验证结果见[长任务与协作实施记录](docs/autonomous-collaboration/implementation.md)。
+历史问题的源码依据见 [README 核查记录](docs/README-VERIFICATION.md) 和 [UI 功能审计](docs/ui-redesign/feature-preservation.md)。
+当前操作与验证见[工作流控制说明](docs/workflow-controls/implementation.md)。
+旧授权设计及当时测试保留在[协作历史实施记录](docs/autonomous-collaboration/implementation.md)。
 
 ## 文档与许可证
 
 ### 当前文档
 
 - [0.20 开发、安装与服务器部署](docs/RELEASE-0.20.md)
-- [长任务授权、递归执行器、协作画布与本次部署验证](docs/autonomous-collaboration/implementation.md)
+- [主 Agent、五阶段启动、访问权限与当前验证](docs/workflow-controls/implementation.md)
+- [递归执行器、协作画布与旧授权模式历史记录](docs/autonomous-collaboration/implementation.md)
 - [模型速度：原生计时、CC Switch 参考口径与验证](docs/model-speed/implementation.md)
 - [UI 改版：实现、截图、测试与已知失败](docs/ui-redesign/implementation.md)
 - [原功能保全审计 F01–F56](docs/ui-redesign/feature-preservation.md)

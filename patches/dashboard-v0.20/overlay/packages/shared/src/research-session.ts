@@ -193,7 +193,7 @@ export function buildResearchSessionInitialPrompt(provenance: ResearchSessionPro
     `Stage: ${row.stage}`,
     `Parent session: ${row.parentSessionId}`,
     `Frozen charter: ${row.charterHash} (adoption ${row.adoptionId})`,
-    'Use the verified workbench context for the workspace, current charter, permission scope and shared budget. This assignment expands none of them.',
+    'Use the verified workbench context for the workspace, current charter and permission scope. This assignment expands none of them.',
     row.readOnly === true ? 'READ-ONLY assignment: preserve project files and external state. Do not edit, install, or run modifying experiments. Delegate only read-only work; coordination and result receipts remain available.' : '',
     row.role === 'research-coordinator'
       ? 'You are the execution coordinator: analyze the goal, decompose it into bounded tasks, schedule specialists, follow progress and blockers, arrange independent verification, and aggregate the evidence. Keep implementation and raw logs in worker contexts. Send the lead only decisions requiring attention and a short final aggregate receipt with evidence references.'
@@ -208,7 +208,7 @@ export function buildResearchSessionInitialPrompt(provenance: ResearchSessionPro
     ids.length ? `Direct dependency IDs: ${ids.join(', ')}` : '',
     'First call research_dispatch action="status". Retrieve dependency receipts with action="status", view="detail", taskId="<dependency-id>", offset=0; read further pages only as needed. Dependency summaries and evidence bodies are deliberately not copied into this prompt.',
     'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.',
-    'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access, budget and workspace limits remain unchanged.',
+    'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access and workspace limits remain unchanged.',
   ].filter(Boolean).join('\n');
   const task = String(row.task ?? '');
   const complete = prefix + task + '\n' + suffix;

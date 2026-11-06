@@ -108,6 +108,28 @@ try {
     await page.getByTestId('research-pipeline').waitFor();
     assert.equal(await page.getByTestId('workspace-view-workbench').getAttribute('aria-selected'), 'true');
   });
+  await check('one access-mode selection persists through the real authenticated service without task setup', async () => {
+    const select = page.getByTestId('research-access-select');
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-access-select"]')?.value === 'default');
+    const endpoint = `${base}/api/res-workflow/access-mode?cwd=${encodeURIComponent(cwd)}`;
+    let response = await context.request.get(endpoint);
+    assert.equal(response.status(), 200);
+    assert.equal((await response.json()).mode, 'default');
+    await select.selectOption('full-access');
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-access-status"]')?.textContent?.includes('完全访问已开启'));
+    response = await context.request.get(endpoint);
+    assert.equal((await response.json()).mode, 'full-access');
+    assert.equal(await page.getByRole('dialog').count(), 0);
+    assert.equal(await page.getByTestId('research-permissions-task').count(), 0);
+    await screenshot('17-full-access-1440');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await ready();
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-access-select"]')?.value === 'full-access');
+    await page.getByTestId('research-access-select').selectOption('default');
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-access-select"]')?.value === 'default');
+    response = await context.request.get(endpoint);
+    assert.equal((await response.json()).mode, 'default');
+  });
   await screenshot('01-real-workbench-1440');
   await check('unsent folder draft survives all primary views', async () => {
     await page.getByTestId('workspace-view-chat').click();
@@ -317,25 +339,56 @@ try {
       assert.equal(await page.getByTestId(`research-tab-${tab}`).getAttribute('aria-selected'), 'true');
     });
   }
-  await check('synthetic long-task authorization is reviewable, shared across views and revocable', async () => {
+  await check('research overview shows usage without budget configuration or task-grant forms', async () => {
     await page.getByTestId('research-tab-overview').click();
-    await page.getByTestId('research-permissions-edit').click();
-    await page.getByTestId('research-permissions-task').fill('完成合成样例的核对、记录未定项并整理结论；仅用于界面测试。');
-    await page.getByTestId('research-permissions-duration').selectOption('48');
-    await page.getByTestId('research-permissions').scrollIntoViewIfNeeded();
-    await screenshot('14a-task-authorization-editor-1440');
-    await page.getByTestId('research-permissions-save').click();
-    await page.waitForFunction(() => document.querySelector('[data-testid="research-permissions-status"]')?.textContent?.includes('生效中'));
-    assert.equal(await page.getByTestId('research-permissions-editor').count(), 0);
-    assert.match(await page.getByTestId('research-permissions').innerText(), /模拟/);
-    await page.getByTestId('research-permissions').scrollIntoViewIfNeeded();
-    await screenshot('14-task-authorization-1440');
+    assert.equal(await page.getByTestId('research-permissions').count(), 0);
+    assert.equal(await page.getByTestId('research-budget-controls').count(), 0);
+    assert.doesNotMatch(await page.locator('body').innerText(), /长任务执行授权|批准并启用长任务|总览与预算/);
+    assert.match(await page.getByTestId('research-tab-overview').innerText(), /研究总览/);
+    await screenshot('18-research-overview-1440');
+    await page.getByTestId('research-tab-workflow').click();
+  });
+  await check('main-agent selection survives reload and routes a simulated task to the selected session', async () => {
+    const select = page.getByTestId('research-main-agent-select');
+    await select.locator('option[value="DEMO:literature"]').waitFor({ state: 'attached' });
+    await select.selectOption('DEMO:literature');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await ready();
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-main-agent-select"]')?.value === 'DEMO:literature');
+    await page.getByTestId('research-main-agent-compose').click();
+    await page.getByTestId('research-main-agent-prompt').fill('【模拟】把文献核查分给子 Agent，只返回证据摘要。');
+    await page.getByTestId('research-main-agent-send').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-main-agent-feedback"]')?.textContent?.includes('模拟'));
+    assert.equal(await page.getByTestId('research-main-agent-select').inputValue(), 'DEMO:literature');
+    await screenshot('19-main-agent-selection-1440');
+  });
+  await check('all five stage cards can launch independently while execution records stay collapsed', async () => {
+    const records = page.getByTestId('research-run-status');
+    const collapse = records.getByRole('button', { name: '收起', exact: true });
+    if (await collapse.isVisible().catch(() => false)) await collapse.click();
+    const stages = ['1-idea', '2-experiment', '3-review', '4-summary', '5-writing'];
+    for (const stage of stages) {
+      const start = page.locator('.research-stage-overview').getByTestId(`research-stage-start-${stage}`);
+      await start.waitFor({ state: 'visible' });
+      await start.click();
+      const prompt = page.getByTestId('research-stage-prompt');
+      await prompt.waitFor({ state: 'visible' });
+      await prompt.fill(`【模拟】独立检查 ${stage} 的入口，不执行真实研究。`);
+      if (stage === '3-review') await screenshot('20-independent-stage-editor-1440');
+      await page.getByTestId('research-stage-launch').click();
+      await prompt.waitFor({ state: 'hidden' });
+      assert.equal(await records.locator('[aria-controls="research-run-status-content"]').getAttribute('aria-expanded'), 'false');
+    }
+    await screenshot('21-workflow-stage-actions-1440');
+  });
+  await check('simulated access choice survives switching views and can return to default', async () => {
+    await page.getByTestId('research-access-select').selectOption('full-access');
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-access-status"]')?.textContent?.includes('完全访问已开启'));
     await page.getByTestId('workspace-view-agents').click();
     await page.getByTestId('workspace-view-workbench').click();
-    assert.match(await page.getByTestId('research-permissions-status').innerText(), /生效中/);
-    await page.getByTestId('research-permissions-revoke').click();
-    await page.waitForFunction(() => document.querySelector('[data-testid="research-permissions-status"]')?.textContent?.includes('撤销'));
-    await page.getByTestId('research-tab-workflow').click();
+    assert.equal(await page.getByTestId('research-access-select').inputValue(), 'full-access');
+    await page.getByTestId('research-access-select').selectOption('default');
+    await page.waitForFunction(() => document.querySelector('[data-testid="research-access-select"]')?.value === 'default');
   });
   await check('intake drawer retains its page and closes with Escape', async () => {
     await page.getByRole('button', { name: '资料接入与项目设置', exact: true }).click();

@@ -218,7 +218,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
             <span className="block truncate text-[12px] font-bold text-[var(--text-primary)]" title={cluster.title}>{cluster.title}</span>
             <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px]">
               <span className={`font-semibold ${cluster.isCaptain ? "text-[var(--accent-orange)]" : "text-[var(--accent-blue)]"}`}>
-                {cluster.isCaptain ? (depth ? `当前入口 · 第 ${depth} 层` : "当前交互入口") : parentId ? `第 ${depth} 层协作` : isAgentCreated ? "派生协作会话" : "协作会话"}
+                {cluster.isCaptain ? (depth ? `主 Agent · 第 ${depth} 层` : "主 Agent") : parentId ? `第 ${depth} 层协作` : isAgentCreated ? "派生协作会话" : "协作会话"}
               </span>
               <span className={`rounded px-1.5 py-0.2 border text-[9.5px] font-medium ${originTint(isAgentCreated ? "lead-agent-created" : cluster.origin)}`}>
                 {originGlyph(isAgentCreated ? "lead-agent-created" : cluster.origin)}

@@ -17,6 +17,8 @@ import { isResWorkflowResearchBudgetUpdateRequest } from "@blackbelt-technology/
 import { createResWorkflowResearchBudgetService } from "../res-workflow/research-budget-service.js";
 import { isResearchTaskPermissionUpdate } from "@blackbelt-technology/pi-dashboard-shared/research-task-permissions.js";
 import { createResWorkflowTaskPermissionService } from "../res-workflow/task-permission-service.js";
+import { isResearchAccessModeUpdate } from "@blackbelt-technology/pi-dashboard-shared/research-access-mode.js";
+import { createResWorkflowAccessModeService } from "../res-workflow/access-mode-service.js";
 
 export interface ResWorkflowRouteDeps extends Omit<ResWorkflowServiceDeps, "privateDir" | "historyRoots"> {
   networkGuard: NetworkGuard;
@@ -64,6 +66,7 @@ export function registerResWorkflowRoutes(fastify: FastifyInstance, deps: ResWor
   });
   fastify.addHook("onClose", async () => { service.dispose(); });
   const taskPermissions = createResWorkflowTaskPermissionService({ researchLoopRoot: deps.researchLoopRoot, connection: access => service.connection(access) });
+  const accessMode = createResWorkflowAccessModeService({ researchLoopRoot: deps.researchLoopRoot });
   const researchBudget = createResWorkflowResearchBudgetService({ researchLoopRoot: deps.researchLoopRoot, connection: access => service.connection(access) });
 
   const accessFor = (request: FastifyRequest, cwd: unknown) => resWorkflowAccess(deps, {
@@ -272,6 +275,15 @@ export function registerResWorkflowRoutes(fastify: FastifyInstance, deps: ResWor
     return { success: false, error: "workbench-sync-unavailable" };
   });
   read("/api/res-workflow/connection", access => service.connection(access));
+  read("/api/res-workflow/access-mode", access => accessMode.read(access));
+  fastify.post("/api/res-workflow/access-mode", guarded, async (request, reply) => {
+    if (!isResearchAccessModeUpdate(request.body)) {
+      reply.code(400);
+      return { success: false, error: "access-mode-invalid", code: "access-mode-invalid" };
+    }
+    const value = request.body;
+    return execute(request, reply, value.cwd, access => accessMode.update(access, { ...value, cwd: access.cwd }));
+  });
   read("/api/res-workflow/task-permissions", access => taskPermissions.read(access));
   fastify.post("/api/res-workflow/task-permissions", guarded, async (request, reply) => {
     if (!isResearchTaskPermissionUpdate(request.body)) {

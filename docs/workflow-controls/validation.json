@@ -1,0 +1,103 @@
+{
+  "date": "2026-11-06",
+  "baseCommit": "d95132295845118eef14647bb93daae9acdac74a",
+  "branch": "feat/autonomous-collaboration-20261106",
+  "dashboardUpstreamCommit": "65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0",
+  "testGroups": {
+    "harness": {
+      "passed": 346,
+      "failed": 0,
+      "skipped": 0
+    },
+    "supervisionOffline": {
+      "passed": 64,
+      "failed": 0,
+      "skipped": 0
+    },
+    "mainlineAdapterNativeTypeScript": {
+      "passed": 28,
+      "failed": 0,
+      "loader": "Node 24 native TypeScript; installed runtime dependencies"
+    },
+    "clientFocused": {
+      "files": 5,
+      "passed": 40,
+      "failed": 0
+    },
+    "serverAccessMode": {
+      "files": 2,
+      "passed": 13,
+      "failed": 0
+    },
+    "nativePathGate": {
+      "files": 2,
+      "passed": 47,
+      "failed": 0
+    },
+    "nativeAccessMode": {
+      "passed": 11,
+      "failed": 0,
+      "includedInHarness": true
+    },
+    "browser": {
+      "passed": 35,
+      "failed": 0,
+      "realAuthenticatedService": true,
+      "syntheticData": true,
+      "modelCalls": 0
+    }
+  },
+  "typeScript": {
+    "exitCode": 1,
+    "baselineDiagnostics": 61,
+    "currentDiagnostics": 61,
+    "newDiagnostics": 0,
+    "resolvedDiagnostics": 0
+  },
+  "build": {
+    "command": "NODE_OPTIONS=--max-old-space-size=4096 pnpm run build",
+    "exitCode": 0,
+    "clientBuildMatched": true
+  },
+  "overlay": {
+    "files": 642,
+    "mismatches": 0
+  },
+  "syntax": "passed",
+  "releaseAudit": "passed",
+  "diffCheck": "passed",
+  "nativeSessionBeforeTranscript": {
+    "runtime": "@earendil-works/pi-coding-agent 1.3.0",
+    "nativeSessionCreated": true,
+    "transcriptExists": false,
+    "realMetadataPersistence": true,
+    "firstTurnFullAccess": true,
+    "liveDefaultReturn": true,
+    "modelCalls": 0
+  },
+  "validationScope": [
+    "Real isolated Dashboard server with native browser authentication and matched production client build.",
+    "Access-mode selection and persisted reload exercised against actual authenticated service.",
+    "Main-agent submission and five stage launches used explicitly labeled simulator; no real model calls.",
+    "Native session startup exercised with real Pi SessionManager and Dashboard metadata persistence before JSONL existed.",
+    "Registered same-owner local Pi sessions share mode; native SDK children that skip these gates retain native behavior.",
+    "Old already-running explicitly budget-adapted workflows retain their original attempts and model request limits.",
+    "Browser checks cover 1920, 1440, 1100, 768 and 360 pixel widths plus dark theme.",
+    "Test groups overlap; do not sum them as a unique test total."
+  ],
+  "screenshots": [
+    "screenshots/17-full-access-1440.png",
+    "screenshots/18-research-overview-1440.png",
+    "screenshots/19-main-agent-selection-1440.png",
+    "screenshots/20-independent-stage-editor-1440.png",
+    "screenshots/21-workflow-stage-actions-1440.png",
+    "screenshots/08-workbench-light-360.png"
+  ],
+  "evidence": [
+    "evidence/browser-report.json",
+    "evidence/deployment-summary.json",
+    "evidence/typescript-diagnostics.txt",
+    "evidence/typescript-comparison.json",
+    "evidence/native-session-before-transcript.json"
+  ]
+}

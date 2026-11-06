@@ -1,4 +1,3 @@
-import { lazy, Suspense } from "react";
 import { Icon } from "@mdi/react";
 import {
   mdiLightbulbOnOutline,
@@ -10,14 +9,6 @@ import {
 import type { StageId, Claim, Attempt, LoopState, ResearchProjection } from "./research-projection.js";
 import { CollapsibleSection } from "./CollapsibleSection.js";
 import type { ResearchWorkbenchObservation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
-
-const ResearchBudgetControls = lazy(() =>
-  import("./ResearchBudgetControls.js").then((module) => ({ default: module.ResearchBudgetControls }))
-);
-
-const ResearchPermissionControls = lazy(() =>
-  import("./ResearchPermissionControls.js").then((module) => ({ default: module.ResearchPermissionControls }))
-);
 
 export const STAGES = [
   { id: "1-idea", label: "Idea Discovery", short: "调研与发散", desc: "文献调研、独立发散、收窄问题", icon: mdiLightbulbOnOutline },
@@ -35,10 +26,7 @@ export function ResearchOverviewAndBudget({
   state,
   attempts,
   claims,
-  adopted,
   adoptionCwd,
-  connectionGeneration,
-  onRefresh,
   workbench,
   observationStale,
   showStageSelector = true,
@@ -62,15 +50,20 @@ export function ResearchOverviewAndBudget({
   const isUpdating = projection.executions.some((ex) =>
     !(observationStale && ex.source === "observation") && ["streaming", "started", "running"].includes(ex.status)
   );
+  const observed = workbench?.schema === "res-workflow.workbench-observation.v1" && workbench.cwd === (adoptionCwd ?? cwd)
+    && workbench.observedUsage?.metric === "observed-assistant-responses"
+    && [workbench.observedUsage.responses, workbench.observedUsage.inputTokens, workbench.observedUsage.outputTokens, workbench.observedUsage.inheritedExcluded]
+      .every(value => Number.isSafeInteger(value) && value >= 0)
+    ? workbench : null;
 
   return (
     <CollapsibleSection
       id="research-overview-and-budget"
       testId="research-overview-and-budget"
-      title="科研进度、阶段与预算总览"
+      title="研究总览"
       isUpdating={isUpdating}
       defaultOpen={true}
-      subtitle="正式研究指标、按次数计量的受控预算与实际执行观测"
+      subtitle="正式研究指标与实际执行用量"
     >
       <div className="space-y-4">
         {/* Stage Selection Card (WinUI 3 Surface) */}
@@ -160,24 +153,16 @@ export function ResearchOverviewAndBudget({
           />
         </section>
 
-        {adopted ? (
-          <Suspense fallback={<p role="status" className="text-xs text-[var(--text-secondary)]">正在加载任务授权…</p>}>
-            <ResearchPermissionControls cwd={adoptionCwd ?? cwd} connectionGeneration={connectionGeneration} onRefresh={onRefresh} />
-          </Suspense>
-        ) : <p className="text-xs text-[var(--text-secondary)]" data-testid="research-permissions-unavailable">确认并接入当前研究约定后，可设置长任务执行授权。</p>}
-
-        {/* Research Budget Integration */}
-        {adopted && (
-          <Suspense fallback={<p role="status" className="text-xs text-[var(--text-secondary)]">正在加载研究预算…</p>}>
-            <ResearchBudgetControls
-              cwd={adoptionCwd ?? cwd}
-              connectionGeneration={connectionGeneration}
-              onRefresh={onRefresh}
-              observation={workbench}
-              observationStale={observationStale}
-            />
-          </Suspense>
-        )}
+        <section data-testid="research-observed-usage" className="win11-card-subtle space-y-2 p-4 text-xs">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">实际用量</h3>
+          {observed ? <>
+            <p data-testid="research-observed-responses">已观测模型响应至少 {observed.observedUsage.responses} 次 · 输入 {observed.observedUsage.inputTokens} tokens · 输出 {observed.observedUsage.outputTokens} tokens</p>
+            {observed.observedUsage.inheritedExcluded > 0 && <p>已排除 {observed.observedUsage.inheritedExcluded} 条继承的历史响应，避免重复计数。</p>}
+            {observationStale && <p role="status">观测记录已过期，当前显示上次取得的用量。</p>}
+            {observed.coverage.partial && <p role="status">正在补齐已接入会话记录，当前观测尚不完整。</p>}
+          </> : <p>尚无可核验的会话用量观测，实际调用次数仍未知。</p>}
+          <p className="text-[var(--text-secondary)]">用量来自加入工作台后保存的会话与子代理模型响应，未保存的失败和重试可能未计入，不包含接入助手或外部 agy。费用请在计费明细中核对。</p>
+        </section>
       </div>
     </CollapsibleSection>
   );

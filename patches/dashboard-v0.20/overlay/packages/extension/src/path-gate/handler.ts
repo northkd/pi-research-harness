@@ -69,6 +69,8 @@ export interface PathGateDeps {
    * All optional: absent → the gate behaves exactly as before.
    */
   yoloSupported?: () => boolean;
+  /** Explicit new capability; old YOLO servers keep their restricted path set. */
+  fullAccessSupported?: () => boolean;
   yoloDecide?: (req: { path: string; access: "r" | "w"; tool: string }) => Promise<"auto-allow" | "refused" | "task-blocked" | "decline">;
   reportRefusal?: (req: { promptId: string; path: string; subject: string }) => void;
   sessionId: () => string;
@@ -291,18 +293,19 @@ export function createPathGateHandler(deps: PathGateDeps) {
       }
       const d = decision;
       const sid = deps.sessionId();
-      if (suppression.isSuppressed(`${sid}\u0000${d.suppressionKey}`)) {
+      const fullAccessSupported = deps.fullAccessSupported?.() === true;
+      const recentlyDenied = (): GateResult => {
         log("recently-denied", tool, access, d.canonical, d.sensitive, sid);
         if (deps.counters) deps.counters.blocked++;
         return block("recently-denied", `access under ${d.suppressionKey} was denied moments ago`);
-      }
-      // YOLO (server-owned): asked before the mutex so in-scope calls never queue behind
-      // an open out-of-scope prompt. Only for a grantable, non-sensitive path, against a
-      // server that advertised `path-yolo` AND writes the same grant store (same host).
+      };
+      if (!fullAccessSupported && suppression.isSuppressed(`${sid}\u0000${d.suppressionKey}`)) return recentlyDenied();
+      // Query the host before the mutex. The explicit new capability lets a
+      // workspace full-access selection cover every file path and supersede an
+      // earlier denial. Old servers retain the original restricted YOLO path set.
       if (
         deps.yoloDecide &&
-        !d.sensitive &&
-        d.grantable &&
+        (fullAccessSupported || !d.sensitive && d.grantable) &&
         deps.yoloSupported?.() &&
         deps.grantStoreMatch()
       ) {
@@ -328,7 +331,8 @@ export function createPathGateHandler(deps: PathGateDeps) {
           return block("yolo-refused", `${d.subject} was denied earlier; clear it in Settings ▸ Access`);
         }
       }
-      // A host-bound task grant can also cover a background child with no UI.
+      if (suppression.isSuppressed(`${sid}\u0000${d.suppressionKey}`)) return recentlyDenied();
+      // A host-bound full-access selection also covers a background child with no UI.
       if (!ctx.hasUI) {
         log("no-ui", tool, access, d.canonical, d.sensitive, sid);
         if (deps.counters) deps.counters.blocked++;

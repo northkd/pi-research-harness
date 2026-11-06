@@ -31,6 +31,8 @@ export interface YoloLink {
   handleResult(msg: { requestId?: unknown; verdict?: unknown }): void;
   /** True once the connected server advertised `path-yolo`. */
   supported(): boolean;
+  /** New server can evaluate a persistent operator/workspace full-access mode. */
+  fullAccessSupported(): boolean;
   ask(req: { path: string; access: "r" | "w"; tool: string }): Promise<YoloAskVerdict>;
   reportRefusal(req: { promptId: string; path: string; subject: string }): void;
   reset(): void;
@@ -40,6 +42,7 @@ export function createYoloLink(deps: YoloLinkDeps): YoloLink {
   const timeoutMs = deps.timeoutMs ?? YOLO_ASK_TIMEOUT_MS;
   const newId = deps.newId ?? randomUUID;
   let supported = false;
+  let fullAccessSupported = false;
   const pending = new Map<string, { resolve: (v: YoloAskVerdict) => void; timer: ReturnType<typeof setTimeout> }>();
 
   const settle = (id: string, v: YoloAskVerdict): void => {
@@ -53,6 +56,7 @@ export function createYoloLink(deps: YoloLinkDeps): YoloLink {
   return {
     handleIdentity(msg) {
       supported = Array.isArray(msg.features) && (msg.features as unknown[]).includes(FEATURE);
+      fullAccessSupported = supported && (msg.features as unknown[]).includes("workspace-full-access");
     },
     handleResult(msg) {
       if (typeof msg.requestId !== "string") return;
@@ -60,6 +64,7 @@ export function createYoloLink(deps: YoloLinkDeps): YoloLink {
       settle(msg.requestId, v === "auto-allow" || v === "refused" || v === "task-blocked" ? v : "decline");
     },
     supported: () => supported,
+    fullAccessSupported: () => fullAccessSupported,
     ask(req) {
       if (!supported) return Promise.resolve("decline");
       return new Promise((resolve) => {
@@ -98,6 +103,7 @@ export function createYoloLink(deps: YoloLinkDeps): YoloLink {
     },
     reset() {
       supported = false;
+      fullAccessSupported = false;
       for (const id of [...pending.keys()]) settle(id, "decline");
     },
   };
