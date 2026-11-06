@@ -76,7 +76,7 @@
       "baseBlob": null
     },
     "extras/speed-plugin/src/__tests__/indicator.test.tsx": {
-      "sha256": "eb2f80cfb1f6a0484ea692c1c4cd004150401d645a7cd9e1aaf431b00385cbd3",
+      "sha256": "0eb78e3cdc41c7c62cbf039a54ed0b8d0166a65e9c7ad5b024d9161685cba57b",
       "baseBlob": null
     },
     "extras/speed-plugin/src/__tests__/session-billing.test.tsx": {
@@ -96,7 +96,7 @@
       "baseBlob": null
     },
     "extras/speed-plugin/src/index.tsx": {
-      "sha256": "817804c4b9b2107485409438a93aaf9670114fc0808240ca42a91c8cd715784f",
+      "sha256": "08ea7c85eb74f895c6860f8c72c7cb8ca9d35f558437792cf9ca1495965496bb",
       "baseBlob": null
     },
     "extras/speed-plugin/src/server/__tests__/billing-report.test.ts": {
@@ -107,8 +107,16 @@
       "sha256": "a2288c8588c823dfd2ee51bcfe1215d4752c95b38497847c508eba3861228006",
       "baseBlob": null
     },
+    "extras/speed-plugin/src/server/__tests__/lifecycle.test.ts": {
+      "sha256": "c2dd897058368a66372145ecfcceed3aac1d1022ee2b827f50a84a2db0144fa8",
+      "baseBlob": null
+    },
+    "extras/speed-plugin/src/server/__tests__/performance.test.ts": {
+      "sha256": "224c4e5758a75f81ba4c1866f84824158145157f52eddef8db7362599f392e68",
+      "baseBlob": null
+    },
     "extras/speed-plugin/src/server/__tests__/stats.test.ts": {
-      "sha256": "c20216a40b22dd8b0b38272c9820a572cce75c51dfc62e040790268dde5d7645",
+      "sha256": "ca3083d5a367e79f6902892890bcb739dcb8323b6e1be627264336d54b08ed20",
       "baseBlob": null
     },
     "extras/speed-plugin/src/server/deepseek-pricing.ts": {
@@ -116,15 +124,15 @@
       "baseBlob": null
     },
     "extras/speed-plugin/src/server/index.ts": {
-      "sha256": "b783d20d73112238c1d0203ae4d9a76bfc4a359bf6843a0106ed1e3cf99cbef8",
+      "sha256": "27748da728a2d88ccfee782d88f3cddb6dafb350f9c27fcfc22e315ab13b863e",
       "baseBlob": null
     },
     "extras/speed-plugin/src/server/stats.ts": {
-      "sha256": "4d310a9a449e7536300c14f28346ba7c588e9c2a7627e14837a2569e17129813",
+      "sha256": "24ea5187174bac58bf0ede67905bc15140093660d3137f806080a561c86bdb50",
       "baseBlob": null
     },
     "extras/speed-plugin/src/types.ts": {
-      "sha256": "bdf389b9916615945570017b423cdd1b6261a28b5e634afcd7403423ac12eff4",
+      "sha256": "fc070c970c2dfc388cb98f0a8d58c9844b164800d14d71c5c0aec3732d95f72e",
       "baseBlob": null
     },
     "extras/speed-plugin/src/useSpeedStats.ts": {
@@ -1564,8 +1572,16 @@
       "baseBlob": "94b3f2e8c72e3b4e72637033bc43d548fad79801"
     },
     "packages/extension/src/bridge.ts": {
-      "sha256": "0874052b5e5f982bcd187f9452f4398ef05c4c589cec7d55d289e5b5d2561aaa",
+      "sha256": "4047f0ffffc011741b2ccb6cd1a57b0f0116a55c15c4124ef932415305fa8c7a",
       "baseBlob": "d0d03ba6d1895db8fcd43cbb7b70b045ac8c09d7"
+    },
+    "packages/extension/src/custom-entry-forward.ts": {
+      "sha256": "7803a4ed9839f28072712fc151ea9ad359ba49881842e7c578a56d5ae3a31209",
+      "baseBlob": "32732d0be0674b593dbba768bdfe7fa4f1e7f50d"
+    },
+    "packages/extension/src/generation-timing.ts": {
+      "sha256": "d6408f3f5b77959aa255556bf958b5f2d5e4db7bfc558fc2eb44906dc266326f",
+      "baseBlob": null
     },
     "packages/extension/src/model-refresh.ts": {
       "sha256": "a2ec725b054c583f85e77fee0a33a7d59e44b479dca878aabb220e8539b9e9e3",
@@ -1908,7 +1924,7 @@
       "baseBlob": "53430c8b072730dbcff03968f3e378689945d3b0"
     },
     "packages/server/src/event-wiring.ts": {
-      "sha256": "52cfd73962c8a04552a232cf25f6845d3a683e1edc9a5eb2eeddd1cf11c6a184",
+      "sha256": "9c03c82d5e5cb7badce38182884970e6bb8dca6e9967f914fdbc1feeeec00008",
       "baseBlob": "81caad7ebac2737ac39b89e6f5434b40a3dfcbd9"
     },
     "packages/server/src/identity/__tests__/http-road-classification.test.ts": {
@@ -2490,6 +2506,10 @@
     "packages/shared/src/science-viewer.ts": {
       "sha256": "100d2a7118c3a99ddd132a9ee5255b9f6adff1f95651b66c124ee033641eb9f7",
       "baseBlob": null
+    },
+    "packages/shared/src/state-replay.ts": {
+      "sha256": "a74a38bcd4f2caa5b7938ccd4ead9bb91255d453c9caf94ae7374dad4a1d5f46",
+      "baseBlob": "14cf3a68c3062987059f1bbf45e90856512dc0c2"
     },
     "packages/shared/src/thinking-translation-auth.ts": {
       "sha256": "14cb790d36a54b4f129b3c2541b9956a54f0adfe9b0b41d78ac1ec21239dafd9",

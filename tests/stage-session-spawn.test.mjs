@@ -383,6 +383,7 @@ async function run() {
       knownSessionIds: new Set(),
       pendingDashboardSpawns: new Map(),
       pendingInitialPromptRegistry: registry,
+      dispatchPluginRawEvent: options.dispatchPluginRawEvent,
       ...(options.pendingPluginRefRegistry ? { pendingPluginRefRegistry: options.pendingPluginRefRegistry } : {}),
       ...(options.registerResWorkflowParticipant
         ? {
@@ -398,8 +399,32 @@ async function run() {
       piGateway.onEvent(id, { type: 'session_register', sessionId: id, cwd, source: 'cli', ...(token ? { spawnToken: token } : {}), ...extra });
     };
     const promptTexts = () => sent.filter(([, m]) => m?.type === 'send_prompt').map(([, m]) => m.text);
-    return { registry, sent, sequence, register, promptTexts, browserGateway, unregister: id => sessionManager.unregister(id) };
+    return { registry, sent, sequence, register, promptTexts, browserGateway,
+      send: (id, message) => piGateway.onEvent(id, { sessionId: id, ...message }),
+      unregister: id => sessionManager.unregister(id) };
   }
+
+  test('plugin consumers receive trusted replay provenance instead of timing replayed messages as new work', () => {
+    const seen = [];
+    const r = wiringRig({ dispatchPluginRawEvent: (id, event) => seen.push({ id, event }) });
+    const id = 'speed-provenance';
+    const event = { eventType: 'message_start', timestamp: Date.now(), data: { message: { role: 'assistant', model: 'demo' } } };
+    try {
+      r.register(id);
+      r.send(id, { type: 'event_forward', event: { ...event, replay: false } });
+      assert.equal(seen.at(-1).event.replay, true); // Unmarked legacy bridge in the replay window.
+      r.send(id, { type: 'replay_complete' });
+      r.send(id, { type: 'event_forward', event: { ...event, replay: true } });
+      assert.equal(seen.at(-1).event.replay, false); // Inner event cannot override server classification.
+      r.send(id, { type: 'event_forward', replay: true, event: { ...event, replay: false } });
+      assert.equal(seen.at(-1).event.replay, true); // Late explicitly marked history stays replayed.
+      assert.equal(seen.at(-1).id, id);
+      assert.deepEqual(seen.at(-1).event.data, event.data);
+      r.send(id, { type: 'replay_complete' });
+    } finally {
+      r.browserGateway.wss.close();
+    }
+  });
 
   test('event-wiring delivers token-bound prompt to the exact session, not same-cwd sibling', () => {
     const r = wiringRig();

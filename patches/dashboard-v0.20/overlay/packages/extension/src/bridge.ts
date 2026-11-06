@@ -45,6 +45,7 @@ import {
   SUBAGENT_EVENT_MAP,
 } from "./flow-event-wiring.js";
 import { createFollowupBuffer } from "./followup-buffer.js";
+import { registerGenerationTiming } from "./generation-timing.js";
 import { drainOneFollowup } from "./followup-drain.js";
 import { createPollingHolder, drainDisposables, ensureDisposable, teardownPreviousIncarnation } from "./bridge-polling.js";
 import { createGitTracker, type GitTracker } from "./git-tracker.js";
@@ -171,6 +172,8 @@ function initBridge(pi: ExtensionAPI) {
   const inst = createInstance(pi, generation, prev);
   /** Return true if this bridge instance is still the active one */
   const isActive = (): boolean => inst.isActive();
+  // Observe source deltas before forwarding/coalescing or persistence delays.
+  const generationTiming = registerGenerationTiming(pi, { isActive });
 
   inst.sessionId = prev.sessionId ?? crypto.randomUUID();
   inst.attachedChange = prev.attachedChange ?? null;
@@ -875,6 +878,15 @@ function initBridge(pi: ExtensionAPI) {
         }
       } catch (err) {
         console.error("[dashboard] entry_persisted emit failed:", err);
+      }
+      try {
+        if (typeof sm.appendCustomEntry === "function") {
+          generationTiming.afterAppend(msg, typeof result === "string" ? result : msg?.id,
+            (type, data) => sm.appendCustomEntry(type, data));
+        }
+      } catch {
+        // Missing optional telemetry must never fail a successful model turn.
+        console.warn("[dashboard] speed timing could not be persisted");
       }
       return result;
     };

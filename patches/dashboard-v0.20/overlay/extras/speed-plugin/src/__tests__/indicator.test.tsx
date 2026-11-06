@@ -287,3 +287,164 @@ describe("billing and popover", () => {
     expect(document.body.style.userSelect).toBe("text");
   });
 });
+
+const observed: SpeedRecord = {
+  ...main,
+  model: "observed-model",
+  durationSeconds: 10,
+  firstTokenSeconds: 2,
+  generationSeconds: 8,
+  tps: 125,
+  estimatedTps: null,
+  timingSource: "pi-stream",
+  firstOutputKind: "thinking",
+  speedStatus: "measured",
+  contentTokens: 1000,
+  totalOutputTokens: 1000,
+  totalTokens: 1000,
+};
+
+function performanceMonitor(latest: SpeedRecord): SpeedMonitorState {
+  return {
+    ...monitor,
+    stats: {
+      ...monitor.stats!,
+      latest,
+      latestMain: main,
+      latestSubagent: latest.agentType === "subagent" ? latest : sub,
+      history: [latest],
+      mainHistory: latest.agentType === "subagent" ? [] : [latest],
+      subagentHistory: latest.agentType === "subagent" ? [latest] : [],
+      averageTps: latest.tps,
+      averageEstimatedTps: latest.estimatedTps ?? null,
+      recentCount: latest.tps === null ? 0 : 1,
+      estimatedCount: latest.estimatedTps === null || latest.estimatedTps === undefined ? 0 : 1,
+      averageScope: {
+        provider: latest.provider ?? "",
+        model: latest.model,
+        agentType: latest.agentType ?? "main",
+      },
+    },
+  };
+}
+
+describe("speed measurement semantics", () => {
+  it("uses the actual latest record identity when a subagent finishes after the main agent", () => {
+    const latest = { ...observed, id: "latest-sub", agentType: "subagent" as const, model: "latest-sub-model", provider: "other-provider" };
+    render(<SpeedIndicator sessionId="test" monitor={performanceMonitor(latest)} />);
+    fireEvent.click(screen.getByTestId("speed-indicator-badge"));
+    const details = within(screen.getByTestId("latest-speed-record"));
+    expect(details.getByTestId("latest-speed-model").textContent).toBe("latest-sub-model");
+    expect(details.getByTestId("latest-speed-identity").textContent).toContain("Subagent");
+    expect(details.getByTestId("latest-speed-identity").textContent).toContain("other-provider");
+    expect(details.getByTestId("latest-speed-value").textContent).toBe("125 tokens/s");
+    expect(screen.getByTestId("main-speed-summary").textContent).toContain("main-model");
+    expect(screen.getByTestId("subagent-speed-summary").textContent).toContain("latest-sub-model");
+    expect(details.getByTestId("speed-average-scope").textContent).toContain("other-provider");
+  });
+
+  it("shows elapsed time without presenting historical throughput as a live speed", () => {
+    const activeMonitor = performanceMonitor(observed);
+    activeMonitor.isStreaming = true;
+    activeMonitor.elapsed = 8.5;
+    activeMonitor.stats!.averageTps = 777;
+    render(<SpeedIndicator sessionId="test" monitor={activeMonitor} />);
+    const badge = screen.getByTestId("speed-indicator-badge");
+    expect(badge.textContent).toContain("生成中 8.5s");
+    expect(badge.textContent).toContain("完成后统计");
+    expect(badge.textContent).not.toContain("777");
+    expect(badge.textContent).not.toContain("t/s");
+  });
+
+  it("separates observed output speed, TTFT and full-response estimates", () => {
+    const { rerender } = render(<SpeedIndicator sessionId="test" monitor={performanceMonitor(observed)} />);
+    fireEvent.click(screen.getByTestId("speed-indicator-badge"));
+    expect(screen.getByTestId("current-speed-label").textContent).toBe("输出速率");
+    expect(screen.getByTestId("latest-speed-value").textContent).toBe("125 tokens/s");
+    expect(screen.getByTestId("latest-speed-ttft").textContent).toBe("2.0 秒");
+    expect(screen.getByTestId("latest-speed-generation").textContent).toBe("8.0 秒");
+    expect(screen.getByTestId("latest-speed-duration").textContent).toBe("10.0 秒");
+    expect(screen.getByTestId("first-output-kind").textContent).toBe("思考");
+    expect(screen.getByTestId("measured-speed-average").textContent).toBe("125 tokens/s · 1 次");
+    const estimated: SpeedRecord = {
+      ...observed,
+      tps: null,
+      estimatedTps: 100,
+      firstTokenSeconds: null,
+      generationSeconds: null,
+      firstOutputKind: null,
+      timingSource: "legacy-timestamps",
+      speedStatus: "estimated",
+    };
+    rerender(<SpeedIndicator sessionId="test" monitor={performanceMonitor(estimated)} />);
+    expect(screen.getByTestId("current-speed-label").textContent).toBe("全程估算速率");
+    expect(screen.getByTestId("latest-speed-value").textContent).toBe("≈100 tokens/s");
+    expect(screen.getByTestId("latest-speed-ttft").textContent).toBe("—");
+    expect(screen.getByTestId("latest-speed-generation").textContent).toBe("—");
+    expect(screen.getByTestId("latest-speed-duration").textContent).toBe("10.0 秒");
+    expect(screen.getByTestId("estimated-speed-average").textContent).toBe("≈100 tokens/s · 1 次");
+    expect(within(screen.getByTestId("speed-history")).getByText("≈100 t/s")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("tab-view-billing"));
+    expect(screen.getByTestId("billing-total").textContent).toBe("¥3.0000");
+  });
+
+  it("keeps unknown timing distinct from a recorded zero first-output delay", () => {
+    const unknown: SpeedRecord = {
+      ...observed,
+      tps: null,
+      estimatedTps: null,
+      durationSeconds: null,
+      firstTokenSeconds: null,
+      generationSeconds: null,
+      firstOutputKind: null,
+      timingSource: "unavailable",
+      speedStatus: "missing-timing",
+    };
+    const { rerender } = render(<SpeedIndicator sessionId="test" monitor={performanceMonitor(unknown)} />);
+    fireEvent.click(screen.getByTestId("speed-indicator-badge"));
+    for (const id of ["latest-speed-value", "latest-speed-ttft", "latest-speed-generation", "latest-speed-duration"])
+      expect(screen.getByTestId(id).textContent).toBe("—");
+    expect(screen.getByTestId("speed-panel").textContent).not.toMatch(/(?:NaN|Infinity|0 tokens\/s)/);
+    expect(screen.getByTestId("speed-measurement-note").textContent).toContain("计时");
+    rerender(<SpeedIndicator sessionId="test" monitor={performanceMonitor({ ...observed, firstTokenSeconds: 0, generationSeconds: 10, tps: 100 })} />);
+    expect(screen.getByTestId("latest-speed-ttft").textContent).toBe("0.0 秒");
+  });
+
+  it("does not label legacy rates or another provider's averages as observed model speed", () => {
+    const { rerender } = render(<SpeedIndicator sessionId="test" monitor={monitor} />);
+    fireEvent.click(screen.getByTestId("speed-indicator-badge"));
+    expect(screen.getByTestId("latest-speed-value").textContent).toBe("—");
+    expect(screen.getByTestId("measured-speed-average").textContent).toBe("—");
+    const mismatched = performanceMonitor(observed);
+    mismatched.stats!.averageTps = 999;
+    mismatched.stats!.averageScope = { provider: "another-provider", model: observed.model, agentType: "main" };
+    rerender(<SpeedIndicator sessionId="test" monitor={mismatched} />);
+    expect(screen.getByTestId("latest-speed-value").textContent).toBe("125 tokens/s");
+    expect(screen.getByTestId("measured-speed-average").textContent).toBe("—");
+    expect(screen.getByTestId("speed-panel").textContent).not.toContain("999");
+  });
+
+  it("keeps positive slow responses visible and explains unobserved reasoning in estimates", () => {
+    const slow: SpeedRecord = { ...observed, durationSeconds: 81002, generationSeconds: 81000, tps: 1000 / 81000 };
+    const { rerender } = render(<SpeedIndicator sessionId="test" monitor={performanceMonitor(slow)} />);
+    fireEvent.click(screen.getByTestId("speed-indicator-badge"));
+    expect(screen.getByTestId("latest-speed-value").textContent).toBe("0.012 tokens/s");
+    expect(screen.getByTestId("measured-speed-average").textContent).toBe("0.012 tokens/s · 1 次");
+    expect(within(screen.getByTestId("speed-history")).getByTestId("history-speed").textContent).toBe("0.012 t/s");
+    const reasoningEstimate: SpeedRecord = {
+      ...slow,
+      tps: null,
+      estimatedTps: 1000 / 81002,
+      firstOutputKind: "text",
+      reasoningTokens: 600,
+      contentTokens: 400,
+      speedStatus: "estimated",
+      speedCaveat: "reasoning-not-observed",
+    };
+    rerender(<SpeedIndicator sessionId="test" monitor={performanceMonitor(reasoningEstimate)} />);
+    expect(screen.getByTestId("latest-speed-value").textContent).toBe("≈0.012 tokens/s");
+    expect(screen.getByTestId("estimated-speed-average").textContent).toBe("≈0.012 tokens/s · 1 次");
+    expect(screen.getByTestId("speed-measurement-note").textContent).toContain("思考用量无法与输出阶段对齐");
+    expect(screen.getByTestId("speed-indicator-badge").textContent).toContain("≈0.012");
+  });
+});

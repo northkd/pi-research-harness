@@ -26,8 +26,13 @@ export default async function registerPlugin(
         const ev = rawEvent as {
           eventType?: string;
           data?: Record<string, unknown>;
+          replay?: boolean;
         };
         if (!ev?.eventType) return;
+        if (ev.replay === true) {
+          markGenerationEnd(sessionId);
+          return;
+        }
 
         if (ev.eventType === "message_start") {
           const msg = ev.data?.message as

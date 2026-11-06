@@ -65,6 +65,8 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 
 费用入口可从不同主视图打开，提供性能/TPS、主会话与子代理分账、模型、缓存、按次费用及历史月报；月报按上海时区的日历月统计。费用依据现有记录和配置价格计算，未定价部分会明确显示，不能把未知价格理解为零，也不能把工作台统计当作供应商账单。
 
+“速度与性能”使用 Pi 端采集与本项目计算，参考 CC Switch 的实际请求统计方式。面板区分首输出等待、首输出后的观测生成速度，以及包含等待的 `≈` 全程估算；缺失计时显示未记录。均速限定同一 provider、model 和主/子 agent 类型，观测与估算分别统计最近 30 个有效样本。失败请求保留已发生的费用，排除正常性能均值。新采集需要加载更新后的 Bridge 扩展，旧日志继续使用明确标注的估算。计算公式、来源与限制见[模型测速说明](docs/model-speed/implementation.md)。
+
 “撤销并编辑”只作用于当前活动分支的最后一条用户消息：先让模型和工具停止，再把原文取回输入框，修改后重新发送。无法安全导航的历史结构会被拒绝。这个操作不会撤销已执行的命令、文件修改或外部操作，原始持久历史仍保留。CLI 对应入口为 `/undo-last`，实现见 [undo-last.ts](extensions/undo-last.ts)。
 
 ## 一次研究实际怎样推进
@@ -446,6 +448,7 @@ node scripts/ui-preview/launcher.mjs run \
 
 - [0.20 开发、安装与服务器部署](docs/RELEASE-0.20.md)
 - [长任务授权、递归执行器、协作画布与本次部署验证](docs/autonomous-collaboration/implementation.md)
+- [模型速度：原生计时、CC Switch 参考口径与验证](docs/model-speed/implementation.md)
 - [UI 改版：实现、截图、测试与已知失败](docs/ui-redesign/implementation.md)
 - [原功能保全审计 F01–F56](docs/ui-redesign/feature-preservation.md)
 - [主线监督](docs/SUPERVISION.md)与[空闲阶段识别](docs/IDLE-STAGE-REVIEW.md)

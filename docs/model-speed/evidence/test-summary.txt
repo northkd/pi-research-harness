@@ -1,0 +1,52 @@
+Harness offline and supervision
+ℹ tests 326
+ℹ suites 3
+ℹ pass 326
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8891.437114
+ℹ tests 64
+ℹ suites 0
+ℹ pass 64
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11354.846215
+
+Speed and billing plugin
+ Test Files  9 passed (9)
+      Tests  137 passed (137)
+   Duration  6.94s (transform 1.70s, setup 0ms, import 2.21s, tests 5.68s, environment 3.11s)
+
+Extension forwarding and replay
+ Test Files  2 passed (2)
+      Tests  25 passed (25)
+   Duration  410ms (transform 161ms, setup 88ms, import 130ms, tests 23ms, environment 0ms)
+
+Shared state replay
+ Test Files  4 passed (4)
+      Tests  39 passed (39)
+   Duration  417ms (transform 271ms, setup 66ms, import 332ms, tests 40ms, environment 1ms)
+
+Native deployment and browser
+31 checks passed; 0 failed; 0 unexpected errors.
+1 recognized Monaco editor cancellation retained in browser-report.json.
+Three synthetic ended sessions; no model requests; no priced cost records.
+Two screenshots visually reviewed after waiting for the workbench and completing transitions.
+
+Build
+NODE_OPTIONS=--max-old-space-size=4096 pnpm run build
+Exit 0. Existing Vite large-chunk warning retained.
+
+TypeScript
+node scripts/tsc7.mjs --noEmit
+Exit 1. 61 diagnostics, same file/code/message multiplicities as preceding branch commit; 0 new.
+Comparison ignores line-number shifts. Full diagnostics retained.
+
+Final publication checks
+Shell and ESM syntax checks passed. Release audit found no findings.
+Final collector and hidden-metadata rerun: 17 passed; includes a throwing payload getter proving timing never reads request content.
+632 overlay files verified; 0 changes required.

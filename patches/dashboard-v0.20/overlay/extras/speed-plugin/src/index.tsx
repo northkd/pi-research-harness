@@ -42,6 +42,95 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+function recordedNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function formatRate(value: number): string {
+  // Keep a positive slow response visible instead of rounding it to zero.
+  return value > 0 && value < 0.1
+    ? String(Number(value.toPrecision(2)))
+    : String(Number(value.toFixed(1)));
+}
+
+function formatDuration(value: number | null | undefined, compact = false): string {
+  if (!recordedNumber(value)) return "—";
+  if (value > 0 && value < 1) return `${Math.round(value * 1000)} ms`;
+  return `${value.toFixed(1)}${compact ? "s" : " 秒"}`;
+}
+
+function speedPresentation(record?: SpeedRecord | null): { kind: "measured" | "estimated" | "unavailable"; rate: number | null } {
+  if (!record || record.speedStatus === "failed" || record.speedStatus === "invalid-timing")
+    return { kind: "unavailable", rate: null };
+  // Old responses used tps for a timestamp-derived full-response estimate.
+  // Only the explicit stream provenance makes the new output-window claim.
+  if (record.timingSource === "pi-stream" && record.speedCaveat !== "reasoning-not-observed" && recordedNumber(record.tps))
+    return { kind: "measured", rate: record.tps };
+  if (recordedNumber(record.estimatedTps))
+    return { kind: "estimated", rate: record.estimatedTps };
+  return { kind: "unavailable", rate: null };
+}
+
+function formatSpeed(record?: SpeedRecord | null, unit = "t/s"): string {
+  const speed = speedPresentation(record);
+  return speed.rate === null ? "—" : `${speed.kind === "estimated" ? "≈" : ""}${formatRate(speed.rate)} ${unit}`;
+}
+
+function speedNote(record?: SpeedRecord | null): string {
+  const speed = speedPresentation(record);
+  const caveat = record?.speedCaveat === "reasoning-not-observed" ? "思考用量无法与输出阶段对齐。" : "";
+  if (speed.kind === "measured")
+    return "输出 tokens ÷ 首个有效输出后的耗时。本地观测包含网络传输，首次输出可以是正文、思考或工具调用。";
+  if (speed.kind === "estimated")
+    return `${caveat}输出 tokens ÷ 完整响应耗时，包含首个有效输出前的等待；≈ 表示全程估算，不与输出阶段的速率混算。`;
+  switch (record?.speedStatus) {
+    case "failed": return "请求失败或已取消，本轮不计入速度均值。";
+    case "insufficient-output": return `${caveat}输出样本过少，本轮不计算速度。用量记录仍然保留。`;
+    case "too-short": return `${caveat}有效计时过短，本轮不计算速度。用量记录仍然保留。`;
+    case "invalid-timing": return "计时记录不一致，本轮不计算速度。";
+    default: return `${caveat}缺少可核验的计时信息，本轮不计算速度。用量记录仍然保留。`;
+  }
+}
+
+function timingSourceLabel(record: SpeedRecord): string {
+  switch (record.timingSource) {
+    case "pi-stream": return "Pi 流式事件";
+    case "sdk-duration": return "SDK 耗时";
+    case "legacy-timestamps": return "历史时间戳";
+    default: return "未记录";
+  }
+}
+
+function firstOutputLabel(record: SpeedRecord): string | null {
+  switch (record.firstOutputKind) {
+    case "text": return "正文";
+    case "thinking": return "思考";
+    case "toolcall": return "工具调用";
+    default: return null;
+  }
+}
+
+function AgentSpeedSummary({ record, subagent = false }: { record: SpeedRecord; subagent?: boolean }) {
+  return (
+    <div data-testid={subagent ? "subagent-speed-summary" : "main-speed-summary"} className="flex flex-wrap justify-between items-center gap-1 px-2 py-1.5 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[10px]">
+      <span className={subagent ? "text-[var(--accent-purple)] font-medium" : "text-[var(--text-secondary)] font-medium"}>
+        {subagent ? "Subagent 最新" : "主 Agent 最新"}
+      </span>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1 font-mono">
+        <span className="min-w-0 break-all text-[var(--text-primary)]" title={`${record.provider || "供应商未记录"} / ${record.model}`}>
+          {cleanModelName(record.model)}
+        </span>
+        <span className="whitespace-nowrap text-[var(--accent-yellow-text)] font-semibold" title={speedNote(record)}>
+          {formatSpeed(record)}
+        </span>
+        <span className="whitespace-nowrap text-[var(--text-secondary)]" title="完整响应耗时">
+          {formatDuration(record.durationSeconds, true)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function clampSize(value: number, minimum: number, available: number): number {
   const maximum = Math.max(1, Math.min(850, available));
   return Math.min(maximum, Math.max(Math.min(minimum, maximum), value));
@@ -124,7 +213,16 @@ export function SpeedIndicator({
   }, [popoverWidth, popoverHeight]);
 
   const latest = stats?.latest;
-  const avgTps = stats?.averageTps ?? 0;
+  const latestSpeed = speedPresentation(latest);
+  const averageScope = stats?.averageScope;
+  const matchesAverageScope = !!latest && !!averageScope
+    && averageScope.model === latest.model
+    && (averageScope.provider ?? "") === (latest.provider ?? "")
+    && averageScope.agentType === (latest.agentType ?? "main");
+  const measuredAverage = stats?.averageTps;
+  const estimatedAverage = stats?.averageEstimatedTps;
+  const avgTps = matchesAverageScope && recordedNumber(measuredAverage) ? measuredAverage : null;
+  const avgEstimatedTps = matchesAverageScope && recordedNumber(estimatedAverage) ? estimatedAverage : null;
 
   // Drag-to-resize handler
   const startResize = (mode: "width" | "bottom" | "corner", e: React.MouseEvent) => {
@@ -240,7 +338,7 @@ export function SpeedIndicator({
         aria-expanded={popoverOpen}
         aria-controls={popoverOpen ? panelId : undefined}
         onClick={() => popoverOpen ? closePanel() : setPopoverOpen(true)}
-        title="查看本月费用、主/子智能体分账与输出性能；详情面板可调大小或最大化"
+        title={costOnly ? "查看本月费用、主/子智能体分账与输出性能；详情面板可调大小或最大化" : isStreaming ? "本轮仅显示已用时间；结束后按实际用量和计时统计速度" : speedNote(latest)}
         className={`research-usage-trigger group flex h-6.5 items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[11px] font-mono leading-none cursor-pointer select-none transition-all shadow-sm active:scale-95 ${
           costOnly
             ? "border-[var(--border-primary)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:border-[var(--accent-primary)]"
@@ -264,31 +362,20 @@ export function SpeedIndicator({
             <span className="font-semibold text-[var(--accent-green-text)]">
               生成中 {elapsed.toFixed(1)}s
             </span>
-            {avgTps > 0 && (
-              <span className="text-[var(--text-tertiary)] text-[10px]">
-                (~{avgTps} t/s)
-              </span>
-            )}
+            <span className="text-[var(--text-tertiary)] text-[10px]">完成后统计</span>
           </>
-        ) : latest && latest.tps > 0 ? (
+        ) : latest && latestSpeed.rate !== null ? (
           <>
             <SafeIcon path={mdiFlash} size={0.46} className="text-[var(--accent-yellow-text)]" />
-            <span className="font-semibold text-[var(--text-primary)]">{latest.tps}</span>
+            <span className="font-semibold text-[var(--text-primary)]">{latestSpeed.kind === "estimated" ? "≈" : ""}{formatRate(latestSpeed.rate)}</span>
             <span className="text-[var(--text-tertiary)] text-[10px]">t/s</span>
             <span className="text-[var(--text-secondary)] text-[10px]">·</span>
-            <span className="text-[var(--text-secondary)] text-[10px]">{latest.durationSeconds.toFixed(0)}s</span>
-            {avgTps > 0 && (
-              <span className="text-[var(--text-secondary)] text-[10px]">
-                (均 {avgTps})
-              </span>
-            )}
+            <span className="text-[var(--text-secondary)] text-[10px]">{formatDuration(latest.durationSeconds, true)}</span>
           </>
         ) : (
           <>
             <SafeIcon path={mdiSpeedometer} size={0.46} className="text-[var(--text-tertiary)]" />
-            <span className="text-[var(--text-tertiary)]">
-              {avgTps > 0 ? `均速 ${avgTps} t/s` : "速度监控"}
-            </span>
+            <span className="text-[var(--text-tertiary)]">{latest ? "速度 —" : "速度监控"}</span>
           </>
         )}
       </button>
@@ -353,7 +440,7 @@ export function SpeedIndicator({
             <div className="min-w-0 flex-1">
               <p className="research-usage-eyebrow">用量与性能</p>
               <h2 className="research-usage-title">{activeView === "billing" ? "本月费用明细" : "模型输出性能"}</h2>
-              <p className="research-usage-subtitle">{activeView === "billing" ? "主 Agent 与子任务的等价消耗 · 北京时间" : "输出速度、响应耗时与逐轮记录"}</p>
+              <p className="research-usage-subtitle">{activeView === "billing" ? "主 Agent 与子任务的等价消耗 · 北京时间" : "首个输出、输出速率与逐次请求记录"}</p>
             </div>
             <div className="flex shrink-0 gap-1">
               <button
@@ -429,115 +516,119 @@ export function SpeedIndicator({
               <div data-testid="speed-panel" inert={activeView !== "speed"} aria-hidden={activeView !== "speed"} style={{ display: activeView === "speed" ? "flex" : "none" }} className="w-full min-w-0 flex-col gap-3">
                 {/* Current / Latest Metrics */}
                 {latest ? (
-                  <div className="space-y-1.5 text-[11px] shrink-0">
-                    <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-tertiary)]">主 Agent 模型:</span>
-                      <span
-                        className="font-mono text-[var(--text-primary)] truncate max-w-[210px] px-1 py-0.2 rounded bg-[var(--bg-tertiary)] border border-[var(--border-primary)]"
-                        title={stats?.latestMain?.model || latest.model}
-                      >
-                        {cleanModelName(stats?.latestMain?.model || latest.model)}
-                      </span>
-                    </div>
-
-                    {/* Subagents highlights card (never overwritten by main agent) */}
-                    {stats?.latestSubagent && (
-                      <div className="flex justify-between items-center px-1.5 py-0.5 rounded border border-[var(--accent-purple)]/30 bg-[var(--accent-purple)]/10 text-[10px]">
-                        <span className="text-[var(--accent-purple)] font-medium flex items-center gap-1">
-                          <SafeIcon path={mdiBrain} size={0.4} />
-                          <span>Subagent 最新:</span>
-                        </span>
-                        <div className="flex items-center gap-2 font-mono">
-                          <span
-                            className="text-[var(--text-primary)] px-1 rounded bg-[var(--bg-surface)] border border-[var(--border-primary)]"
-                            title={stats.latestSubagent.model}
-                          >
-                            {cleanModelName(stats.latestSubagent.model)}
-                          </span>
-                          <span className="text-[var(--accent-yellow-text)] font-semibold">
-                            {stats.latestSubagent.tps} t/s
-                          </span>
-                          <span className="text-[var(--text-secondary)] text-[11px]">
-                            ({stats.latestSubagent.durationSeconds.toFixed(0)}s)
-                          </span>
+                  <div className="space-y-2 text-[11px] shrink-0">
+                    <div data-testid="latest-speed-record" className="space-y-1.5">
+                      <div className="pb-1.5 border-b border-[var(--border-primary)]">
+                        <div data-testid="latest-speed-identity" className="text-[10px] text-[var(--text-secondary)] break-all">
+                          最近一次 · {latest.agentType === "subagent" ? "Subagent" : "主 Agent"} · {latest.provider || "供应商未记录"}
+                        </div>
+                        <div data-testid="latest-speed-model" className="mt-1 font-mono font-medium text-[var(--text-primary)] break-all" title={latest.model}>
+                          {cleanModelName(latest.model)}
                         </div>
                       </div>
-                    )}
+                      <div className="flex justify-between items-center gap-2">
+                        <span data-testid="current-speed-label" className="text-[var(--text-tertiary)]" title={speedNote(latest)}>
+                          {latestSpeed.kind === "estimated" ? "全程估算速率" : "输出速率"}
+                        </span>
+                        <span data-testid="latest-speed-value" className="whitespace-nowrap font-mono text-[var(--accent-yellow-text)] font-semibold">
+                          {formatSpeed(latest, "tokens/s")}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center gap-2">
+                        <span className="flex flex-wrap items-center gap-1 text-[var(--text-tertiary)]" title="从请求开始到首个有效输出；可以是正文、思考或工具调用，空事件不计入。">
+                          首个有效输出 (TTFT)
+                          {firstOutputLabel(latest) && <span data-testid="first-output-kind" className="rounded bg-[var(--bg-tertiary)] px-1 text-[10px] text-[var(--text-secondary)]">{firstOutputLabel(latest)}</span>}
+                        </span>
+                        <span data-testid="latest-speed-ttft" className="whitespace-nowrap font-mono text-[var(--text-primary)]">{formatDuration(latest.firstTokenSeconds)}</span>
+                      </div>
+                      <div className="flex justify-between items-center gap-2">
+                        <span className="text-[var(--text-tertiary)]" title="从首个有效输出到响应完成；包含网络传输和流内停顿。">输出阶段耗时</span>
+                        <span data-testid="latest-speed-generation" className="whitespace-nowrap font-mono text-[var(--text-primary)]">{formatDuration(latest.generationSeconds)}</span>
+                      </div>
+                      <div className="flex justify-between items-center gap-2">
+                        <span className="text-[var(--text-tertiary)]">完整响应耗时</span>
+                        <span data-testid="latest-speed-duration" className="whitespace-nowrap font-mono text-[var(--text-primary)]">{formatDuration(latest.durationSeconds)}</span>
+                      </div>
+                      <div className="flex justify-between items-center gap-2">
+                        <span className="text-[var(--text-tertiary)]">计时来源</span>
+                        <span className="text-[var(--text-secondary)]">{timingSourceLabel(latest)}</span>
+                      </div>
+                      <p data-testid="speed-measurement-note" className="text-[10px] leading-relaxed text-[var(--text-secondary)]">{speedNote(latest)}</p>
+                      <div className="space-y-1 pt-1.5 border-t border-[var(--border-primary)]">
+                        <div data-testid="speed-average-scope" className="text-[10px] text-[var(--text-secondary)] break-all">
+                          {matchesAverageScope ? `${latest.provider || "供应商未记录"} / ${cleanModelName(latest.model)} · ${latest.agentType === "subagent" ? "Subagent" : "主 Agent"}` : "同模型统计范围未记录"}
+                        </div>
+                        <div className="flex justify-between items-center gap-2" title="同供应商、模型和身份的有效样本：输出 tokens 总和 ÷ 输出阶段耗时总和。">
+                          <span className="text-[var(--text-tertiary)]">同模型输出均速</span>
+                          <span data-testid="measured-speed-average" className="whitespace-nowrap font-mono text-[var(--text-primary)] font-medium">
+                            {avgTps === null ? "—" : `${formatRate(avgTps)} tokens/s · ${stats?.recentCount ?? 0} 次`}
+                          </span>
+                        </div>
+                        {avgEstimatedTps !== null && (
+                          <div className="flex justify-between items-center gap-2" title="同供应商、模型和身份的估算样本：输出 tokens 总和 ÷ 完整响应耗时总和。与输出均速分别统计。">
+                            <span className="text-[var(--text-tertiary)]">同模型全程估算</span>
+                            <span data-testid="estimated-speed-average" className="whitespace-nowrap font-mono text-[var(--text-secondary)]">
+                              ≈{formatRate(avgEstimatedTps)} tokens/s · {stats?.estimatedCount ?? 0} 次
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      {latest.reasoningTokens > 0 && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-[var(--text-tertiary)] flex items-center gap-1">
+                            <SafeIcon path={mdiBrain} size={0.45} className="text-[var(--accent-purple)]" />
+                            <span>思考 (Reasoning):</span>
+                          </span>
+                          <span className="font-mono text-[var(--accent-purple)]">
+                            {latest.reasoningTokens.toLocaleString()} tokens
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center">
+                        <span className="text-[var(--text-tertiary)]">非思考输出 (Content):</span>
+                        <span className="font-mono text-[var(--text-primary)]">
+                          {latest.contentTokens.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-[var(--text-tertiary)]">总输出 Tokens:</span>
+                        <span className="font-mono text-[var(--text-primary)] font-medium">
+                          {latest.totalOutputTokens.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-[var(--text-tertiary)]">上下文总计:</span>
+                        <span className="font-mono text-[var(--text-primary)]">
+                          {(latest.totalTokens / 1000).toFixed(1)}k tokens
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-[var(--text-tertiary)]">缓存命中率:</span>
+                        <span className="font-mono text-[var(--accent-green-text)] font-medium">
+                          {cacheHitPercent}%
+                          <span className="text-[var(--text-secondary)] text-[10px] ml-1">
+                            ({(latest.cacheRead / 1000).toFixed(1)}k / {(latest.totalTokens / 1000).toFixed(1)}k)
+                          </span>
+                        </span>
+                      </div>
+                    </div>
 
-                    {/* Subagent models catalog chips */}
+                    {/* Preserve each agent's latest record independently of the current card. */}
+                    {stats?.latestMain && <AgentSpeedSummary record={stats.latestMain} />}
+                    {stats?.latestSubagent && <AgentSpeedSummary record={stats.latestSubagent} subagent />}
+
                     {stats?.subagentModels && stats.subagentModels.length > 0 && (
-                      <div className="flex justify-between items-center text-[10px]">
+                      <div className="flex justify-between items-center gap-2 text-[10px]">
                         <span className="text-[var(--text-tertiary)]">Subagents 所用模型:</span>
                         <div className="flex flex-wrap gap-1 justify-end max-w-[220px]">
                           {stats.subagentModels.map((m) => (
-                            <span
-                              key={m}
-                              className="px-1.5 py-0.2 rounded bg-[var(--bg-tertiary)] border border-[var(--accent-purple)]/20 text-[var(--accent-purple)] font-mono text-[11px]"
-                              title={m}
-                            >
+                            <span key={m} className="px-1.5 py-0.2 rounded bg-[var(--bg-tertiary)] border border-[var(--accent-purple)]/20 text-[var(--accent-purple)] font-mono text-[11px] break-all" title={m}>
                               {cleanModelName(m)}
                             </span>
                           ))}
                         </div>
                       </div>
                     )}
-
-                    <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-tertiary)]">上一轮生成速率:</span>
-                      <span className="font-mono text-[var(--accent-yellow-text)] font-semibold">
-                        {latest.tps} tokens/s
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-tertiary)]">近几轮加权均速:</span>
-                      <span className="font-mono text-[var(--text-primary)] font-medium">
-                        {avgTps} tokens/s
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-tertiary)]">上一轮响应耗时:</span>
-                      <span className="font-mono text-[var(--text-primary)]">
-                        {latest.durationSeconds.toFixed(1)} 秒
-                      </span>
-                    </div>
-                    {latest.reasoningTokens > 0 && (
-                      <div className="flex justify-between items-center">
-                        <span className="text-[var(--text-tertiary)] flex items-center gap-1">
-                          <SafeIcon path={mdiBrain} size={0.45} className="text-[var(--accent-purple)]" />
-                          <span>思考 (Reasoning):</span>
-                        </span>
-                        <span className="font-mono text-[var(--accent-purple)]">
-                          {latest.reasoningTokens.toLocaleString()} tokens
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-tertiary)]">正文输出 (Content):</span>
-                      <span className="font-mono text-[var(--text-primary)]">
-                        {latest.contentTokens.toLocaleString()} tokens
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-tertiary)]">总输出 Tokens:</span>
-                      <span className="font-mono text-[var(--text-primary)] font-medium">
-                        {latest.totalOutputTokens.toLocaleString()} tokens
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-tertiary)]">上下文总计:</span>
-                      <span className="font-mono text-[var(--text-primary)]">
-                        {(latest.totalTokens / 1000).toFixed(1)}k tokens
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-tertiary)]">缓存命中率:</span>
-                      <span className="font-mono text-[var(--accent-green-text)] font-medium">
-                        {cacheHitPercent}%
-                        <span className="text-[var(--text-secondary)] text-[10px] ml-1">
-                          ({(latest.cacheRead / 1000).toFixed(1)}k / {(latest.totalTokens / 1000).toFixed(1)}k)
-                        </span>
-                      </span>
-                    </div>
                   </div>
                 ) : (
                   <div className="text-[var(--text-tertiary)] text-center py-2 shrink-0">
@@ -632,15 +723,15 @@ export function SpeedIndicator({
                           <span
                             data-testid="history-model"
                             className="col-span-3 col-start-1 row-start-2 min-w-0 break-all text-[11px] text-[var(--text-primary)] @sm:col-span-1 @sm:col-start-3 @sm:row-start-1 @sm:truncate"
-                            title={`完整模型: ${r.model}`}
+                            title={`供应商: ${r.provider || "未记录"} · 完整模型: ${r.model}`}
                           >
                             {cleanModelName(r.model)}
                           </span>
                           <span className="col-start-4 row-start-2 whitespace-nowrap text-[11px] text-[var(--text-secondary)] @sm:row-start-1">
-                            {r.durationSeconds.toFixed(0)}s · {r.totalOutputTokens}t
+                            {formatDuration(r.durationSeconds, true)} · {r.totalOutputTokens}t
                           </span>
-                          <span className="col-start-4 row-start-1 justify-self-end whitespace-nowrap text-[11px] font-semibold text-[var(--accent-yellow-text)] @sm:col-start-5">
-                            {r.tps} t/s
+                          <span data-testid="history-speed" data-speed-kind={speedPresentation(r).kind} className="col-start-4 row-start-1 justify-self-end whitespace-nowrap text-[11px] font-semibold text-[var(--accent-yellow-text)] @sm:col-start-5" title={speedNote(r)}>
+                            {formatSpeed(r)}
                           </span>
                         </div>
                       ))}

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { loadConfig } from "@blackbelt-technology/pi-dashboard-shared/config.js";
 import { resolvePiSessionsDir } from "@blackbelt-technology/pi-dashboard-shared/dashboard-paths.js";
 import { billingPeriod, inBillingPeriod } from "../billing-period.js";
@@ -20,10 +21,14 @@ import { deepseekMultiplier } from "./deepseek-pricing.js";
 
 const activeGenerations = new Map<
   string,
-  { startTime: number; model?: string }
+  { startTime: number; monotonicStart: number; model?: string }
 >();
 export function markGenerationStart(sessionId: string, model?: string): void {
-  activeGenerations.set(sessionId, { startTime: Date.now(), model });
+  activeGenerations.set(sessionId, {
+    startTime: Date.now(),
+    monotonicStart: performance.now(),
+    model,
+  });
 }
 export function markGenerationEnd(sessionId: string): void {
   activeGenerations.delete(sessionId);
@@ -37,7 +42,7 @@ export function getActiveGeneration(
     ? {
         sessionId: id,
         startTime: active.startTime,
-        elapsedSeconds: Math.max(0, (Date.now() - active.startTime) / 1000),
+        elapsedSeconds: Math.max(0, (performance.now() - active.monotonicStart) / 1000),
         model: active.model,
       }
     : null;
@@ -180,6 +185,20 @@ interface RawRecord extends Omit<SpeedRecord, "cost" | "costSource" | "rates"> {
   pricingPeriod?: "peak" | "offPeak";
   failed: boolean;
 }
+interface StreamTiming {
+  version: 1;
+  source: "pi-stream";
+  messageEntryId: string;
+  messageTimestamp: number;
+  provider: string;
+  model: string;
+  requestDurationMs: number | null;
+  firstTokenMs: number | null;
+  generationDurationMs: number | null;
+  firstOutputKind: "text" | "thinking" | "toolcall" | null;
+}
+type TimingSlot = { timing: StreamTiming; fingerprint: string } | { invalid: true };
+interface TimingEntry { id: string; slot: TimingSlot }
 interface FileState {
   signature: string;
   identity: string;
@@ -188,8 +207,10 @@ interface FileState {
   pendingSince?: number;
   witness: Buffer;
   records: Map<string, RawRecord>;
+  timings: Map<string, TimingSlot>;
   invalidTimestamps: number[];
   tailRecord?: RawRecord;
+  tailTiming?: TimingEntry;
   invalidTailTimestamp?: number;
   header?: { id?: string; cwd?: string };
   name?: string;
@@ -214,6 +235,118 @@ function captureMetadata(entry: unknown, state: FileState) {
   } else if (entry.type === "session_info" && typeof entry.name === "string") {
     state.name = entry.name;
   }
+}
+
+/** Timing rows never become billable records or corrupt an otherwise valid bill. */
+function parseTimingEntry(entry: unknown): TimingEntry | null {
+  if (!isObject(entry) || entry.type !== "custom" || entry.customType !== "dashboard-speed-timing")
+    return null;
+  const data = entry.data;
+  if (!isObject(data) || typeof data.messageEntryId !== "string" || !data.messageEntryId)
+    return null;
+  const id = data.messageEntryId;
+  const invalid: TimingEntry = { id, slot: { invalid: true } };
+  if (
+    data.version !== 1 || data.source !== "pi-stream" || !nonnegative(data.messageTimestamp) ||
+    typeof data.provider !== "string" || typeof data.model !== "string" ||
+    ![data.requestDurationMs, data.firstTokenMs, data.generationDurationMs].every((v) => v === null || nonnegative(v)) ||
+    ![null, "text", "thinking", "toolcall"].includes(data.firstOutputKind as string | null)
+  ) return invalid;
+  const timing: StreamTiming = {
+    version: 1,
+    source: "pi-stream",
+    messageEntryId: id,
+    messageTimestamp: data.messageTimestamp as number,
+    provider: data.provider,
+    model: data.model,
+    requestDurationMs: data.requestDurationMs as number | null,
+    firstTokenMs: data.firstTokenMs as number | null,
+    generationDurationMs: data.generationDurationMs as number | null,
+    firstOutputKind: data.firstOutputKind as StreamTiming["firstOutputKind"],
+  };
+  const { requestDurationMs: total, firstTokenMs: first, generationDurationMs: generation } = timing;
+  if (
+    (timing.firstOutputKind === null && (first !== null || generation !== null)) ||
+    (total !== null && ((first !== null && first > total) || (generation !== null && generation > total))) ||
+    // Individual rounded millisecond intervals can differ by one millisecond.
+    (total !== null && first !== null && generation !== null && Math.abs(first + generation - total) > 2)
+  ) return invalid;
+  return { id, slot: { timing, fingerprint: JSON.stringify(timing) } };
+}
+
+function combineTimingSlots(previous: TimingSlot | undefined, next: TimingSlot): TimingSlot {
+  if (!previous) return next;
+  if ("invalid" in previous || "invalid" in next || previous.fingerprint !== next.fingerprint)
+    return { invalid: true };
+  return previous;
+}
+
+function requestTiming(message: Record<string, unknown>, endTime: number): Pick<SpeedRecord, "durationSeconds" | "timingSource" | "speedStatus"> {
+  // Pi's native monotonic duration excludes extension processing and JSONL append delay.
+  // An explicitly malformed duration is not silently replaced with an apparently valid estimate.
+  if (message.durationMs !== undefined) {
+    return nonnegative(message.durationMs)
+      ? { durationSeconds: message.durationMs / 1000, timingSource: "sdk-duration" }
+      : { durationSeconds: null, timingSource: "unavailable", speedStatus: "invalid-timing" };
+  }
+  if (message.timestamp === undefined)
+    return { durationSeconds: null, timingSource: "unavailable", speedStatus: "missing-timing" };
+  if (!nonnegative(message.timestamp) || endTime < message.timestamp)
+    return { durationSeconds: null, timingSource: "unavailable", speedStatus: "invalid-timing" };
+  return { durationSeconds: (endTime - message.timestamp) / 1000, timingSource: "legacy-timestamps" };
+}
+
+function withPerformance(raw: RawRecord, slot?: TimingSlot): RawRecord {
+  const record: RawRecord = {
+    ...raw,
+    tps: null,
+    estimatedTps: null,
+    firstTokenSeconds: null,
+    generationSeconds: null,
+    firstOutputKind: null,
+  };
+  let generationMs: number | null = null;
+  if (slot) {
+    if (
+      "invalid" in slot || slot.timing.messageTimestamp !== raw.startTime ||
+      slot.timing.provider !== raw.provider || slot.timing.model !== raw.model
+    ) return { ...record, durationSeconds: null, timingSource: "unavailable", speedStatus: raw.failed ? "failed" : "invalid-timing" };
+    const timing = slot.timing;
+    generationMs = timing.generationDurationMs;
+    record.firstTokenSeconds = timing.firstTokenMs === null ? null : timing.firstTokenMs / 1000;
+    record.generationSeconds = generationMs === null ? null : generationMs / 1000;
+    record.firstOutputKind = timing.firstOutputKind;
+    if (timing.requestDurationMs !== null) {
+      record.durationSeconds = timing.requestDurationMs / 1000;
+      record.timingSource = "pi-stream";
+      record.speedStatus = undefined;
+    }
+  }
+  if (raw.failed) return { ...record, speedStatus: "failed" };
+  const reasoningNotObserved = record.reasoningTokens > 0 &&
+    (record.firstOutputKind === "text" || record.firstOutputKind === "toolcall");
+  // Reported hidden reasoning may precede the first visible text/tool output.
+  // Its tokens cannot safely be divided by only that later observed window.
+  if (reasoningNotObserved) record.speedCaveat = "reasoning-not-observed";
+  // CC Switch uses minimum useful sample windows. Count provider tokens, not characters or chunks.
+  if (!reasoningNotObserved && generationMs !== null && generationMs >= 100 && record.totalOutputTokens >= 100) {
+    record.tps = record.totalOutputTokens / (generationMs / 1000);
+    record.timingSource = "pi-stream";
+    record.speedStatus = "measured";
+    return record;
+  }
+  if (record.speedStatus === "invalid-timing") return record;
+  if (record.durationSeconds !== null && record.durationSeconds >= 1 && record.totalOutputTokens >= 200) {
+    record.estimatedTps = record.totalOutputTokens / record.durationSeconds;
+    record.speedStatus = "estimated";
+  } else if (record.totalOutputTokens < (generationMs === null || reasoningNotObserved ? 200 : 100)) {
+    record.speedStatus = "insufficient-output";
+  } else if ((!reasoningNotObserved && generationMs !== null && generationMs < 100) || (record.durationSeconds !== null && record.durationSeconds < 1)) {
+    record.speedStatus = "too-short";
+  } else {
+    record.speedStatus = "missing-timing";
+  }
+  return record;
 }
 
 function parseRecord(
@@ -252,8 +385,7 @@ function parseRecord(
   const endTime =
     typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
   if (!Number.isFinite(endTime)) throw new Error("Invalid timestamp");
-  const durationSeconds =
-    startTime !== undefined ? Math.max(0, (endTime - startTime) / 1000) : 0;
+  const timing = requestTiming(m, endTime);
   const totalTokens = inputTokens + totalOutputTokens + cacheRead + cacheWrite;
   if (!Number.isSafeInteger(totalTokens)) throw new Error("Invalid token sum");
   let recordedCost: TurnCostBreakdown | undefined;
@@ -285,14 +417,11 @@ function parseRecord(
     id: typeof entry.id === "string" ? entry.id : undefined,
     timestamp: endTime,
     startTime,
-    durationSeconds,
+    ...timing,
     provider: typeof m.provider === "string" ? m.provider : "",
     model: typeof m.model === "string" ? m.model : "unknown",
     agentType,
-    tps:
-      durationSeconds > 0
-        ? Number((totalOutputTokens / durationSeconds).toFixed(1))
-        : 0,
+    tps: null,
     contentTokens: totalOutputTokens - reportedReasoning,
     reasoningTokens: reportedReasoning,
     totalOutputTokens,
@@ -350,6 +479,7 @@ async function readRecords(
           pending: Buffer.alloc(0),
           witness: Buffer.alloc(0),
           records: new Map(),
+          timings: new Map(),
           invalidTimestamps: [],
         };
       const current = state!;
@@ -384,6 +514,8 @@ async function readRecords(
           try {
             entry = JSON.parse(line);
             captureMetadata(entry, current);
+            const timing = parseTimingEntry(entry);
+            if (timing) current.timings.set(timing.id, combineTimingSlots(current.timings.get(timing.id), timing.slot));
             const record = parseRecord(entry, agentType);
             if (record)
               current.records.set(
@@ -409,12 +541,14 @@ async function readRecords(
       }
       current.witness = Buffer.alloc(Math.min(64, current.offset));
       current.tailRecord = undefined;
+      current.tailTiming = undefined;
       current.invalidTailTimestamp = undefined;
       if (current.pending.toString("utf8").trim()) {
         let entry: unknown;
         try {
           entry = JSON.parse(current.pending.toString("utf8"));
           captureMetadata(entry, current);
+          current.tailTiming = parseTimingEntry(entry) ?? undefined;
           current.tailRecord = parseRecord(entry, agentType) ?? undefined;
         } catch {
           const timestamp =
@@ -699,7 +833,12 @@ function stateRows(state: FileState): RawRecord[] {
         `${state.tailRecord.startTime}:${state.tailRecord.timestamp}`,
       state.tailRecord,
     );
-  return [...rows.values()];
+  return [...rows.values()].map((record) => {
+    let slot = record.id ? state.timings.get(record.id) : undefined;
+    if (record.id && state.tailTiming?.id === record.id)
+      slot = combineTimingSlots(slot, state.tailTiming.slot);
+    return withPerformance(record, slot);
+  });
 }
 
 function invalidCount(state: FileState, period: BillingPeriod): number {
@@ -719,6 +858,12 @@ const snapshots = new Map<
   { signature: string; value: SpeedStatsResponse }
 >();
 const pendingStats = new Map<string, Promise<SpeedStatsResponse>>();
+function weightedTps(records: SpeedRecord[], duration: "generationSeconds" | "durationSeconds"): number | null {
+  const seconds = records.reduce((sum, record) => sum + (record[duration] ?? 0), 0);
+  return seconds > 0
+    ? records.reduce((sum, record) => sum + record.totalOutputTokens, 0) / seconds
+    : null;
+}
 async function buildStats(
   sessionId: string | undefined,
   registeredFile: string | undefined,
@@ -731,8 +876,10 @@ async function buildStats(
     latest: null,
     latestMain: null,
     latestSubagent: null,
-    averageTps: 0,
+    averageTps: null,
+    averageEstimatedTps: null,
     recentCount: 0,
+    estimatedCount: 0,
     history: [],
     mainHistory: [],
     subagentHistory: [],
@@ -818,24 +965,29 @@ async function buildStats(
     inBillingPeriod(record.timestamp, period),
   );
   const history = records.slice(-30);
-  const valid = records
-    .filter((r) => r.durationSeconds > 0 && r.totalOutputTokens > 0)
-    .slice(-30);
-  const seconds = valid.reduce((n, r) => n + r.durationSeconds, 0);
+  const latest = records.at(-1) ?? null;
+  const averageScope = latest ? {
+    provider: latest.provider ?? "",
+    model: latest.model,
+    agentType: latest.agentType ?? "main",
+  } : undefined;
+  // Never present another model/provider/agent's throughput as the latest model's speed.
+  const comparable = records.filter((record) => averageScope &&
+    (record.provider ?? "") === averageScope.provider && record.model === averageScope.model &&
+    (record.agentType ?? "main") === averageScope.agentType);
+  const measured = comparable.filter((record) => record.tps !== null && (record.generationSeconds ?? 0) > 0).slice(-30);
+  const estimated = comparable.filter((record) => record.estimatedTps != null && (record.durationSeconds ?? 0) > 0).slice(-30);
   const value: SpeedStatsResponse = {
     ...empty,
     sessionId: main.id,
-    latest: records.at(-1) ?? null,
+    latest,
     latestMain: mains.at(-1) ?? null,
     latestSubagent: subs.at(-1) ?? null,
-    averageTps: seconds
-      ? Number(
-          (
-            valid.reduce((n, r) => n + r.totalOutputTokens, 0) / seconds
-          ).toFixed(1),
-        )
-      : 0,
-    recentCount: valid.length,
+    averageTps: weightedTps(measured, "generationSeconds"),
+    averageEstimatedTps: weightedTps(estimated, "durationSeconds"),
+    recentCount: measured.length,
+    estimatedCount: estimated.length,
+    averageScope,
     history,
     mainHistory: mains.slice(-25),
     subagentHistory: subs.slice(-25),

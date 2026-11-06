@@ -229,14 +229,16 @@ describe("TPS and billing", () => {
     await fs.appendFile(file, "\n");
     await check();
   });
-  it("counts reasoning once and uses exact elapsed time", async () => {
+  it("counts reasoning once and labels legacy elapsed time as a whole-request estimate", async () => {
     await save("work/2026_main.jsonl", [turn("one")]);
     const s = await reader.getSpeedStats("main");
     expect(s.latest).toMatchObject({
       contentTokens: 400,
       reasoningTokens: 600,
       totalOutputTokens: 1000,
-      tps: 100,
+      tps: null,
+      estimatedTps: 100,
+      timingSource: "legacy-timestamps",
       durationSeconds: 10,
     });
     expect(s.billing?.sessionTotalCost).toBeCloseTo(0.012, 10);
@@ -361,8 +363,10 @@ describe("TPS and billing", () => {
       ...Array.from({ length: 30 }, (_, i) => turn("n" + i, { reasoning: 0 })),
     ]);
     const s = await reader.getSpeedStats("main");
-    expect(s.recentCount).toBe(30);
-    expect(s.averageTps).toBe(100);
+    expect(s.recentCount).toBe(0);
+    expect(s.estimatedCount).toBe(30);
+    expect(s.averageTps).toBeNull();
+    expect(s.averageEstimatedTps).toBe(100);
   });
   it("skips bad values and partial lines without poisoning valid costs", async () => {
     await save(

@@ -88,6 +88,7 @@ function seedEndedTranscripts(previewHome) {
       const entryId = randomUUID().replaceAll('-', '').slice(0, 8);
       entries.push({ type, id: entryId, parentId, timestamp: iso(at), ...value });
       parentId = entryId;
+      return entryId;
     };
     add('model_change', { provider: 'demo', modelId: 'ui-fixture-unpriced' }, startedAt);
     add('session_info', { name: item.name }, startedAt + 1);
@@ -99,14 +100,23 @@ function seedEndedTranscripts(previewHome) {
       add('message', { message: { role: 'toolResult', toolCallId: 'demo-read-1', toolName: 'read', isError: false, timestamp: startedAt + 7000,
         content: [{ type: 'text', text: '【演示】人工构造的工具输出，未执行命令：\n样本,条件,示例指标\nDEMO-A,基线,0.42\nDEMO-B,对照,0.58' }] } }, startedAt + 7000);
     }
-    add('message', { message: { role: 'assistant', api: 'openai-completions', provider: 'demo', model: 'ui-fixture-unpriced', stopReason: 'stop', timestamp: startedAt + 8000,
+    const answerEntryId = add('message', { message: { role: 'assistant', api: 'openai-completions', provider: 'demo', model: 'ui-fixture-unpriced', stopReason: 'stop', timestamp: startedAt + 8000,
+      ...(index < 2 ? { durationMs: 10000 } : {}),
       content: [{ type: 'text', text: item.answer }],
       usage: { input: 1200 + index * 300, output: 320 + index * 60, reasoning: 0, cacheRead: index * 100, cacheWrite: 0, totalTokens: 1520 + index * 460 } } }, endedAt);
+    // Synthetic timing cases: source-observed output window, SDK-only request
+    // duration, then legacy wall timestamps. No actual provider is contacted.
+    if (index === 0) add('custom', { customType: 'dashboard-speed-timing', data: {
+      version: 1, source: 'pi-stream', messageEntryId: answerEntryId,
+      messageTimestamp: startedAt + 8000, provider: 'demo', model: 'ui-fixture-unpriced',
+      requestDurationMs: 10000, firstTokenMs: 8000, generationDurationMs: 2000, firstOutputKind: 'text',
+    } }, endedAt + 1);
     fs.writeFileSync(filename, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n', { mode: 0o600 });
     fs.writeFileSync(filename.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ cwd: project, source: 'tui', status: 'ended', hidden: false, archived: false,
       name: item.name, nameSource: 'user', firstMessage: item.request, startedAt, endedAt, tags: ['demo'] }, null, 2), { mode: 0o600 });
     fs.utimesSync(filename, new Date(endedAt), new Date(endedAt));
-    return { id, name: item.name, status: 'ended', synthetic: true };
+    return { id, name: item.name, status: 'ended', synthetic: true,
+      timingScenario: index === 0 ? 'pi-stream' : index === 1 ? 'sdk-duration' : 'legacy-timestamps' };
   });
 }
 

@@ -94,11 +94,21 @@ export interface SpeedRecord {
   id?: string;
   timestamp: number;
   startTime?: number;
-  durationSeconds: number;
+  /** Full request duration, separate from the first-output generation window. */
+  durationSeconds: number | null;
   model: string;
   agentType?: "main" | "subagent";
   subagentRole?: string;
-  tps: number;
+  /** Observed first-output-to-end throughput; never a legacy wall-clock estimate. */
+  tps: number | null;
+  /** Whole-request fallback, including time before the first output. */
+  estimatedTps?: number | null;
+  firstTokenSeconds?: number | null;
+  generationSeconds?: number | null;
+  timingSource?: "pi-stream" | "sdk-duration" | "legacy-timestamps" | "unavailable";
+  firstOutputKind?: "text" | "thinking" | "toolcall" | null;
+  speedStatus?: "measured" | "estimated" | "insufficient-output" | "too-short" | "missing-timing" | "invalid-timing" | "failed";
+  speedCaveat?: "reasoning-not-observed";
   contentTokens: number;
   reasoningTokens: number;
   totalOutputTokens: number;
@@ -123,8 +133,11 @@ export interface SpeedStatsResponse {
   latest: SpeedRecord | null;
   latestMain?: SpeedRecord | null;
   latestSubagent?: SpeedRecord | null;
-  averageTps: number;
+  averageTps: number | null;
+  averageEstimatedTps?: number | null;
   recentCount: number;
+  estimatedCount?: number;
+  averageScope?: { provider: string; model: string; agentType: "main" | "subagent" };
   history: SpeedRecord[];
   mainHistory?: SpeedRecord[];
   subagentHistory?: SpeedRecord[];

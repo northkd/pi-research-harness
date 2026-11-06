@@ -68,7 +68,7 @@ async function screenshot(name) {
     await document.fonts.ready;
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   });
-  await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: false });
+  await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: false, animations: 'disabled' });
   report.screenshots.push(`${name}.png`);
 }
 async function ready() {
@@ -184,6 +184,53 @@ try {
       await screenshot('11-usage-drawer-1440');
       await page.keyboard.press('Escape');
     });
+    if (sessions[0].timingScenario === 'pi-stream') {
+      await check('source timing excludes first-output wait and persistence delay in the actual performance panel', async () => {
+        const response = await context.request.get(`${base}/api/speed-monitor/stats?sessionId=${encodeURIComponent(sessions[0].id)}`);
+        assert.equal(response.status(), 200);
+        const stats = await response.json();
+        assert.equal(stats.latest.timingSource, 'pi-stream');
+        assert.equal(stats.latest.tps, 160);
+        assert.equal(stats.latest.durationSeconds, 10);
+        assert.equal(stats.latest.firstTokenSeconds, 8);
+        assert.equal(stats.latest.generationSeconds, 2);
+        assert.equal(stats.recentCount, 1);
+        await page.getByTestId('speed-indicator-badge').click();
+        await page.getByTestId('tab-view-speed').click();
+        await page.getByTestId('latest-speed-value').waitFor({ state: 'visible' });
+        assert.match(await page.getByTestId('latest-speed-value').innerText(), /^160\s*tokens\/s$/);
+        assert.match(await page.getByTestId('latest-speed-ttft').innerText(), /8(?:\.0)?\s*秒/);
+        assert.match(await page.getByTestId('latest-speed-duration').innerText(), /10(?:\.0)?\s*秒/);
+        assert.match(await page.getByTestId('latest-speed-generation').innerText(), /2(?:\.0)?\s*秒/);
+        assert.match(await page.getByTestId('latest-speed-model').innerText(), /ui-fixture-unpriced/);
+        await screenshot('15-speed-measured-1440');
+        await page.keyboard.press('Escape');
+        await page.getByTestId('workspace-view-chat').click();
+        assert.doesNotMatch(await page.locator('body').innerText(), /dashboard-speed-timing|generationDurationMs|messageEntryId/);
+      });
+      await check('SDK-only and legacy timing stay explicit estimates without invented first-output times', async () => {
+        for (const [index, expected, source] of [[1, 38, 'sdk-duration'], [2, 22, 'legacy-timestamps']]) {
+          await page.goto(`${base}/session/${sessions[index].id}`, { waitUntil: 'domcontentloaded' });
+          await ready();
+          const response = await context.request.get(`${base}/api/speed-monitor/stats?sessionId=${encodeURIComponent(sessions[index].id)}`);
+          const stats = await response.json();
+          assert.equal(stats.latest.timingSource, source);
+          assert.equal(stats.latest.tps, null);
+          assert.equal(stats.latest.estimatedTps, expected);
+          assert.equal(stats.latest.firstTokenSeconds, null);
+          await page.getByTestId('workspace-view-workbench').click();
+          await page.getByTestId('research-pipeline').waitFor({ state: 'visible' });
+          await page.getByTestId('speed-indicator-badge').click();
+          await page.getByTestId('tab-view-speed').click();
+          await page.getByTestId('latest-speed-value').waitFor({ state: 'visible' });
+          assert.match(await page.getByTestId('latest-speed-value').innerText(), new RegExp(`^≈\\s*${expected}\\s*tokens/s$`));
+          assert.equal((await page.getByTestId('latest-speed-ttft').innerText()).trim(), '—');
+          assert.match(await page.getByTestId('current-speed-label').innerText(), /估算/);
+          if (index === 1) await screenshot('16-speed-sdk-estimate-1440');
+          await page.keyboard.press('Escape');
+        }
+      });
+    }
   }
   await check('legacy folder editor route keeps workspace navigation and return', async () => {
     await page.goto(`${base}/folder/${folder}/editor`, { waitUntil: 'domcontentloaded' });

@@ -1163,7 +1163,9 @@ export function wireEvents(deps: EventWiringDeps): void {
       // Raw-event fan-out to plugin onEvent subscribers (live + replay).
       // Fired before the core handling so plugins see every forwarded event.
       // See change: add-goal-continuation-plugin.
-      dispatchPluginRawEvent?.(sessionId, msg.event);
+      // Preserve the server's replay decision for consumers such as performance
+      // monitoring; historical events must not start a new live measurement.
+      dispatchPluginRawEvent?.(sessionId, { ...msg.event, replay: replayed });
       // Legacy queue_state event no longer emitted (bridge removed PromptQueue).
       // See change: add-followup-edit-and-steer-cancel.
       if (msg.event.eventType === "queue_state") return;
