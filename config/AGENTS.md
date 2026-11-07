@@ -5,6 +5,7 @@ Main agent owns evidence indexing and final judgment.
 
 - Establish claim/source/location/conditions records; summaries are not substitutes for decisive primary evidence.
 - For independent derivations use fresh contexts and the same assumptions; keep first-pass answers separate. Do not claim independence from model labels alone.
+- Give narrow subagents only the skills needed for the assigned task, usually zero to two. `research-theory` starts fresh without an inherited global skill catalog or default skill list; use the native per-call `skill` selector for a required method and pass its path when needed. Selected skills expose metadata first and are read on demand. Do not paste the parent skill catalog or every SKILL.md into the task/system prompt. Explicit `skill: false` clears the selected list but does not itself disable `inheritSkills`.
 - Treat review as advisory unless model identity, evidence and obligations support acceptance. Majority vote is not a proof.
 - Record numerical inputs, environment, commands, seed, raw outputs and exits. Never invent experiment results.
 - Delegate only within current user/project authorization and when there is independent value. Do not create extra reviews for routine cleanup or already equivalently verified facts. On a small-memory host, start no new child below 1GiB available; keeping at most three active reasoning processes is an operator coordination target, not an enforced cross-session cap. A per-run concurrency limit is not a machine-wide reservation.

@@ -100,6 +100,8 @@ bash scripts/test-dashboard-v020.sh
 
 ## 已知边界
 
+`research-theory` 的技能按需加载修复和已有安装的定向升级命令见 [子代理技能按需加载](subagent-skill-loading.md)。这项更新涉及原生 subagents 与 agent 设置，不要求重建前端。
+
 - 在 macOS 全新构建验证中，上游可选的 `ffmpeg-static` 视频组件下载超时；Dashboard 本身构建成功，该视频能力需另行安装验证。
 - Science 的 host/worker 源码部分保留，但原查看服务与私人项目、机器路径及其他本机文件绑定，未作为通用服务发布；本机和服务器的 Science 端到端联通尚未验证。
 - macOS 可以构建并展示 Dashboard。部分并行任务和主线监督的资源准入仍依赖 Linux `/proc/meminfo`，在 macOS 上会保持拒绝状态；不能把页面能打开等同所有科研流程均可执行。

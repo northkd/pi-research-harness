@@ -64,3 +64,13 @@ test('failed and false-success patch commands cannot report a successful install
   assert.throws(() => applySubagentsV020(f.root, {...f, run: () => ({status: 1})}), /patch command failed/);
   assert.throws(() => applySubagentsV020(f.root, {...f, run: () => ({status: 0})}), /patched source digest mismatch/);
 });
+
+test('released skill filter and every upgrade patch match their authenticated manifest', () => {
+  const metadata = JSON.parse(fs.readFileSync(new URL('../config/subagents-v020.json', import.meta.url), 'utf8'));
+  const helper = fs.readFileSync(new URL('../patches/subagents/support/research-skill-context.mjs', import.meta.url));
+  assert.equal(metadata.files['src/runs/shared/research-skill-context.mjs'].beforeSha256, null);
+  assert.equal(metadata.files['src/runs/shared/research-skill-context.mjs'].afterSha256, sha(helper));
+  for (const entry of [metadata, ...metadata.upgrades]) {
+    assert.equal(sha(fs.readFileSync(new URL('../' + entry.patch, import.meta.url))), entry.patchSha256);
+  }
+});

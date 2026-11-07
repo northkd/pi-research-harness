@@ -48,6 +48,11 @@
   "subagents": {
     "defaultThinking": "max",
     "agentOverrides": {
+      "research-theory": {
+        "inheritSkills": false,
+        "skills": [],
+        "defaultContext": "fresh"
+      },
       "claude-code": {
         "thinking": false
       },

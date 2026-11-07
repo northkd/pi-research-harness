@@ -15,6 +15,7 @@ test('portable settings load this package without copying real auth or model def
  assert.deepEqual(settings.extensions,['-builtin:mcp']);
  assert.equal(settings.subagents.agentOverrides['research-agy'].thinking,false);
  assert.equal(settings.subagents.agentOverrides['reviewer'].thinking,'max');
+ assert.deepEqual(settings.subagents.agentOverrides['research-theory'],{inheritSkills:false,skills:[],defaultContext:'fresh'});
  assert.deepEqual(settings.compaction,{enabled:true,reserveTokens:16384,keepRecentTokens:20000});
  assert.equal(makeMcp('/example/repository','/example/agent').mcpServers['pi-dashboard'],undefined);
 });

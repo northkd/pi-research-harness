@@ -1,8 +1,8 @@
 {
   "package": "pi-subagents",
   "version": "0.79.2",
-  "patch": "patches/subagents/0003-research-model-selection-0792.patch",
-  "patchSha256": "50ca33efa9fe284851d5a7e2ea20650dca968af5fa31f9d3e3b3514a771eb364",
+  "patch": "patches/subagents/0005-research-skill-context-0792.patch",
+  "patchSha256": "c5a1fbb0afda68004bc27ef3d16555ef183102f9a3e59e5e8a5f5b759bb1a41d",
   "files": {
     "src/extension/rpc.js": {
       "beforeSha256": "f1ccc4ffbc3d59058fbaed1c3e6777402e1e048c40ac31068611743fe48f0b2e",
@@ -27,19 +27,49 @@
     "src/runs/shared/child-session.d.ts": {
       "beforeSha256": "4be27ba7072996f30032f45e5611fdaa4dc7179c0c87673d81e3635017b980db",
       "afterSha256": "481d3ce0717e025d4b7a32923ff1aea6aabbed7c80030eac1e651380542d0423"
+    },
+    "src/runs/shared/subagent-prompt-runtime.js": {
+      "beforeSha256": "21e248d6d4ca560b0d4496b3d3d1710251fd4838c8a6608f061df39817cac153",
+      "afterSha256": "bf64bbd8c3a3e70801cc85c18863f8ec7e03346e3bd6eb72b5851621a687ae50"
+    },
+    "src/runs/shared/subagent-prompt-runtime.d.ts": {
+      "beforeSha256": "b989cfebc7b9a23f77db3198d46ceb002bd80cd19d852fed7e49b4dfd3927031",
+      "afterSha256": "39b38b518db44153abacfe23bd64dc92af9d53670412c2b167a8caeb1e491114"
+    },
+    "src/runs/shared/research-skill-context.mjs": {
+      "beforeSha256": null,
+      "afterSha256": "5592d45b48f2ecc1f4cadce91b60dfe29af45aa8722a96b52ba198e3abbf0f84"
     }
   },
   "upgrades": [
     {
-      "patch": "patches/subagents/0004-research-model-selection-upgrade-0792.patch",
-      "patchSha256": "9fe37c98e2db34bd690c9aafff8bfb91e0a08be18feb812a354ca158378ae887",
+      "patch": "patches/subagents/0006-research-skill-context-upgrade-model-0792.patch",
+      "patchSha256": "f30db94ce60a5ee13a3beb0e6fd87121df7ac88598f89d5d344220f1e435ac96",
+      "files": {
+        "src/extension/rpc.js": "2a4f20c9ec25c025f963c6d45719ead62cb7cb39499531d4c6e473dea51e2f03",
+        "src/runs/shared/child-session.js": "378404c121c7ba9b6351da16c1fbb04ec149500ca00f120c446309d76cda1bbc",
+        "src/runs/shared/research-model-selection.mjs": "3e5ac3eeb2e5ad1372a57e65889513e9aff928051afbe3df732ca65c57660524",
+        "src/runs/foreground/execution.js": "742de41b22e8b5a69a8db5dfb81c657dd33aa2a32ba6d486a3f337d5a0c1af35",
+        "src/runs/background/run-child-session.js": "ad73e8a8ec7652f49d73f649cb662f06b97a67e61b5d693d3db768fa6106ac5d",
+        "src/runs/shared/child-session.d.ts": "481d3ce0717e025d4b7a32923ff1aea6aabbed7c80030eac1e651380542d0423",
+        "src/runs/shared/subagent-prompt-runtime.js": "21e248d6d4ca560b0d4496b3d3d1710251fd4838c8a6608f061df39817cac153",
+        "src/runs/shared/subagent-prompt-runtime.d.ts": "b989cfebc7b9a23f77db3198d46ceb002bd80cd19d852fed7e49b4dfd3927031",
+        "src/runs/shared/research-skill-context.mjs": null
+      }
+    },
+    {
+      "patch": "patches/subagents/0007-research-skill-context-upgrade-budget-0792.patch",
+      "patchSha256": "34b9ddbe6a9a9f6b71feac9da32e945d6f4a88eb3750fed022309f9e8d0f9ad4",
       "files": {
         "src/extension/rpc.js": "2a4f20c9ec25c025f963c6d45719ead62cb7cb39499531d4c6e473dea51e2f03",
         "src/runs/shared/child-session.js": "b7ca8b7046208bb8d51c696d18c301af1334aa035b5c3f123dfc93b567312787",
         "src/runs/shared/research-model-selection.mjs": null,
         "src/runs/foreground/execution.js": "c3a9b57532cf25da486ef0af8fea140ee381568daded9ae1128920e93b0717f3",
         "src/runs/background/run-child-session.js": "0674574a66c9869299769a9f9ffe216b3540d4a2a9fe7772928a34e6635098dc",
-        "src/runs/shared/child-session.d.ts": "4be27ba7072996f30032f45e5611fdaa4dc7179c0c87673d81e3635017b980db"
+        "src/runs/shared/child-session.d.ts": "4be27ba7072996f30032f45e5611fdaa4dc7179c0c87673d81e3635017b980db",
+        "src/runs/shared/subagent-prompt-runtime.js": "21e248d6d4ca560b0d4496b3d3d1710251fd4838c8a6608f061df39817cac153",
+        "src/runs/shared/subagent-prompt-runtime.d.ts": "b989cfebc7b9a23f77db3198d46ceb002bd80cd19d852fed7e49b4dfd3927031",
+        "src/runs/shared/research-skill-context.mjs": null
       }
     }
   ],
