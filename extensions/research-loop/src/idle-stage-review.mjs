@@ -130,7 +130,8 @@ export function validateConfig(input) {
     packet: undefined,
     idleAfterMs: number(input.idleAfterMs, 0, 7 * 24 * 60 * 60 * 1000, 5 * 60 * 1000),
     cooldownMs: number(input.cooldownMs, 0, 7 * 24 * 60 * 60 * 1000, 60 * 60 * 1000),
-    maxRequestsPerProjectPerDay: number(input.maxRequestsPerProjectPerDay, 1, 100, 8),
+    // Legacy daily quotas are no longer execution policy. Keep actual daily
+    // usage below; scheduling is controlled by idle state, change and cooldown.
     requestTimeoutMs: number(input.requestTimeoutMs, 1000, 10 * 60 * 1000, 60 * 1000),
     dashboardTimeoutMs: number(input.dashboardTimeoutMs, 1000, 60 * 1000, 8000),
     tickIntervalMs: number(input.tickIntervalMs, 1000, 60 * 60 * 1000, 30 * 1000),
@@ -213,7 +214,6 @@ function authorizationIssue(config) {
     const configuredSet = new Set(config.packet.extractFiles.map(entry => entry.file));
     if (approvedSet.size !== configuredSet.size || [...configuredSet].some(file => !approvedSet.has(file))) return 'authorization-material-path-mismatch';
   }
-  if (Number.isSafeInteger(auth.maxCallsPerDay) && config.maxRequestsPerProjectPerDay > auth.maxCallsPerDay) return 'authorization-daily-limit-exceeded';
   return undefined;
 }
 
@@ -733,7 +733,6 @@ export function createIdleStageReviewer(options = {}) {
     if (state.lastRequestAt && timestamp - state.lastRequestAt < config.cooldownMs) return skip(scope, state, file, 'cooldown');
     const day = utcDay(timestamp);
     if (state.day !== day) { state.day = day; state.dayCount = 0; }
-    if (state.dayCount >= config.maxRequestsPerProjectPerDay) return skip(scope, state, file, 'daily-limit');
 
     const requestId = randomUUID();
     const startedAt = now();

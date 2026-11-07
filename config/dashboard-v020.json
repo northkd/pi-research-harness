@@ -640,19 +640,19 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResWorkflowAdoption.tsx": {
-      "sha256": "077589131db3dc9f8dfb0fe121b74f9e7881ccf406224119f968f10e37a5767c",
+      "sha256": "03e16878e19db7fb62010f0940c5549a0c589dd01dca1576f80117a37d2c6ad1",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResWorkflowHistoryReview.tsx": {
-      "sha256": "2c69d0eb3ba04387ee4421f54dc4a139854302974c9afed0455e0a43bbaa6d06",
+      "sha256": "858281e46d9e079d58523d87b480e57b8be7db5109430085658640eba40691ea",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResWorkflowIntakeAgent.tsx": {
-      "sha256": "36a978c4e2b0ccf1890a862a6ff8a4e4f1ba1e98926b5908d214c8fa226dfc60",
+      "sha256": "fc6da39d1ef73178de5be37efb1379b710130b3310a5c11ad6cfbeba704c897b",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResWorkflowIntakeBudgetControls.tsx": {
-      "sha256": "6e2fc7cc4c224f372a1881c8b2215e36f505400af38b934727b1b806138a34c6",
+      "sha256": "e6649c43247b984ecb572c082efd014395c2656cddd8f0ba6d98b91ae1add865",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResWorkflowMembership.tsx": {
@@ -676,7 +676,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchBudgetControls.tsx": {
-      "sha256": "67d251f985a3864a81d19cad4fb7c58822a3e4428417a8053756e7b5c84dba5e",
+      "sha256": "8b68022c93815961816a884101533abf937b88b09e5625379d949adf9fbf680f",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchCharterBindingControls.tsx": {
@@ -700,7 +700,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchPermissionControls.tsx": {
-      "sha256": "02f7d788790840ab4f050766330c1b702f18191c4b9e42f65c3536292fb92ace",
+      "sha256": "32ccda3ea5c40942dca12895ac29e29d2f89b62800225f5e479af757151734f2",
       "baseBlob": null
     },
     "packages/client/src/components/research/ResearchPipelinePage.tsx": {
@@ -748,11 +748,15 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResWorkflowAdoption.test.tsx": {
-      "sha256": "a1ee3b685f2adda587bb086647688f059b9643ac2ecb1f242e9bd3fdbd6d9add",
+      "sha256": "b9caca8372eff8d89acff5904b6d888a082aba5084086e74a7e6f6297d9d77f6",
+      "baseBlob": null
+    },
+    "packages/client/src/components/research/__tests__/ResWorkflowHistoryReview.no-caps.test.tsx": {
+      "sha256": "cd73964b4189802af279a4e5a2a1b480d4a9cf1787a87d66c6174efc4c54f94a",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResWorkflowIntakeBudgetControls.test.tsx": {
-      "sha256": "4c3e80ec55ab64151fb8b00243d4003bb703813d601a9214db311714cdddcb57",
+      "sha256": "8d0906b1aac32d8dda7494896b4163781857375b2163ac3e7e6a9f1163a38a1c",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResWorkflowMembership.test.tsx": {
@@ -776,7 +780,7 @@
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchBudgetControls.observation.test.tsx": {
-      "sha256": "0244df8d278994b739c0ed2886305a468b4a8ff3663886202d22e801824df310",
+      "sha256": "a1a4b53c9f25a34d393f83875bb4356147fff1bfa7cff454cc9a17e4f0fcab6c",
       "baseBlob": null
     },
     "packages/client/src/components/research/__tests__/ResearchCharterBindingControls.test.tsx": {
@@ -1184,7 +1188,7 @@
       "baseBlob": "0b6cbb795a1478c69e09746fec5d5811e5f4818e"
     },
     "packages/client/src/lib/i18n/i18n-zh-CN.ts": {
-      "sha256": "d52fd6cb65c373cc9dfc6f175b1f3c50e2fdaf1978f1aa4aa4acb58c8dab18bd",
+      "sha256": "c994ac894bb13f81dd4e6603b642dc776e3629c176bce281726ae2ceb5b0a55c",
       "baseBlob": "cd7ec150cc7631e680f80803c809ef3b7b2e86b1"
     },
     "packages/client/src/lib/i18n/i18n.tsx": {
@@ -1671,6 +1675,102 @@
       "sha256": "1a7ca89e2d7a1334568f2daf9c196a7e35486591e529817f0aa70b56c49e4258",
       "baseBlob": null
     },
+    "packages/goal-plugin/src/__tests__/GoalChip.test.tsx": {
+      "sha256": "4db98c91a81ccd698373f89b2c4d958771c797601a554c4eaf80709055574342",
+      "baseBlob": "e5775218d3d7487b753ae461ec6b5ab0467d860d"
+    },
+    "packages/goal-plugin/src/__tests__/GoalControl.test.tsx": {
+      "sha256": "eab6bf37c8f54307200d4d48500d12e7f87cd4fa758b044a4a3f4eed6a2b2b75",
+      "baseBlob": "d66b83936c60902930e585ec31bf12abe1228835"
+    },
+    "packages/goal-plugin/src/__tests__/GoalDetailClaim.test.tsx": {
+      "sha256": "35d8435e72e728ee7830e4d49181ad1af5bef83da6e5d7af51abd55d91bdca49",
+      "baseBlob": "f431a62a3ac9305178c3ffa1fbf4defe61f386e9"
+    },
+    "packages/goal-plugin/src/__tests__/GoalForm.test.tsx": {
+      "sha256": "ade3e593c1fc5dfb0e50f3c628857b0971e4821931d3a2fa47048ce7207463df",
+      "baseBlob": "630475434ec1524eab193e1c064535ee63f3327b"
+    },
+    "packages/goal-plugin/src/__tests__/GoalsBoardClaim.test.tsx": {
+      "sha256": "68396f699d1e84563f392ccf9f38684179f03a073a2721afb7ecb3011aa569bd",
+      "baseBlob": "49d1811a87c1771dd6739ba58673d77ffc168c2c"
+    },
+    "packages/goal-plugin/src/__tests__/goal-state.test.ts": {
+      "sha256": "c23a5f93a1e5079a94f066fbef87494654119449227a4d78bd33273b2297f8cc",
+      "baseBlob": "2b3904fe25f7851473605b21a3c88b334df163db"
+    },
+    "packages/goal-plugin/src/__tests__/probe.test.ts": {
+      "sha256": "27764e1ab2fd93b800dfbd26a51c3bc5f0191b99e5a3f43be2c8b9fa69649549",
+      "baseBlob": "94b6470a2626c2a0ec220ce8f7e8e97f05545b81"
+    },
+    "packages/goal-plugin/src/client/GoalChip.tsx": {
+      "sha256": "2e5a73cc69ffb9da06bfb9dc3e10108a5ddc1263b350c22e31ca6641054ee29a",
+      "baseBlob": "0069ca771285f172560352918fa2a196beac7f11"
+    },
+    "packages/goal-plugin/src/client/GoalControl.tsx": {
+      "sha256": "055c83029427ea949039fbb040f8d34d6218c449dd4b06692b5a6e3985a2a11d",
+      "baseBlob": "caeddb0ef8a5b564380fa8e72e21c02766a278aa"
+    },
+    "packages/goal-plugin/src/client/GoalDetailClaim.tsx": {
+      "sha256": "39a7a1b012512eed73b0b9cac34a7d16c21514a616b17cf6c2777bd4dac2fe10",
+      "baseBlob": "7d818aa1e9178a1bf3f62acf58220e2a16154016"
+    },
+    "packages/goal-plugin/src/client/GoalForm.tsx": {
+      "sha256": "5d0532240bcfc33119113dfeba9de7c8124a9e771ea4b64d957976fb35970b72",
+      "baseBlob": "772c933d848e59a572aace00a64a5d7debe472e6"
+    },
+    "packages/goal-plugin/src/client/GoalPluginSettings.tsx": {
+      "sha256": "b100f43558cd07434ec6e5475075e8e75d24388c5ad9d2bf135a0cc5cc9ee0c2",
+      "baseBlob": "342bfb265ef99223be02722b63b65c02212823d6"
+    },
+    "packages/goal-plugin/src/client/GoalsBoardClaim.tsx": {
+      "sha256": "00101e5c203d60931215ca6619ebc75ec4fff1ad5fca2747ac71fa0900d03ed7",
+      "baseBlob": "5f5ba35cf0015b366dbee5dcc215c3b6fce323bb"
+    },
+    "packages/goal-plugin/src/client/goal-state.ts": {
+      "sha256": "66d97d9a003ddc9d701807dea2321708f0a98736dc2464aa86664a0afe2699d4",
+      "baseBlob": "818f1da3317ee7bd75a927f8b90ba8e684abe693"
+    },
+    "packages/goal-plugin/src/configSchema.json": {
+      "sha256": "12917b811ff1836d82e524c694e49f500a605f09f28e0b413263fbe4f2c19b24",
+      "baseBlob": "dd2ecf9aa98d4ff59242cb50d44bcc572f29a740"
+    },
+    "packages/goal-plugin/src/i18n.ts": {
+      "sha256": "a93361baefc6715b0fb6e4445672130b96d667f4ffc87c460e2f96f3f32dbd3e",
+      "baseBlob": "a33057fd971d5ca82b3f055113879fec1a956280"
+    },
+    "packages/goal-plugin/src/server/__tests__/goal-budget-guard.test.ts": {
+      "sha256": "613d9ba93b5a6023c959bc5422b94b288229ea0f75fb4b6f5d602dfa28df45d8",
+      "baseBlob": "9b880d3651567892a525add114b6293e0283fe52"
+    },
+    "packages/goal-plugin/src/server/__tests__/goal-session-primer.test.ts": {
+      "sha256": "1a6fa90164eff4e0734d2219c7ef3b79855e8a1bd897f7b568379394a5329b77",
+      "baseBlob": "a696cb273edf8eec9f46e7a5a5458635c37dabba"
+    },
+    "packages/goal-plugin/src/server/__tests__/plugin-action-handler.test.ts": {
+      "sha256": "6c1ca5a48a2bfa0b6dfe94b39fd66b596cfd3f8a95e4144b3c0e9e3e93bab753",
+      "baseBlob": "10ff79646f410a2086e43f292fd7f294f17149a3"
+    },
+    "packages/goal-plugin/src/server/goal-budget-guard.ts": {
+      "sha256": "4559dd1faca0b457717d5326948c00fed59c58e20d9b0578b0f30d209d30865a",
+      "baseBlob": "831f43870fff1885c03e3b92e2b64bb77ebb1dbe"
+    },
+    "packages/goal-plugin/src/server/goal-session-primer.ts": {
+      "sha256": "0cf1baf67a5a91b33e5a74c534dfcd7d118ee8ec87ec4c8d02a511acd70b87b1",
+      "baseBlob": "844b67c7f9acd002350755b59f3d2789bfeb4020"
+    },
+    "packages/goal-plugin/src/server/index.ts": {
+      "sha256": "ed7ffca43c5af1e9c6c0e1c40fa191919dff1d1ed578af2793b8fffc47f23549",
+      "baseBlob": "f3225a003fa51efffea0b340486a14cae2326483"
+    },
+    "packages/goal-plugin/src/server/probe.ts": {
+      "sha256": "3bd41766251e717785b7d0c7bc53fad147f231745f53709cfeaaed890b67f91a",
+      "baseBlob": "5552a627c3e59fe37105dd15eaa9f01a4662fc61"
+    },
+    "packages/goal-plugin/src/shared/goal-types.ts": {
+      "sha256": "03df816ef47b3a696dca0cb94a98883d545062a0736f49b8e68a72e39246f5b1",
+      "baseBlob": "3635b71d0f0e3520420cf646c6ceb2f1f052f87d"
+    },
     "packages/hermes-memory-plugin/src/server/config-io.ts": {
       "sha256": "7a946ea7f91758e44991d011dd9cb621e74b27cfc2b4fba4a922e659a32f986a",
       "baseBlob": "8e1543338b8ca584fbf8d4c035db1d87f055fff5"
@@ -2052,11 +2152,15 @@
       "baseBlob": "8791846e42ebbb61954655535f6d6f7d57403049"
     },
     "packages/server/src/res-workflow/__tests__/agent-budget.node.test.mjs": {
-      "sha256": "37c971fc3af6ebf5149f40bb8204a6b5a901c92a2a54a8de3fa25d7d32c948a7",
+      "sha256": "9378bd136f575cb177ced08b03c3a792057135ec36fa4363c751d90bc0cb184b",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/__tests__/confirm-connection.node.test.mjs": {
-      "sha256": "589f75af572dc56f8a1526c222da5dcb1a9f928269495078103a8ac02d674d2b",
+      "sha256": "f6429d8b32a9b5e7c8a6ac51bf3666deae9a88237e0ff227757147162583fd9a",
+      "baseBlob": null
+    },
+    "packages/server/src/res-workflow/__tests__/intake-no-caps-sdk.node.test.mjs": {
+      "sha256": "cd62dd298be41480b8ff6f9872a3080e9c7dc00cb81c47a1293302437ef60260",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/__tests__/science-gateway-config.test.ts": {
@@ -2132,11 +2236,11 @@
       "baseBlob": null
     },
     "packages/server/src/res-workflow/adoption-service.ts": {
-      "sha256": "30298796db5cb04bfbb9c4299d4964427f9446f545c2b71e40796a9f76e77740",
+      "sha256": "6f657f0bd891d5d4fb4cc6d2698c9cb11f7a16b4f001e5dfa0ef2145cb7b9a96",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/analysis-agent.ts": {
-      "sha256": "fc03947fc7f29e8239bc83832690634d0449b08c72d0ad164d19881e18e23051",
+      "sha256": "ab8e8a2be180002923fa41d8ad387b5aa2ca06dbcfa9d9231e9533da3562d239",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/analysis.ts": {
@@ -2144,27 +2248,27 @@
       "baseBlob": null
     },
     "packages/server/src/res-workflow/full-history-agent-budget.ts": {
-      "sha256": "90a1b01f8613172095eb79d96ed56d92cfbb3459b666631da3f6dbaa880f40b7",
+      "sha256": "9e513a44cbb8cecff98976ae42ba9d923bd978f93f0484dbac2b3fd79fac7481",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/full-history-agent-contract.ts": {
-      "sha256": "1c0146821c6d67e5a717f60987dc27a78dd3261820982743667e12c980db8938",
+      "sha256": "799c43403d2db6df9c7b23b44a9a6b956c1b58e752781bab7544c3334afe59c2",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/full-history-agent-store.ts": {
-      "sha256": "6c6a60b8dcad446c2db0138e43ecf690bc7520c7e1757cc66ebc3e31558f9115",
+      "sha256": "2c7f6a9f36b406fc69191e35c8ce051b2f607df7943cf73a80dd3e42aa3a74a1",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/full-history-agent.ts": {
-      "sha256": "8d864a0f2ae7b3f1de9dc34dc9a7444b7b6336af8a76778f232daa845de411c7",
+      "sha256": "9beccb6d311137669e2812f760aa17ae416fb0adfa8613cf8ca6f5bae9147928",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/full-history-material.ts": {
-      "sha256": "3cfb6a1cfcf427800a69ef7bd5e4ef69fe13d724a695c70e478af43543cb4063",
+      "sha256": "1d326815c1922a8f91e347b4665da45765ee6565e8058f9a6fc2239dca07666f",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/full-history-review.ts": {
-      "sha256": "8de5da84a429efeb9dd42d9b0b63c59bc3cbdf1902328aa25c9e4a47fce2303b",
+      "sha256": "e654750f5a562397492828aa67bdd5655877b7a75571213287e326050e27bf49",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/history-candidates.ts": {
@@ -2176,7 +2280,7 @@
       "baseBlob": null
     },
     "packages/server/src/res-workflow/local-history-stream.ts": {
-      "sha256": "23359a8cba4b9c18f1d67eea12c626b24cc454ab5a8cb1bed675150fea1c85e3",
+      "sha256": "692da7b4cca0d47026ed583bb77272cff4d670b2200beda3044fcf4daec91607",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/participants.ts": {
@@ -2184,7 +2288,7 @@
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-budget-service.ts": {
-      "sha256": "83aebe9c3f4bb9b20b3cb7847d533500c16d62de4509bac2013139ba650a8993",
+      "sha256": "6b7c302f8b0ff3c280491f9676b4717f9cb4b0c4dea6dc9b52d4ec2eb8a876a2",
       "baseBlob": null
     },
     "packages/server/src/res-workflow/research-dispatch-service.d.mts": {
@@ -2496,7 +2600,7 @@
       "baseBlob": "7f5d6f16a4f8cf7cb40efb256bcd7667e6a3924f"
     },
     "packages/shared/src/res-workflow.ts": {
-      "sha256": "6dd4af797e2da058d3b708962bd7e0b3b3a484d2f89c15924f391d79d7c1e1ef",
+      "sha256": "4747d9236e3cd65afa647e40a8be005a46a691385703bd8922ee1f94783d3487",
       "baseBlob": null
     },
     "packages/shared/src/research-access-mode.ts": {
@@ -2504,7 +2608,7 @@
       "baseBlob": null
     },
     "packages/shared/src/research-budget.ts": {
-      "sha256": "374115056d5c5828424984b2ef0f5ab693487982c8dd328851a70d9a5fe3c959",
+      "sha256": "29b9ad8543777a9f58135d1acf863cea7884ce213d4dcee419e952a69f23a464",
       "baseBlob": null
     },
     "packages/shared/src/research-charter-binding.ts": {

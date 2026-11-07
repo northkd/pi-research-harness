@@ -218,11 +218,12 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
     }
     if (operation.agent && adoption.agentJob) {
       const budget = adoption.agentJob.budget;
-      if (budget.effectiveMaxRequests === undefined) budget.effectiveMaxRequests = budget.unlimited ? null : budget.maxRequests;
-      budget.revision ??= 0; budget.policy ??= budget.unlimited ? "unlimited" : "original-bounded";
+      // Counts in old grants/revisions are historical estimates, never application quotas.
+      budget.effectiveMaxRequests = null; budget.unlimited = true; budget.remainingRequests = 0;
+      budget.revision ??= 0; budget.policy = "unlimited";
       if (budget.editable === undefined) { budget.editable = false; budget.editBlockedReason = "authorization-required"; }
       adoption.agentJob.workerActive = running.has(adoption.id) || adoption.agentJob.workerActive;
-      const budgetCanContinue = adoption.agentJob.phase === "awaiting-user" && budget.editable === true && budget.policy !== "original-bounded" && (budget.effectiveMaxRequests === null || budget.usedRequests < (budget.effectiveMaxRequests ?? 0)) && ["budget-exhausted", "node-attempt-limit"].includes(adoption.agentJob.needsUserAction?.reason ?? "");
+      const budgetCanContinue = adoption.agentJob.phase === "awaiting-user" && budget.editable === true && ["budget-exhausted", "node-attempt-limit", "result-incomplete"].includes(adoption.agentJob.needsUserAction?.reason ?? "");
       adoption.agentJob.resumeRequired = !adoption.agentJob.workerActive && (adoption.agentJob.authorized && (!["cancelled", "proposal-ready", "awaiting-user"].includes(adoption.agentJob.phase) || budgetCanContinue) || !adoption.agentJob.authorized && !adoption.agentJob.plan && !adoption.agentJob.grant && adoption.agentJob.phase === "preparing");
       return adoption;
     }
@@ -431,7 +432,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
         onBeforeSend: async ({ request: requestNumber, requestBytes, fingerprint }) => {
           await assertLive();
           if (draftSaveFailed) throw new Error("analysis-agent-draft-save-unavailable");
-          if (fingerprint !== fresh.fingerprint || !Number.isSafeInteger(requestNumber) || requestNumber < 1 || requestNumber > 6 || !Number.isSafeInteger(requestBytes) || requestBytes < 0) throw new Error("model-configuration-changed-new-consent-required");
+          if (fingerprint !== fresh.fingerprint || !Number.isSafeInteger(requestNumber) || requestNumber < 1 || !Number.isSafeInteger(requestBytes) || requestBytes < 0) throw new Error("model-configuration-changed-new-consent-required");
           if (requestNumber !== (operation.analysisRequests?.length ?? 0) + 1) throw new Error("analysis-agent-request-sequence-invalid");
           const intent = { at: new Date().toISOString(), requestId: request.requestId, snapshotHash: operation.snapshotHash!, modelFingerprint: fresh.fingerprint, requestNumber, requestBytes };
           operation.analysisIntent = intent;
@@ -596,7 +597,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
       },
       onBeforeSend: async intent => {
         await assertLive();
-        if (verifyOnly || !review.authorization || review.authorization.planId !== plan.planId || review.authorization.planHash !== metadata.planHash || review.authorization.consent.maxRequests !== metadata.maxRequests || intent.fingerprint !== plan.model.fingerprint || intent.request < 1 || intent.request > metadata.maxRequests || operation.analysisRequests?.some(row => row.planId === plan.planId && row.nodeId === intent.nodeId)) throw new Error("analysis-full-send-refused-new-authorization-required");
+        if (verifyOnly || !review.authorization || review.authorization.planId !== plan.planId || review.authorization.planHash !== metadata.planHash || intent.fingerprint !== plan.model.fingerprint || intent.request < 1 || intent.request > metadata.maxRequests || operation.analysisRequests?.some(row => row.planId === plan.planId && row.nodeId === intent.nodeId)) throw new Error("analysis-full-send-refused-new-authorization-required");
         if ((operation.analysisRequests?.length ?? 0) !== baseRequests + intent.request - 1) throw new Error("analysis-full-request-sequence-invalid");
         const record = { at: new Date().toISOString(), requestId: request.requestId, snapshotHash: operation.snapshotHash!, modelFingerprint: plan.model.fingerprint, requestNumber: (operation.analysisRequests?.length ?? 0) + 1, requestBytes: intent.requestBytes, analysisMode: "full-history-review-v1" as const, planId: plan.planId, nodeId: intent.nodeId, inputHash: intent.inputHash };
         operation.analysisRequests = [...(operation.analysisRequests ?? []), record];
@@ -679,7 +680,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
       const prepared = await (deps.prepareFullHistoryMaterial ?? prepareFullHistoryMaterial)({ cwd: access.cwd, selectedHistories: selectedHistories.map(row => ({ ...row })), historyBindings: bindings.map(binding => ({ ...binding })), snapshotSources: directorySources, snapshotContent: Object.fromEntries(directorySources.map(source => [source.id, snapshot.content[source.id]])), snapshotFingerprint: operation.snapshotHash!, model: { provider: resolved.provider, id: resolved.id, fingerprint: resolved.fingerprint, contextWindow: resolved.contextWindow, maxTokens: resolved.maxTokens }, privateDir: fullDirectory(access, operation), signal, revalidate: assertLive, canReadHistory: async binding => { await assertLive(); return access.canReadHistory ? access.canReadHistory(binding) : true; }, readRetained: deps.readRetained });
       await assertLive();
       const metadata = prepared.publicPlan as ResWorkflowHistoryReviewPlan;
-      if (metadata.planId === oldPlan.planId || metadata.planHash === oldPlan.planHash || operation.historyReviewArchives?.some(archive => archive.previousPlanId === metadata.planId) || metadata.maxRequests !== prepared.privatePlan.nodes.length || metadata.maxRequests > 128 || metadata.histories.length !== selected.length || metadata.histories.some(row => !selected.includes(row.id)) || metadata.model.provider !== request.model.provider || metadata.model.id !== request.model.id) throw new ResWorkflowError(409, "analysis-full-new-plan-preparation-failed");
+      if (metadata.planId === oldPlan.planId || metadata.planHash === oldPlan.planHash || operation.historyReviewArchives?.some(archive => archive.previousPlanId === metadata.planId) || metadata.maxRequests !== prepared.privatePlan.nodes.length || metadata.histories.length !== selected.length || metadata.histories.some(row => !selected.includes(row.id)) || metadata.model.provider !== request.model.provider || metadata.model.id !== request.model.id) throw new ResWorkflowError(409, "analysis-full-new-plan-preparation-failed");
       if (hash(await rejectUntrackedFullIntents(access, operation, recoveryScope)) !== hash(intents)) throw new ResWorkflowError(409, "analysis-full-recovery-plan-mismatch");
       await assertLive();
       const archive: NonNullable<PrivateOperation["historyReviewArchives"]>[number] = { schema: "pi-full-history-attempt-archive.v1", at: new Date().toISOString(), requestId: request.requestId, requestHash, previousPlanId: oldPlan.planId, previousPlanHash: oldPlan.planHash, review: copy(review), adoptionReview: priorAdoptionReview, adoptionStatus: priorAdoption.status, ...(priorAdoption.error ? { error: priorAdoption.error } : {}), intents };
@@ -799,8 +800,8 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
     }
     view.workerActive = state.workerAlive || running.has(operation.adoption.id);
     const rows = state.attempts, g = view.grant;
-    const effectiveMaxRequests = state.budgetAuthorization ? state.budgetAuthorization.maxRequests ?? null : g?.maxRequests ?? 0;
-    view.budget = { baseRequests: g?.baseRequests ?? 0, retryReserve: g?.retryReserve ?? 0, maxRequests: g?.maxRequests ?? 0, effectiveMaxRequests, revision: state.budgetAuthorization?.revision ?? 0, policy: effectiveMaxRequests === null ? "unlimited" : state.budgetAuthorization ? "total-requests" : "original-bounded", usedRequests: rows.length, baseUsed: rows.filter(r => r.intent.bucket === "base").length, recoveryUsed: rows.filter(r => r.intent.bucket === "reserve").length, remainingRequests: effectiveMaxRequests === null ? 0 : Math.max(0, effectiveMaxRequests - rows.length), inFlightRequests: view.workerActive ? rows.filter(r => !r.receipt).length : 0, unknownRequests: rows.filter(r => r.receipt?.outcome === "unknown" || !r.receipt && !view.workerActive).length, ...(effectiveMaxRequests === null ? { unlimited: true as const } : {}), ...(state.budgetAuthorization ? { authorization: { scope: "this-job" as const, authorizationHash: state.budgetAuthorization.authorizationHash, authorizedAt: state.budgetAuthorization.authorizedAt, expiresAt: state.budgetAuthorization.expiresAt } } : {}) };
+    const effectiveMaxRequests = null;
+    view.budget = { baseRequests: g?.baseRequests ?? 0, retryReserve: g?.retryReserve ?? 0, maxRequests: g?.maxRequests ?? 0, effectiveMaxRequests, revision: state.budgetAuthorization?.revision ?? 0, policy: "unlimited", usedRequests: rows.length, baseUsed: rows.filter(r => r.intent.bucket === "base").length, recoveryUsed: rows.filter(r => r.intent.bucket === "reserve").length, remainingRequests: 0, inFlightRequests: view.workerActive ? rows.filter(r => !r.receipt).length : 0, unknownRequests: rows.filter(r => r.receipt?.outcome === "unknown" || !r.receipt && !view.workerActive).length, unlimited: true, ...(state.budgetAuthorization ? { authorization: { scope: "this-job" as const, authorizationHash: state.budgetAuthorization.authorizationHash, authorizedAt: state.budgetAuthorization.authorizedAt, expiresAt: state.budgetAuthorization.expiresAt } } : {}) };
     if (state.cancelled) { view.phase = "cancelled"; operation.adoption.status = "cancelled"; view.resumeRequired = false; }
     else if (view.authorized && view.expiresAt && Date.now() >= Date.parse(view.expiresAt) && view.phase !== "proposal-ready") { view.phase = "awaiting-user"; view.needsUserAction = { reason: "authorization-expired" }; }
     const blocked = state.cancelled || view.phase === "cancelled" ? "cancelled" : view.phase === "proposal-ready" || operation.adoption.status === "confirmed" ? "completed" : !state.authorization ? "authorization-required" : Date.now() >= Date.parse(state.authorization.expiresAt) ? "authorization-expired" : undefined;
@@ -830,7 +831,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
       const result = await (deps.prepareFullHistoryMaterial ?? prepareFullHistoryMaterial)({ cwd: access.cwd, selectedHistories: selected, historyBindings: bindings, model: { provider: resolved.provider, id: resolved.id, fingerprint: resolved.fingerprint, contextWindow: resolved.contextWindow, maxTokens: resolved.maxTokens }, outputTokenLimit: Math.min(resolved.maxTokens, 16384), privateDir: fullDirectory(access, operation), snapshotSources: sources, snapshotContent: Object.fromEntries(sources.map(s => [s.id, snapshot.content[s.id]])), snapshotFingerprint: operation.snapshotHash, signal, revalidate: assertLive, canReadHistory: async binding => { await assertLive(); return access.canReadHistory ? access.canReadHistory(binding) : true; }, readRetained: deps.readRetained, onProgress: async progress => { await assertLive(); operation.adoption.agentJob!.preparation = copy(progress); if (Date.now() - lastProgress >= 1000) { lastProgress = Date.now(); await save(access, operation); await assertLive(); } } });
       await assertLive();
       const metadata = result.publicPlan as ResWorkflowHistoryReviewPlan, base = result.privatePlan.nodes.length;
-      if (metadata.maxRequests !== base || base > 128 || metadata.maxTokens !== Math.min(resolved.maxTokens, 16384) || result.privatePlan.outputTokenLimit !== metadata.maxTokens || result.privatePlan.model.fingerprint !== resolved.fingerprint || metadata.histories.length !== selected.length || metadata.histories.some(h => !operation.historySelection!.includes(h.id))) throw new Error("analysis-full-plan-invalid");
+      if (metadata.maxRequests !== base || metadata.maxTokens !== Math.min(resolved.maxTokens, 16384) || result.privatePlan.outputTokenLimit !== metadata.maxTokens || result.privatePlan.model.fingerprint !== resolved.fingerprint || metadata.histories.length !== selected.length || metadata.histories.some(h => !operation.historySelection!.includes(h.id))) throw new Error("analysis-full-plan-invalid");
       const view = operation.adoption.agentJob!;
       view.plan = copy(metadata); view.coverage = { ...emptyCoverage(selected.length), completedHistories: metadata.histories.filter(h => !!h.emptyReason && h.chunkCount === 0).length, emptyHistories: metadata.histories.filter(h => !!h.emptyReason && h.chunkCount === 0).length, eligibleMessages: metadata.eligibleMessages, eligibleBytes: metadata.eligibleBytes, totalBatches: metadata.batchCount };
       operation.historyReview = { prepareRequests: [], plan: copy(metadata), materialPlanHash: metadata.planHash, checkpoints: [] };
@@ -840,9 +841,9 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
       if (!base || metadata.blockers.length) { view.phase = "awaiting-user"; view.needsUserAction = { reason: "material-invalid" }; operation.adoption.status = "blocked"; }
       else {
         const policy = { id: "bounded-intake-v2" as const, maxNodeAttempts: 3 as const, maxJsonRepairsPerNode: 1 as const, maxUnknownRetriesPerNode: 1 as const, maxLengthEscalationsPerNode: 1 as const, unknownRetryMayBillAgain: true as const, grantLifetimeMs: 86400000 as const, initialOutputTokens: Math.min(resolved.maxTokens, 8192), maxOutputTokens: Math.min(resolved.maxTokens, 16384) };
-        const reserve = Math.min(16, Math.ceil(base * .2), 128 - base), core = { analysisMode: "full-history-agent-v2" as const, materialPlanId: metadata.planId, materialPlanHash: metadata.planHash, model: copy(model), historySelection: copy(operation.historySelection!), baseRequests: base, retryReserve: reserve, maxRequests: base + reserve, policy };
+        const reserve = 0, core = { analysisMode: "full-history-agent-v2" as const, materialPlanId: metadata.planId, materialPlanHash: metadata.planHash, model: copy(model), historySelection: copy(operation.historySelection!), baseRequests: base, retryReserve: reserve, maxRequests: base + reserve, policy };
         view.grant = { ...core, grantHash: hash({ ...core, owner: hash(access.ownerKey), cwd: hash(access.cwd), fingerprint: resolved.fingerprint, prompt: FULL_HISTORY_AGENT_PROMPT_SCHEMA_HASH }) };
-        view.budget = { baseRequests: base, retryReserve: reserve, maxRequests: base + reserve, usedRequests: 0, baseUsed: 0, recoveryUsed: 0, remainingRequests: base + reserve, inFlightRequests: 0, unknownRequests: 0 };
+        view.budget = { baseRequests: base, retryReserve: reserve, maxRequests: base + reserve, effectiveMaxRequests: null, policy: "unlimited", unlimited: true, usedRequests: 0, baseUsed: 0, recoveryUsed: 0, remainingRequests: 0, inFlightRequests: 0, unknownRequests: 0 };
         view.phase = "awaiting-authorization"; view.needsUserAction = { reason: "authorization-required" }; operation.adoption.status = "awaiting-model";
       }
       delete operation.adoption.error; await assertLive(); await save(access, operation); await assertLive();
@@ -887,7 +888,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
       operation.historyReview!.completedProposalHash = operation.adoption.proposalHash; operation.historyReview!.finalSources = result.sources;
       view.phase = "proposal-ready"; view.coverage = agentCoverage(operation, completed); delete view.needsUserAction;
       operation.adoption.historyReview = { ...operation.adoption.historyReview!, status: "complete", coverage: copy(view.coverage), canConfirm: true }; operation.adoption.status = "proposal-ready"; delete operation.adoption.error;
-    } else { view.phase = "awaiting-user"; view.needsUserAction = { reason: result.reason ?? "node-attempt-limit" }; operation.adoption.status = "blocked"; operation.adoption.historyReview!.status = "interrupted"; }
+    } else { view.phase = "awaiting-user"; view.needsUserAction = { reason: result.reason ?? "result-incomplete" }; operation.adoption.status = "blocked"; operation.adoption.historyReview!.status = "interrupted"; }
     await refreshAgent(access, operation); await assertLive(); await save(access, operation); return result;
   }
 
@@ -1167,7 +1168,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
         if (!operation.agent || operation.adoption.status === "cancelled" || operation.detachedAt) throw new ResWorkflowError(409, "analysis-full-agent-not-resumable");
         const view = operation.adoption.agentJob!, g = view.grant, c = request.consent, requestHash = hash(request), prior = operation.agent.requests.find(r => r.id === request.requestId);
         if (prior) { if (prior.hash !== requestHash || prior.kind !== "authorize") throw new ResWorkflowError(409, "request-id-conflict"); return publicAdoption(operation); }
-        if (!g || view.phase !== "awaiting-authorization" || view.authorized || !c || c.analysisMode !== "full-history-agent-v2" || c.scope !== "research-files-and-normal-messages" || c.includeUnpublished !== true || c.grantHash !== g.grantHash || c.maxRequests !== g.maxRequests || c.policyId !== g.policy.id || c.unknownRetryMayBillAgain !== true || hash(request.model) !== hash(g.model)) throw new ResWorkflowError(409, "analysis-full-agent-grant-mismatch");
+        if (!g || view.phase !== "awaiting-authorization" || view.authorized || !c || c.analysisMode !== "full-history-agent-v2" || c.scope !== "research-files-and-normal-messages" || c.includeUnpublished !== true || c.grantHash !== g.grantHash || c.policyId !== g.policy.id || c.unknownRetryMayBillAgain !== true || hash(request.model) !== hash(g.model)) throw new ResWorkflowError(409, "analysis-full-agent-grant-mismatch");
         if (running.has(id)) throw new ResWorkflowError(409, "adoption-already-running");
         if (running.size >= 2) throw new ResWorkflowError(429, "adoption-capacity-busy");
         const current = await findModel(g.model.provider, g.model.id);
@@ -1293,7 +1294,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
           const prepared = await (deps.prepareFullHistoryMaterial ?? prepareFullHistoryMaterial)({ cwd: access.cwd, selectedHistories: selectedHistories.map(row => ({ ...row })), historyBindings: bindings.map(binding => ({ ...binding })), snapshotSources: directorySources, snapshotContent: Object.fromEntries(directorySources.map(source => [source.id, snapshot.content[source.id]])), snapshotFingerprint: operation.snapshotHash!, model: { provider: resolved.provider, id: resolved.id, fingerprint: resolved.fingerprint, contextWindow: resolved.contextWindow, maxTokens: resolved.maxTokens }, privateDir: fullDirectory(access, operation), signal: controller.signal, revalidate: assertLive, canReadHistory: async binding => { await assertLive(); return access.canReadHistory ? access.canReadHistory(binding) : true; }, readRetained: deps.readRetained });
           await assertLive();
           const metadata = prepared.publicPlan as ResWorkflowHistoryReviewPlan;
-          if (metadata.maxRequests !== prepared.privatePlan.nodes.length || metadata.maxRequests > 128 || metadata.histories.length !== selected.length || metadata.histories.some(row => !selected.includes(row.id))) throw new Error("analysis-full-plan-invalid");
+          if (metadata.maxRequests !== prepared.privatePlan.nodes.length || metadata.histories.length !== selected.length || metadata.histories.some(row => !selected.includes(row.id))) throw new Error("analysis-full-plan-invalid");
           operation.historyReview.plan = copy(metadata);
           operation.historyReview.materialPlanHash = metadata.planHash;
           operation.historyReview.prepareRequests.at(-1)!.planId = metadata.planId;
@@ -1315,7 +1316,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
 
     async analyzeHistoryReview(access: ResWorkflowAccess, id: string, request: ResWorkflowAnalyzeRequest): Promise<ResWorkflowAdoption> {
       const consent = request.consent;
-      if (!validRequestId(request.requestId) || !validAuthorization(request.model, consent) || consent.analysisMode !== "full-history-review-v1" || typeof consent.planId !== "string" || typeof consent.planHash !== "string" || !Number.isSafeInteger(consent.maxRequests)) throw new ResWorkflowError(400, "analysis-full-plan-consent-required");
+      if (!validRequestId(request.requestId) || !validAuthorization(request.model, consent) || consent.analysisMode !== "full-history-review-v1" || typeof consent.planId !== "string" || typeof consent.planHash !== "string" || consent.maxRequests !== undefined && !Number.isSafeInteger(consent.maxRequests)) throw new ResWorkflowError(400, "analysis-full-plan-consent-required");
       return locked(access, async () => {
         const operation = (await operationFor(access, id))!;
         if (operation.agent) throw new ResWorkflowError(409, "analysis-full-agent-v2-route-required");
@@ -1327,7 +1328,7 @@ export function createResWorkflowService(deps: ResWorkflowServiceDeps) {
         if (review?.authorization?.requestId === request.requestId) { if (review.authorization.requestHash !== requestHash) throw new ResWorkflowError(409, "request-id-conflict"); return publicAdoption(operation); }
         if (running.has(id)) throw new ResWorkflowError(409, "adoption-already-running");
         if (operation.adoption.status === "confirmed" || !metadata || operation.adoption.historyReview?.status !== "prepared" || review?.authorization) throw new ResWorkflowError(409, "analysis-full-prepared-plan-required");
-        if (metadata.planId !== consent.planId || metadata.planHash !== consent.planHash || metadata.maxRequests !== consent.maxRequests || metadata.model.provider !== request.model.provider || metadata.model.id !== request.model.id || metadata.blockers.length) throw new ResWorkflowError(409, "analysis-full-plan-consent-mismatch");
+        if (metadata.planId !== consent.planId || metadata.planHash !== consent.planHash || metadata.model.provider !== request.model.provider || metadata.model.id !== request.model.id || metadata.blockers.length) throw new ResWorkflowError(409, "analysis-full-plan-consent-mismatch");
         if (running.size >= 2) throw new ResWorkflowError(429, "adoption-capacity-busy");
         const signal = new AbortController().signal, plan = await fullPlan(access, operation, signal);
         const resolved = await findModel(request.model.provider, request.model.id);

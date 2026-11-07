@@ -4,10 +4,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, it } from "vitest";
 import { ApiContext, setGlobalApiBase } from "../../../lib/api/api-context.js";
-import { ResWorkflowIntakeBudgetApiError, updateResWorkflowAgentBudget } from "../../../lib/api/res-workflow-api.js";
 import { ResWorkflowIntakeAgent } from "../ResWorkflowIntakeAgent.js";
+import { zhCNCatalog } from "../../../lib/i18n/i18n-zh-CN.js";
 
-const CWD = "/isolated/intake-budget";
+const CWD = "/isolated/intake-authorization";
 const MODEL = { provider: "proxy", id: "test-model" };
 function job(authorized = false): Adoption {
   const policy = { id: "bounded-intake-v2", maxNodeAttempts: 3, maxJsonRepairsPerNode: 1, maxUnknownRetriesPerNode: 1, maxLengthEscalationsPerNode: 1, unknownRetryMayBillAgain: true, grantLifetimeMs: 86400000, initialOutputTokens: 4096, maxOutputTokens: 8192 };
@@ -26,30 +26,29 @@ let apiBase = "";
 const originalFetch = globalThis.fetch;
 const response = (adoption: Adoption) => new Response(JSON.stringify({ adoption }), { headers: { "content-type": "application/json" } });
 const find = <T extends HTMLElement = HTMLElement>(id: string): T => { const node = host.querySelector<T>(`[data-testid="${id}"]`); assert.ok(node, `missing ${id}`); return node; };
+const absent = (id: string) => assert.equal(host.querySelector(`[data-testid="${id}"]`), null);
 async function click(id: string) { await act(async () => { find(id).click(); }); }
-async function input(value: string) {
-  await act(async () => {
-    const node = find<HTMLInputElement>("res-workflow-intake-budget-limit");
-    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(node, value);
-    node.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
 async function draw(next: Adoption = latest) {
   latest = next;
   await act(async () => { root.render(<ApiContext.Provider value={apiBase}><ResWorkflowIntakeAgent cwd={next.cwd} job={next} onRefresh={() => {}} onJob={value => { accepted.push(value); latest = value; }} /></ApiContext.Provider>); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 }
+function authorizedReply(source = latest) {
+  const next = structuredClone(source);
+  next.status = "analyzing";
+  Object.assign(next.agentJob!, { authorized: true, workerActive: true, phase: "reviewing", authorizedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600000).toISOString() });
+  return next;
+}
 
 beforeEach(async () => {
-  // Await the lazy module before asserting synchronous controls in this unit harness.
   await import("../ResWorkflowIntakeBudgetControls.js");
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   latest = job(); calls = []; accepted = []; apiBase = ""; setGlobalApiBase("");
-  reply = async (body, url) => {
-    const next = structuredClone(latest);
-    if (url.endsWith("/authorize")) {
-      Object.assign(next.agentJob!, { authorized: true, workerActive: true, phase: "reviewing", authorizedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600000).toISOString() });
-      if (body.budget) Object.assign(next.agentJob!.budget, { effectiveMaxRequests: body.budget.maxRequests, revision: 1, policy: body.budget.maxRequests === null ? "unlimited" : "total-requests", ...(body.budget.maxRequests === null ? { unlimited: true } : {}) });
+  reply = async (_body, url) => {
+    const next = url.endsWith("/authorize") ? authorizedReply() : structuredClone(latest);
+    if (url.endsWith("/resume")) {
+      Object.assign(next.agentJob!, { workerActive: true, resumeRequired: false });
+      delete next.agentJob!.needsUserAction;
     }
     return response(next);
   };
@@ -57,36 +56,56 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); setGlobalApiBase(""); globalThis.fetch = originalFetch; });
 
-describe("intake budget editing", () => {
-  it("keeps the default authorization contract when the budget is only opened", async () => {
-    await draw(); await click("res-workflow-intake-budget-edit");
-    await click("res-workflow-intake-consent"); await click("res-workflow-intake-authorize");
-    assert.equal(calls.length, 1); assert.equal("budget" in calls[0].body, false);
-  });
-
-  it("binds fresh initial consent to the chosen cap and submits it with one authorization", async () => {
-    await draw(); await click("res-workflow-intake-consent");
-    await click("res-workflow-intake-budget-edit"); await input("8");
-    assert.equal(find<HTMLInputElement>("res-workflow-intake-consent").checked, false);
+describe("intake authorization without research caps", () => {
+  it("requires model/material consent, with no budget editor or cap authorization payload", async () => {
+    await draw();
+    assert.equal(calls.length, 0);
     assert.equal(find<HTMLButtonElement>("res-workflow-intake-authorize").disabled, true);
+    absent("res-workflow-intake-budget-edit"); absent("res-workflow-intake-budget-limit"); absent("res-workflow-intake-budget-unlimited");
+    assert.doesNotMatch(host.textContent!, /budget|request cap|remaining|reserve/i);
     await click("res-workflow-intake-consent"); await click("res-workflow-intake-authorize");
     assert.equal(calls.length, 1); assert.match(calls[0].url, /\/agent\/authorize$/);
-    assert.equal(calls[0].body.consent.maxRequests, 3);
-    assert.equal(calls[0].body.budget.maxRequests, 8);
-    assert.deepEqual(calls[0].body.budget.consent, { scope: "this-job", budgetMayIncreaseCharges: true, unknownRetryMayBillAgain: true });
-    assert.equal(accepted[0].agentJob!.budget.effectiveMaxRequests, 8);
+    assert.equal("budget" in calls[0].body, false);
+    assert.equal("maxRequests" in calls[0].body.consent, false);
+    assert.deepEqual(calls[0].body.model, MODEL);
+    assert.deepEqual(calls[0].body.consent, { analysisMode: "full-history-agent-v2", scope: "research-files-and-normal-messages", includeUnpublished: true, grantHash: "grant-one", policyId: "bounded-intake-v2", unknownRetryMayBillAgain: true });
+    assert.equal(accepted.length, 1);
   });
 
-  it("supports initial unlimited selection and clears an earlier finite-cap consent", async () => {
-    await draw(); await click("res-workflow-intake-budget-edit"); await input("7"); await click("res-workflow-intake-consent");
-    await click("res-workflow-intake-budget-unlimited");
-    assert.equal(find<HTMLInputElement>("res-workflow-intake-consent").checked, false);
+  it("accepts large material plans and does not require old quota metadata to match or be positive", async () => {
+    const large = job(), agent = large.agentJob!;
+    agent.plan!.batchCount = 199; agent.plan!.maxRequests = 200; agent.grant!.baseRequests = 200;
+    agent.grant!.maxRequests = 0; agent.grant!.retryReserve = 0;
+    Object.assign(agent.budget, { maxRequests: 0, effectiveMaxRequests: 0, remainingRequests: 0 });
+    await draw(large);
     await click("res-workflow-intake-consent"); await click("res-workflow-intake-authorize");
-    assert.equal(calls.length, 1); assert.equal(calls[0].body.budget.maxRequests, null);
-    assert.equal(accepted[0].agentJob!.budget.effectiveMaxRequests, null);
+    assert.equal(calls.length, 1); assert.equal("maxRequests" in calls[0].body.consent, false);
+    assert.equal(accepted.length, 1);
   });
 
-  it("still resumes unfinished local preparation without authorizing a paid request", async () => {
+  it("keeps consent through accounting updates but requires fresh consent for a different grant", async () => {
+    await draw(); await click("res-workflow-intake-consent");
+    const polled = structuredClone(latest);
+    Object.assign(polled.agentJob!.budget, { revision: 5, effectiveMaxRequests: 0, usedRequests: 4 });
+    await draw(polled);
+    assert.equal(find<HTMLInputElement>("res-workflow-intake-consent").checked, true);
+    polled.agentJob!.grant!.grantHash = "grant-two";
+    await draw(polled);
+    assert.equal(find<HTMLInputElement>("res-workflow-intake-consent").checked, false);
+    assert.equal(find<HTMLButtonElement>("res-workflow-intake-authorize").disabled, true);
+    assert.equal(calls.length, 0);
+  });
+
+  it("preserves actual call, recovery, in-flight, unknown-result and checkpoint accounting", async () => {
+    await draw(job(true));
+    assert.match(find("res-workflow-intake-usage").textContent!, /Actual calls 2.*first attempts 1.*recovery attempts 1.*in flight 1.*result unknown 1/);
+    assert.ok(find("res-workflow-intake-checkpoints")); assert.ok(find("res-workflow-intake-coverage"));
+    assert.match(host.textContent!, /4096.*8192.*tokens per request/);
+    absent("res-workflow-intake-budget-edit");
+    assert.equal(calls.length, 0);
+  });
+
+  it("still resumes unfinished local preparation without authorizing a model request", async () => {
     const preparing = job(); const agent = preparing.agentJob!;
     agent.phase = "preparing"; agent.resumeRequired = true; delete agent.plan; delete agent.grant;
     await draw(preparing);
@@ -94,106 +113,89 @@ describe("intake budget editing", () => {
     assert.equal("grantHash" in calls[0].body, false); assert.equal("consent" in calls[0].body, false);
   });
 
-  it("keeps polling drafts, supports finite to unlimited to below-used finite, and never resumes on save", async () => {
-    await draw(job(true)); await click("res-workflow-intake-budget-edit"); await input("9");
-    const polled = structuredClone(latest); polled.agentJob!.budget.usedRequests = 3; await draw(polled);
-    assert.equal(find<HTMLInputElement>("res-workflow-intake-budget-limit").value, "9");
-    await click("res-workflow-intake-budget-unlimited");
-    reply = async body => {
-      const next = structuredClone(latest); const budget = next.agentJob!.budget;
-      budget.effectiveMaxRequests = body.maxRequests; budget.revision = (budget.revision ?? 0) + 1; budget.policy = body.maxRequests === null ? "unlimited" : "total-requests";
-      if (body.maxRequests === null) budget.unlimited = true; else delete budget.unlimited;
-      next.agentJob!.workerActive = false; next.agentJob!.resumeRequired = true; return response(next);
-    };
-    await click("res-workflow-intake-budget-save-consent"); await click("res-workflow-intake-budget-save");
-    assert.equal(calls.length, 1); assert.equal(calls[0].body.maxRequests, null); assert.equal(calls[0].body.expectedRevision, 0);
-    assert.equal(accepted.length, 1); await draw(accepted[0]);
-    await click("res-workflow-intake-budget-edit"); await click("res-workflow-intake-budget-unlimited"); await input("0");
-    await click("res-workflow-intake-budget-save-consent"); await click("res-workflow-intake-budget-save");
-    assert.equal(calls.length, 2); assert.ok(calls.every(call => call.url.endsWith("/agent/budget")));
-    assert.equal(calls[1].body.maxRequests, 0); assert.equal(calls[1].body.expectedRevision, 1);
-    assert.equal(accepted[1].agentJob!.budget.usedRequests, 3);
+  for (const reason of ["budget-exhausted", "node-attempt-limit", "result-incomplete"] as const) {
+    it(`continues a ${reason} pause only on request, without editing a zero cap`, async () => {
+      const blocked = job(true), agent = blocked.agentJob!;
+      agent.phase = "awaiting-user"; agent.workerActive = false; agent.resumeRequired = true; agent.needsUserAction = { reason };
+      Object.assign(agent.budget, { maxRequests: 0, effectiveMaxRequests: 0, usedRequests: 400, remainingRequests: 0 });
+      await draw(blocked);
+      assert.equal(calls.length, 0); assert.ok(find("res-workflow-intake-resume"));
+      assert.doesNotMatch(host.textContent!, /budget|exhausted|attempt limit|request cap/i);
+      await click("res-workflow-intake-resume");
+      assert.equal(calls.length, 1); assert.match(calls[0].url, /\/agent\/resume$/);
+      assert.equal(calls[0].body.grantHash, "grant-one"); assert.equal("budget" in calls[0].body, false);
+    });
+  }
+
+  it("preserves expiry, model/material/access/storage blockers and cancellation", async () => {
+    for (const reason of ["authorization-expired", "model-changed", "access-required", "material-invalid", "storage-unavailable"] as const) {
+      const blocked = job(true), agent = blocked.agentJob!;
+      agent.phase = "awaiting-user"; agent.workerActive = false; agent.resumeRequired = true; agent.needsUserAction = { reason };
+      await draw(blocked); absent("res-workflow-intake-resume"); absent("res-workflow-intake-authorize");
+    }
+    const expired = job(true); expired.agentJob!.expiresAt = new Date(Date.now() - 1000).toISOString();
+    expired.agentJob!.workerActive = false; expired.agentJob!.resumeRequired = true;
+    await draw(expired); absent("res-workflow-intake-resume");
+    const cancelled = job(true); cancelled.status = "cancelled"; cancelled.agentJob!.workerActive = false; cancelled.agentJob!.resumeRequired = true;
+    await draw(cancelled); absent("res-workflow-intake-resume");
+    assert.equal(calls.length, 0);
   });
 
-  it("preserves a draft on revision conflict and requires explicit reload and fresh save consent", async () => {
-    await draw(job(true)); await click("res-workflow-intake-budget-edit"); await input("7");
-    await click("res-workflow-intake-budget-save-consent");
-    const next = structuredClone(latest); next.agentJob!.budget.revision = 1; next.agentJob!.budget.effectiveMaxRequests = 5; next.agentJob!.budget.policy = "total-requests";
-    await draw(next);
-    assert.equal(find<HTMLInputElement>("res-workflow-intake-budget-limit").value, "7");
-    assert.equal(find<HTMLButtonElement>("res-workflow-intake-budget-save").disabled, true);
-    assert.equal(find<HTMLInputElement>("res-workflow-intake-budget-save-consent").checked, false);
-    await click("res-workflow-intake-budget-reload");
-    assert.equal(find<HTMLInputElement>("res-workflow-intake-budget-limit").value, "5");
+  it("rejects a mismatched model, material plan, selection or invalid output limit before authorization", async () => {
+    for (const change of [
+      (candidate: Adoption) => { candidate.agentJob!.grant!.model = { ...MODEL, id: "other-model" }; },
+      (candidate: Adoption) => { candidate.agentJob!.grant!.materialPlanHash = "another-plan"; },
+      (candidate: Adoption) => { candidate.agentJob!.grant!.historySelection = ["unselected-history"]; },
+      (candidate: Adoption) => { candidate.agentJob!.grant!.policy.maxOutputTokens = 0; },
+    ]) {
+      const invalid = job(); change(invalid); await draw(invalid);
+      absent("res-workflow-intake-authorize"); assert.ok(find("res-workflow-intake-agent").querySelector('[role="alert"]'));
+    }
     assert.equal(calls.length, 0);
   });
 
   it("ignores late replies across directory and server switches", async () => {
-    await draw(job(true)); await click("res-workflow-intake-budget-edit"); await input("6");
+    await draw(); await click("res-workflow-intake-consent");
     let finish!: (value: Response) => void;
-    reply = () => new Promise(resolve => { finish = resolve; });
-    await click("res-workflow-intake-budget-save-consent"); await click("res-workflow-intake-budget-save");
-    const old = structuredClone(latest); old.agentJob!.budget.revision = 1; old.agentJob!.budget.effectiveMaxRequests = 6;
-    const other = job(true); other.cwd = "/isolated/other"; apiBase = "https://other.invalid"; setGlobalApiBase(apiBase); await draw(other);
+    const old = authorizedReply(); reply = () => new Promise(resolve => { finish = resolve; });
+    await click("res-workflow-intake-authorize");
+    const other = job(); other.cwd = "/isolated/other"; apiBase = "https://other.invalid"; setGlobalApiBase(apiBase); await draw(other);
     await act(async () => finish(response(old)));
     assert.equal(accepted.length, 0); assert.equal(calls.length, 1);
   });
 
-  it("saves a blocked job without dispatch, then continues only after an explicit click", async () => {
-    const blocked = job(true); blocked.agentJob!.phase = "awaiting-user"; blocked.agentJob!.workerActive = false;
-    blocked.agentJob!.needsUserAction = { reason: "budget-exhausted" };
-    await draw(blocked); await click("res-workflow-intake-budget-edit"); await input("10");
-    reply = async (body, url) => {
-      const next = structuredClone(latest);
-      if (url.endsWith("/budget")) {
-        next.agentJob!.budget.revision = 1; next.agentJob!.budget.effectiveMaxRequests = 10; next.agentJob!.budget.policy = "total-requests";
-        next.agentJob!.resumeRequired = true;
-      } else next.agentJob!.workerActive = true;
-      return response(next);
-    };
-    await click("res-workflow-intake-budget-save-consent"); await click("res-workflow-intake-budget-save"); await draw(accepted[0]);
-    assert.equal(calls.length, 1); assert.ok(find("res-workflow-intake-resume"));
-    await click("res-workflow-intake-resume");
-    assert.equal(calls.length, 2); assert.match(calls[1].url, /\/agent\/resume$/);
-    assert.equal(calls[1].body.grantHash, "grant-one"); assert.equal("budget" in calls[1].body, false);
+  it("never submits authorization twice while pending or after an uncertain result", async () => {
+    await draw(); await click("res-workflow-intake-consent");
+    let finish!: (value: Response) => void; reply = () => new Promise(resolve => { finish = resolve; });
+    await click("res-workflow-intake-authorize"); await click("res-workflow-intake-authorize");
+    assert.equal(calls.length, 1);
+    await act(async () => finish(new Response(JSON.stringify({ error: "PRIVATE MODEL OUTPUT AND HISTORY" }), { status: 503, headers: { "content-type": "application/json" } })));
+    assert.equal(host.textContent!.includes("PRIVATE MODEL OUTPUT"), false);
+    assert.equal(find<HTMLButtonElement>("res-workflow-intake-authorize").disabled, true);
+    await click("res-workflow-intake-consent"); await click("res-workflow-intake-authorize");
+    assert.equal(calls.length, 1); assert.equal(accepted.length, 0);
   });
 
-  it("does not roll back newer polled accounting or a completed proposal with a slow save reply", async () => {
-    await draw(job(true)); await click("res-workflow-intake-budget-edit"); await input("6");
-    let finish!: (value: Response) => void; reply = () => new Promise(resolve => { finish = resolve; });
-    await click("res-workflow-intake-budget-save-consent"); await click("res-workflow-intake-budget-save");
-    const delayed = structuredClone(latest); delayed.agentJob!.budget.revision = 1; delayed.agentJob!.budget.effectiveMaxRequests = 6; delayed.agentJob!.budget.policy = "total-requests";
+  it("does not adopt a mismatched authorization response", async () => {
+    await draw(); reply = async () => { const next = authorizedReply(); next.model = { ...MODEL, id: "different" }; return response(next); };
+    await click("res-workflow-intake-consent"); await click("res-workflow-intake-authorize");
+    assert.equal(accepted.length, 0); assert.match(host.textContent!, /authorization result could not be confirmed/i);
+  });
+
+  it("does not roll back newer polled accounting or a completed proposal with a slow reply", async () => {
+    await draw(); await click("res-workflow-intake-consent");
+    let finish!: (value: Response) => void; const delayed = authorizedReply(); reply = () => new Promise(resolve => { finish = resolve; });
+    await click("res-workflow-intake-authorize");
     const polled = structuredClone(delayed); polled.agentJob!.budget.usedRequests = 4; polled.agentJob!.completedNodes = 2; polled.agentJob!.phase = "proposal-ready";
     await draw(polled); await act(async () => finish(response(delayed)));
-    assert.equal(accepted.length, 0); assert.match(find("res-workflow-intake-budget").textContent!, /used 4/);
+    assert.equal(accepted.length, 0); assert.match(find("res-workflow-intake-usage").textContent!, /Actual calls 4/);
   });
 
-  it("keeps server failure text private and never retries uncertain saves", async () => {
-    await draw(job(true)); await click("res-workflow-intake-budget-edit"); await input("11");
-    reply = async () => new Response(JSON.stringify({ error: "PRIVATE MODEL OUTPUT AND HISTORY" }), { status: 503, headers: { "content-type": "application/json" } });
-    await click("res-workflow-intake-budget-save-consent"); await click("res-workflow-intake-budget-save");
-    assert.equal(calls.length, 1); assert.equal(host.textContent!.includes("PRIVATE MODEL OUTPUT"), false);
-    assert.equal(find<HTMLInputElement>("res-workflow-intake-budget-limit").value, "11");
-    assert.equal(find<HTMLButtonElement>("res-workflow-intake-budget-save").disabled, true);
-  });
-
-  it("refuses negative caps and preserves expiry without exposing expired editing", async () => {
-    await draw(job(true)); await click("res-workflow-intake-budget-edit"); await input("-1");
-    assert.equal(find<HTMLButtonElement>("res-workflow-intake-budget-save").disabled, true); assert.equal(calls.length, 0);
-    const expired = job(true); expired.agentJob!.expiresAt = new Date(Date.now() - 1000).toISOString(); expired.agentJob!.budget.editable = false;
-    await draw(expired);
-    assert.equal(find<HTMLButtonElement>("res-workflow-intake-budget-save").matches(":disabled"), true);
-    assert.equal(host.querySelector('[data-testid="res-workflow-intake-resume"]'), null);
-  });
-
-  it("rejects invalid requests before fetch and sanitizes non-JSON error responses", async () => {
-    const body = { cwd: CWD, requestId: "one-request", grantHash: "grant-one", expectedRevision: 0, maxRequests: -1, consent: { scope: "this-job" as const, budgetMayIncreaseCharges: true as const, unknownRetryMayBillAgain: true as const } };
-    await assert.rejects(updateResWorkflowAgentBudget("adopt-one", body), ResWorkflowIntakeBudgetApiError); assert.equal(calls.length, 0);
-    reply = async () => new Response("PRIVATE PROXY CONTENT", { status: 502, headers: { "content-type": "text/html" } });
-    await assert.rejects(updateResWorkflowAgentBudget("adopt-one", { ...body, maxRequests: 4 }), error => {
-      assert.ok(error instanceof ResWorkflowIntakeBudgetApiError); assert.equal(error.status, 502); assert.equal(error.message.includes("PRIVATE"), false); return true;
-    });
-    assert.equal(calls.length, 1); assert.equal(calls[0].url, "/api/res-workflow/adoptions/adopt-one/agent/budget");
-    assert.deepEqual(Object.keys(calls[0].body).sort(), ["consent", "cwd", "expectedRevision", "grantHash", "maxRequests", "requestId"]);
+  it("Chinese labels preserve authorization and usage without quota prompts", () => {
+    for (const key of ["research.intakeConsent", "research.intakeNeedsAuthorization", "research.intakePlanFirst", "research.intakeReadyToContinue", "research.intakeResumeExplicit", "research.intakeUsage", "research.intakeLegacyPause", "research.intakeResultIncomplete"]) {
+      assert.ok(zhCNCatalog[key]); assert.doesNotMatch(zhCNCatalog[key], /预算|额度|耗尽|请求上限|次数上限/);
+    }
+    assert.match(zhCNCatalog["research.intakeConsent"], /所选研究材料/);
+    assert.match(zhCNCatalog["research.intakeUsage"], /实际累计调用/);
   });
 });

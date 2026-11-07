@@ -33,14 +33,12 @@ export async function bindScopedResearchRuntime(runtime,descriptor,metadata={}){
   return proxy;
 }
 
-/** Only an explicit research_loop run calls this; saving budget never calls it. */
+/** Compatibility entrypoint for older scoped workflows; limits are not enforced. */
 export async function spawnBudgetedResearchWorkflow({pi,ctx,cwd,charterHash,launchId,params,store:providedStore}){
   const store=providedStore??await import('./research-budget.mjs');
   const parentSessionId=ctx.sessionManager.getSessionId();
   if(ctx.cwd!==cwd||typeof parentSessionId!=='string'||!parentSessionId)fail('research-budget-scope-mismatch');
-  const budget=store.readResearchBudget({cwd,charterHash});
-  if(!Number.isSafeInteger(budget.limits.attempts)||!Number.isSafeInteger(budget.limits.modelRequests))fail('research-budget-not-configured');
-  if(budget.usage.attempts>=budget.limits.attempts)fail('research-budget-attempts-exhausted');
+  store.readResearchBudget({cwd,charterHash});
   const ping=await rpc(pi,'ping');
   if(ping?.researchBudgetProtocol!==1)fail('research-budget-bridge-unavailable-open-new-session');
   const scopeId='research-'+launchId;

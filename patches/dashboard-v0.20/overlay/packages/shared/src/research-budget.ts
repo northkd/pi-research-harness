@@ -1,4 +1,4 @@
-/** Null read limits mean unconfigured, never unlimited. Updates require both explicit limits. */
+/** Effective limits are unlimited (null); legacy finite policy records remain readable for accounting. */
 export interface ResWorkflowResearchBudget {
   cwd: string;
   revision: string | null;

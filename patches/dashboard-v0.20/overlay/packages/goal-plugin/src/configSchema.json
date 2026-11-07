@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Goal continuation plugin configuration",
+  "description": "Per-plugin (global) configuration for the goal-plugin. The judge model is owned by the @ricoyudog/pi-goal-hermes extension; this config only governs the dashboard surfaces. Turn and spend usage is observational.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "When false, the plugin is inactive (no chip, no control). Default-enabled when the @ricoyudog/pi-goal-hermes extension is installed."
+    }
+  }
+}

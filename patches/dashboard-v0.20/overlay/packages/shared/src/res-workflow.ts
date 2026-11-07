@@ -54,7 +54,7 @@ export interface ResWorkflowModel {
   id: string;
 }
 
-/** V2 grants never upgrade existing v1 consent or cancelled operations. */
+/** V2 grants never upgrade existing v1 consent or cancelled operations. Count fields are historical plan metadata, not quotas. */
 export interface ResWorkflowAgentPolicy {
   id: "bounded-intake-v2";
   maxNodeAttempts: 3;
@@ -94,7 +94,8 @@ export interface ResWorkflowAgentAuthorizeRequest {
     scope: "research-files-and-normal-messages";
     includeUnpublished: true;
     grantHash: string;
-    maxRequests: number;
+    /** Optional legacy workload estimate; grantHash binds the authorized plan. */
+    maxRequests?: number;
     policyId: "bounded-intake-v2";
     unknownRetryMayBillAgain: true;
   };
@@ -128,7 +129,7 @@ export interface ResWorkflowAgentJob {
   budget: { baseRequests: number; retryReserve: number; maxRequests: number; effectiveMaxRequests?: number | null; revision?: number; editable?: boolean; editBlockedReason?: "authorization-required" | "authorization-expired" | "cancelled" | "completed"; policy?: "original-bounded" | "total-requests" | "unlimited"; usedRequests: number; baseUsed: number; recoveryUsed: number; remainingRequests: number; inFlightRequests: number; unknownRequests: number; unlimited?: true; authorization?: { scope: "this-job"; authorizationHash: string; authorizedAt: string; expiresAt: string } };
   completedNodes: number;
   reusedCheckpoints: number;
-  needsUserAction?: { reason: "authorization-required" | "authorization-expired" | "budget-exhausted" | "node-attempt-limit" | "model-changed" | "access-required" | "material-invalid" | "storage-unavailable" };
+  needsUserAction?: { reason: "authorization-required" | "authorization-expired" | "budget-exhausted" | "node-attempt-limit" | "result-incomplete" | "model-changed" | "access-required" | "material-invalid" | "storage-unavailable" };
 }
 
 export interface ResWorkflowConsent {

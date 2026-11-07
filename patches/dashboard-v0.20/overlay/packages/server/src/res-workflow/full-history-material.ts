@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { streamLocalHistory, type FullHistoryExtractionCoverage } from "./local-history-stream.js";
 
-export const FULL_HISTORY_MATERIAL_LIMITS = Object.freeze({ textBytes: 32 * 1024 * 1024, sources: 50000, batchBytes: 128 * 1024, chunkBytes: 64 * 1024, batchSources: 128, requests: 128, summaryBytes: 8192, fanIn: 4, systemReserve: 4096, artifactBytes: 64 * 1024 * 1024, prepareMs: 180000, readMs: 15000 });
+export const FULL_HISTORY_MATERIAL_LIMITS = Object.freeze({ textBytes: 32 * 1024 * 1024, sources: 50000, batchBytes: 128 * 1024, chunkBytes: 64 * 1024, batchSources: 128, summaryBytes: 8192, fanIn: 4, systemReserve: 4096, artifactBytes: 64 * 1024 * 1024, prepareMs: 180000, readMs: 15000 });
 type Binding = { id?: string; cwd?: string; sessionFile?: string; originDeviceId?: string };
 type Selected = { id: string; sessionId: string; kind: "local" | "retained" };
 type Source = { id: string; kind: "file" | "artifact" | "session-message"; label: string; sessionId?: string; entryId?: string; path?: string; timestamp?: string; sha256: string; bytes: number; incomplete: boolean; unverified: true };
@@ -32,7 +32,7 @@ export interface FullHistoryMaterialOptions extends GateOptions {
   readRetained?(sessionId: string, maxBytes: number): Promise<{ raw: string; retained: boolean; complete: boolean }>;
   snapshotSources?: Source[]; snapshotContent?: Record<string, string>; snapshotFingerprint?: string;
 }
-const fail = (code: string): never => { throw new Error(code); };
+function fail(code: string): never { throw new Error(code); }
 function normalizeOutputTokenLimit(modelMaxTokens: number, requested?: number): number {
   if (requested === undefined) return Math.min(modelMaxTokens, 8192);
   if (!Number.isSafeInteger(requested) || requested <= 0 || requested > Math.min(modelMaxTokens, 16384)) fail("history-full-output-token-limit-invalid");
@@ -196,7 +196,7 @@ export async function prepareFullHistoryMaterial(options: FullHistoryMaterialOpt
           nodes.push({ id, kind: "batch", inputNodeIds: [], sourceIds: unique, historyId: group.id, scope: group.scope, materialHash: material.sha256, materialFile: material.name, eligibleMessages: group.scope === "history" ? chunks.filter(c => c.endOffsetBytes === c.totalBytes).length : 0, eligibleBytes: group.scope === "history" ? chunks.reduce((n, c) => n + c.endOffsetBytes - c.offsetBytes, 0) : 0 });
           for (const chunk of chunks) sourceRecords.get(chunk.id)!.chunks.push({ nodeId: id, offsetBytes: chunk.offsetBytes, endOffsetBytes: chunk.endOffsetBytes });
           progress.packedBatches++; await notify("packing");
-          if (nodes.length >= limits.requests) fail("history-full-request-cap-exceeded"); chunks = [];
+          chunks = [];
         };
         for (const item of group.sources) {
           const bytes = Buffer.from(item.content); let at = 0;
@@ -219,11 +219,10 @@ export async function prepareFullHistoryMaterial(options: FullHistoryMaterialOpt
       while (level.length > fanIn) {
         const next: FullHistoryMaterialNode[] = [];
         for (let at = 0; at < level.length; at += fanIn) { const children = level.slice(at, at + fanIn); if (children.length === 1) { next.push(children[0]); continue; } const node: FullHistoryMaterialNode = { id: `node-${String(nodes.length + 1).padStart(4, "0")}`, kind: "merge", inputNodeIds: children.map(n => n.id), sourceIds: [...new Set(children.flatMap(n => n.sourceIds))] }; nodes.push(node); next.push(node); }
-        level = next; if (nodes.length >= limits.requests) fail("history-full-request-cap-exceeded");
+        level = next;
       }
       if (!level.length) fail("no-authorized-materials");
       nodes.push({ id: `node-${String(nodes.length + 1).padStart(4, "0")}`, kind: "final", inputNodeIds: level.map(n => n.id), sourceIds: [...new Set(level.flatMap(n => n.sourceIds))] });
-      if (nodes.length > limits.requests) fail("history-full-request-cap-exceeded");
     }
     for (const row of histories) row.chunkCount = nodes.filter(n => n.kind === "batch" && n.historyId === row.id).length;
     const batchCount = nodes.filter(n => n.kind === "batch").length, publicCore = { planId, model: { provider: model.provider, id: model.id }, contextWindow: model.contextWindow, maxTokens: outputTokenLimit, maxRequests: nodes.length, batchCount, mergeCallCount: nodes.filter(n => n.kind !== "batch").length, eligibleMessages, eligibleBytes, histories, blockers: [...new Set(blockers)], directorySnapshot: { sourceCount: directorySources.length, bytes: directorySources.reduce((n, s) => n + s.source.bytes, 0), batchCount: nodes.filter(n => n.kind === "batch" && n.scope === "directory-snapshot").length, metadataOnlyArtifacts: directorySources.filter(s => s.source.kind === "artifact").length, bounded: true } };
@@ -244,7 +243,7 @@ export async function readFullHistoryPlan(options: GateOptions & { privateDir: s
     try { const opened = await rawHandle.stat(); regular(opened); if (!same(stamp(opened), expectedStamp)) fail("history-full-plan-changed"); while (at < descriptor.bytes) { await anchor.connected(); const buffer = Buffer.alloc(Math.min(65536, descriptor.bytes - at)), value = await rawHandle.read(buffer, 0, buffer.length, at); if (!value.bytesRead) fail("history-full-plan-changed"); parts.push(buffer.subarray(0, value.bytesRead)); at += value.bytesRead; } if (!same(stamp(await rawHandle.stat()), expectedStamp) || !same(stamp(await fs.lstat(anchor.leaf("plan.json"))), expectedStamp)) fail("history-full-plan-changed"); } finally { await rawHandle.close(); }
     const raw = Buffer.concat(parts, descriptor.bytes); descriptor.sha256 = digest(raw); const seal = stamp(await anchor.chain.at(-1)!.handle.stat()); if (planDigest(descriptor, seal, privateDir) !== options.expectedPlanHash) fail("history-full-plan-changed");
     let core: any; try { core = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)); } catch { fail("history-full-plan-invalid"); }
-    if (core.schema !== "pi-full-history-material.v1" || core.planId !== options.planId || core.scope?.privateDir !== privateDir || core.scope?.platform !== platform || !Array.isArray(core.nodes) || core.nodes.length !== core.maxRequests || core.maxRequests > 128 || !Array.isArray(core.sourceIndex) || core.sourceIndex.length > 50000 || !Array.isArray(core.artifacts)) fail("history-full-plan-invalid");
+    if (core.schema !== "pi-full-history-material.v1" || core.planId !== options.planId || core.scope?.privateDir !== privateDir || core.scope?.platform !== platform || !Array.isArray(core.nodes) || core.nodes.length !== core.maxRequests || !Number.isSafeInteger(core.maxRequests) || core.maxRequests < 0 || !Array.isArray(core.sourceIndex) || core.sourceIndex.length > 50000 || !Array.isArray(core.artifacts)) fail("history-full-plan-invalid");
     if (!Number.isSafeInteger(core.model?.maxTokens) || core.model.maxTokens <= 0 || core.publicPlan?.maxTokens !== normalizeOutputTokenLimit(core.model.maxTokens, core.outputTokenLimit)) fail("history-full-plan-invalid");
     const plan = freeze({ ...core, planHash: options.expectedPlanHash, publicPlan: { ...core.publicPlan, planHash: options.expectedPlanHash } }) as FullHistoryPrivatePlan; authorities.set(plan, { directory: anchor.target, seal, planFile: descriptor }); await anchor.connected(); return plan;
   } finally { await anchor.close(); }

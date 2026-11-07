@@ -28,14 +28,12 @@
     "model": "<exact-model-id>",
     "upstreamHost": "<exact-upstream-host>",
     "project": "<absolute-path-to-the-one-approved-project>",
-    "materialMode": "metadata",
-    "maxCallsPerDay": 12
+    "materialMode": "metadata"
   },
   "packet": {
     "mode": "metadata"
   },
   "idleAfterMs": 300000,
   "cooldownMs": 3600000,
-  "maxRequestsPerProjectPerDay": 8,
   "skipAuditIntervalMs": 600000
 }

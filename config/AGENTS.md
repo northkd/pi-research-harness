@@ -3,6 +3,8 @@
 Define question, success criteria, allowed material and user-specified resource limits before acting.
 Main agent owns evidence indexing and final judgment.
 
+Research budget is controlled by the user. Do not invent or require ceilings for research attempts, model requests, Goal turns, retries, or spending, and do not stop because a legacy quota is exhausted. Record actual usage and honor explicit user stop/pause and the existing material/model/project scope. Model context capacity, individual request timeouts and resource admission remain operational constraints.
+
 - Establish claim/source/location/conditions records; summaries are not substitutes for decisive primary evidence.
 - For independent derivations use fresh contexts and the same assumptions; keep first-pass answers separate. Do not claim independence from model labels alone.
 - Give narrow subagents only the skills needed for the assigned task, usually zero to two. `research-theory` starts fresh without an inherited global skill catalog or default skill list; use the native per-call `skill` selector for a required method and pass its path when needed. Selected skills expose metadata first and are read on demand. Do not paste the parent skill catalog or every SKILL.md into the task/system prompt. Explicit `skill: false` clears the selected list but does not itself disable `inheritSkills`.

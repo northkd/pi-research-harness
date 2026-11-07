@@ -29,14 +29,16 @@ async function render(value?: ResearchWorkbenchObservation, stale = false) {
 }
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; element?.remove(); vi.clearAllMocks(); });
 
-test("observed responses update while physical budget usage stays independent", async () => {
+test("legacy hosts see observed usage without cap inputs or budget API requests", async () => {
   await render(observation);
   expect(element.querySelector('[data-testid="research-budget-observed-responses"]')?.textContent).toContain("17");
-  expect(element.querySelector('[data-testid="research-budget-model-row"]')?.textContent).toContain("未接管");
-  expect(element.querySelector('[data-testid="research-budget-observed-usage"]')?.textContent).toContain("不能相加");
+  expect(element.querySelector('input')).toBeNull();
+  expect(element.textContent).not.toMatch(/预算|额度|剩余|执行约束/);
+  expect(element.textContent).toContain("费用请在计费明细中核对");
   await render({ ...observation, observedUsage: { ...observation.observedUsage, responses: 18 } });
   expect(element.querySelector('[data-testid="research-budget-observed-responses"]')?.textContent).toContain("18");
   const api = await import("../../../lib/api/res-workflow-api.js");
+  expect(api.getResWorkflowResearchBudget).not.toHaveBeenCalled();
   expect(api.updateResWorkflowResearchBudget).not.toHaveBeenCalled();
 });
 
@@ -48,7 +50,7 @@ test("missing, stale and partial observation never promise zero or exact physica
   expect(text).toContain("过期"); expect(text).toContain("补齐"); expect(text).toContain("重试");
 });
 
-test("another directory or unsafe counts never appear in the budget panel", async () => {
+test("another directory or unsafe counts never appear in the usage panel", async () => {
   await render({ ...observation, cwd: "/another" });
   expect(element.querySelector('[data-testid="research-budget-observed-responses"]')).toBeNull();
   await render({ ...observation, observedUsage: { ...observation.observedUsage, responses: -1 } });

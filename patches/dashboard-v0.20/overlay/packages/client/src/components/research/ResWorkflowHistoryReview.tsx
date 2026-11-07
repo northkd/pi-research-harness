@@ -25,7 +25,7 @@ export function historyReviewFailureLabel(value: unknown): string | null {
     case "analysis-full-result-unknown-no-replay":
     case "result-unknown":
     case "request-timeout-result-unknown":
-      return t("research.historyResultUnknown", undefined, "The system will not replay the earlier model request because its complete result is unconfirmed. That request may already have incurred charges. You may explicitly prepare a new plan, then review and authorize its additional budget separately.");
+      return t("research.historyResultUnknown", undefined, "The system will not replay the earlier model request because its complete result is unconfirmed. That request may already have incurred charges. You may explicitly prepare a new plan, then review its model and material scope before authorizing it.");
     case "analysis-full-known-invalid-new-plan-required":
     case "analysis-full-known-invalid-output-new-plan-required":
     case "analysis-full-known-invalid-source-new-plan-required":
@@ -79,7 +79,7 @@ function validPlan(plan: Plan): boolean {
   const reused = plan.reusedRequests ?? 0;
   return typeof plan.planId === "string" && !!plan.planId && typeof plan.planHash === "string" && !!plan.planHash &&
     !!pair(plan.model) && [plan.contextWindow, plan.maxTokens, plan.maxRequests, plan.batchCount, plan.mergeCallCount, total, reused].every(count) &&
-    plan.maxRequests > 0 && plan.maxRequests + reused === total && total === plan.batchCount + plan.mergeCallCount &&
+    plan.maxRequests + reused === total && total === plan.batchCount + plan.mergeCallCount &&
     Array.isArray(plan.histories) && plan.histories.every(history => !history.blockers?.length) && Array.isArray(plan.blockers) && plan.blockers.length === 0;
 }
 function matchesSelection(plan: Plan, job: Adoption): boolean {
@@ -150,7 +150,7 @@ export function ResWorkflowHistoryReview({ job, cwd, onJob, onRefresh, autoPrepa
   const plan = prepared && pair(prepared.model) === selected ? prepared : undefined;
   const planCurrent = !!plan && !!selectedModel && !modelLoading && !modelError && review?.status === "prepared" &&
     review.plan?.planId === plan.planId && review.plan?.planHash === plan.planHash && validPlan(plan) && matchesSelection(plan, job);
-  const planBinding = planCurrent ? JSON.stringify([scope, plan!.planId, plan!.planHash, plan!.maxRequests, selected]) : "";
+  const planBinding = planCurrent ? JSON.stringify([scope, plan!.planId, plan!.planHash, selected]) : "";
   const consentRef = useRef(consent);
   consentRef.current = consent;
   const canPrepare = !!selectedModel && !modelLoading && !modelError && !busy && !running;
@@ -199,7 +199,7 @@ export function ResWorkflowHistoryReview({ job, cwd, onJob, onRefresh, autoPrepa
     controller.current = abort; inFlight.current = true; setBusy(true); setError(null); setConsent(null); consentRef.current = null;
     try {
       const next = await analyzeResWorkflowHistoryReview(job.id, { cwd, requestId: randomUuid(), model: { provider: selectedModel.provider, id: selectedModel.id }, consent: {
-        scope: "research-files-and-normal-messages", includeUnpublished: true, analysisMode: "full-history-review-v1", planId: plan.planId, planHash: plan.planHash, maxRequests: plan.maxRequests,
+        scope: "research-files-and-normal-messages", includeUnpublished: true, analysisMode: "full-history-review-v1", planId: plan.planId, planHash: plan.planHash,
       } }, abort.signal);
       if (!fresh(token, captured, abort.signal)) return;
       if (next.id !== job.id || next.cwd !== cwd || next.historyReview?.plan?.planId !== plan.planId || next.historyReview.plan.planHash !== plan.planHash) throw new Error("scope-mismatch");
@@ -221,7 +221,7 @@ export function ResWorkflowHistoryReview({ job, cwd, onJob, onRefresh, autoPrepa
   const historyNames = new Map((job.selectedHistories ?? []).map(history => [history.id, history.name || `Pi ${history.sessionId}`]));
   return <div data-testid="res-workflow-history-review" className="space-y-3 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
     <h3 className="font-semibold">{t("research.historyReviewTitle", undefined, "Selected histories · full normal-text review")}</h3>
-    <p>{complete ? t("research.historyReviewComplete", undefined, "All selected histories reviewed · draft awaits your confirmation") : review?.status === "running" ? t("research.historyReviewRunning", undefined, "Model review is running. A draft cannot be confirmed until all selected histories and batches are covered.") : job.proposal ? t("research.historyReviewRequired", undefined, "The directory draft is retained. Selected histories are not yet fully covered, so confirmation is disabled.") : review?.status === "prepared" ? t("research.historyPreparedNoDraft", undefined, "The local plan is ready for a new authorization. There is no draft to confirm yet. Review the additional request budget before checking the box.") : t("research.historyNoDraftYet", undefined, "There is no draft to confirm yet. Prepare a local full-history plan, then review its budget before authorizing new model requests.")}</p>
+    <p>{complete ? t("research.historyReviewComplete", undefined, "All selected histories reviewed · draft awaits your confirmation") : review?.status === "running" ? t("research.historyReviewRunning", undefined, "Model review is running. A draft cannot be confirmed until all selected histories and batches are covered.") : job.proposal ? t("research.historyReviewRequired", undefined, "The directory draft is retained. Selected histories are not yet fully covered, so confirmation is disabled.") : review?.status === "prepared" ? t("research.historyPreparedNoDraft", undefined, "The local plan is ready for a new authorization. There is no draft to confirm yet. Review the model and material scope before checking the box.") : t("research.historyNoDraftYet", undefined, "There is no draft to confirm yet. Prepare a local full-history plan, then review its model and material scope before authorizing execution.")}</p>
     <div data-testid="res-workflow-history-coverage" role="status" aria-live="polite" className="space-y-1 text-[var(--text-secondary)]">
       <p>{t("research.historyCoverageCount", { done: coverage.completedHistories, total: coverage.selectedHistories }, "Histories covered {done} / {total}")}</p>
       <p>{t("research.historyModelHistories", { count: Math.max(0, coverage.completedHistories - (coverage.emptyHistories ?? 0)), empty: coverage.emptyHistories ?? 0 }, "Histories processed by the model {count} · locally verified empty histories {empty} (no model call)")}</p>
@@ -240,14 +240,14 @@ export function ResWorkflowHistoryReview({ job, cwd, onJob, onRefresh, autoPrepa
       {autoPrepare && job.status === "inventory" && <p>{t("research.historyLocalWaiting", undefined, "Local inventory is running. The requested full-history plan will be prepared after inventory finishes; this does not call a model.")}</p>}
       {!requiresNewPlan && <button type="button" className={BUTTON} data-testid="res-workflow-history-prepare" disabled={!canPrepare} onClick={() => void prepare()}>{t("research.historyPrepareCount", { count: selectedHistoryCount(job) }, "Prepare a full-text plan for {count} histories (does not call a model)")}</button>}
       {requiresNewPlan && <div className="space-y-2" data-testid="res-workflow-history-recovery">
-        <p>{t("research.historyNewPlanExplanation", undefined, "The earlier request will not be repeated. This action only prepares a distinct local plan and preserves the earlier attempt. Its additional model-request budget must be reviewed and authorized with a new checkbox before any model execution.")}</p>
+        <p>{t("research.historyNewPlanExplanation", undefined, "The earlier request will not be repeated. This action only prepares a distinct local plan and preserves the earlier attempt. Review the new plan and its model/material scope before authorizing execution.")}</p>
         <button type="button" className={BUTTON} data-testid="res-workflow-history-new-plan" disabled={!canPrepare || !recoveryAvailable} onClick={() => void prepare(true)}>{t("research.historyPrepareNewPlanOnly", undefined, "Prepare a new plan only (no model call)")}</button>
         {!recoveryAvailable && <p>{t("research.historyRecoveryRefresh", undefined, "Refresh the current task to obtain its exact earlier plan before preparing a new one.")}</p>}
       </div>}
     </>}
     {displayPlan && <div data-testid="res-workflow-history-plan" className="space-y-2 border-t border-[var(--border-secondary)] pt-3">
       <p className="break-all font-semibold">{t("research.recipient", undefined, "Recipient")} · {pair(displayPlan.model)}</p>
-      <p>{t("research.historyPlanBudget", { count: displayPlan.maxRequests }, "This authorization: up to {count} model requests, which may incur charges")}</p>
+      <p>{t("research.historyPlanWorkload", { count: displayPlan.maxRequests }, "Planned workload: {count} model requests; charges follow actual usage")}</p>
       <p>{t("research.historyPlanBatches", { batches: displayPlan.batchCount, merges: displayPlan.mergeCallCount }, "Full plan: {batches} reading batches + {merges} merge requests")}{(displayPlan.reusedRequests ?? 0) > 0 && ` · ${t("research.historyPlanReuse", { count: displayPlan.reusedRequests! }, "{count} completed requests reused; not sent again")}`}</p>
       <p>{t("research.historyPlanTokens", { context: displayPlan.contextWindow, output: displayPlan.maxTokens }, "Model context limit {context} tokens · output limit per request {output} tokens")}</p>
       {displayPlan.directorySnapshot && <p data-testid="res-workflow-history-directory-snapshot">{t("research.historyDirectorySnapshot", { sources: displayPlan.directorySnapshot.sourceCount, bytes: displayPlan.directorySnapshot.bytes, batches: displayPlan.directorySnapshot.batchCount, artifacts: displayPlan.directorySnapshot.metadataOnlyArtifacts }, "Directory: bounded frozen snapshot only · {sources} sources · {bytes} text bytes · {batches} batches · {artifacts} artifacts described by metadata only. Earlier sampled history text is excluded from this directory scope.")}</p>}
@@ -256,7 +256,7 @@ export function ResWorkflowHistoryReview({ job, cwd, onJob, onRefresh, autoPrepa
       <p>{t("research.historyPrivacyScope", undefined, "Only authorized directory material and the selected histories' normal text may be sent to this physical model/provider. This may include unpublished research. Thinking, tool arguments, credentials and raw logs are excluded. No experiments run and no old session is restored.")}</p>
       {displayPlan.blockers.length > 0 && <ul role="alert">{displayPlan.blockers.map(code => <li key={code}>{code}</li>)}</ul>}
       {planCurrent && !running && <>
-        <label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0" data-testid="res-workflow-history-consent" checked={consent === planBinding} disabled={busy} onChange={event => { const value = event.target.checked ? planBinding : null; consentRef.current = value; setConsent(value); }} /><span>{t("research.historyFullConsent", { count: displayPlan.maxRequests }, "I authorize this exact full-history plan and physical model for up to {count} additional model requests, which may incur charges. I will review the resulting draft before confirmation. This does not authorize experiments, session restoration or publication.")}</span></label>
+        <label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0" data-testid="res-workflow-history-consent" checked={consent === planBinding} disabled={busy} onChange={event => { const value = event.target.checked ? planBinding : null; consentRef.current = value; setConsent(value); }} /><span>{t("research.historyFullConsent", undefined, "I authorize this exact full-history plan and physical model to process the selected materials, which may include unpublished research. I will review the resulting draft before confirmation. This does not authorize experiments, session restoration or publication.")}</span></label>
         <button type="button" className={BUTTON} data-testid="res-workflow-history-analyze" disabled={busy || consent !== planBinding} onClick={() => void analyze()}>{t("research.historyAuthorizePlan", undefined, "Authorize this plan and review full histories")}</button>
       </>}
     </div>}

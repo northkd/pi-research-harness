@@ -42,9 +42,15 @@ The model call is never made on a fixed tick alone. The daemon also requires:
 
 - an idle threshold (`idleAfterMs`) since the project was first observed idle;
 - a content fingerprint different from the last classified fingerprint;
-- cooldown and per-project daily request limits, retained across charter/adoption changes;
+- cooldown, retained across charter/adoption changes;
 - no active exponential backoff;
 - one request at a time across all projects.
+
+Research budget is controlled by the user. There is no project daily request
+ceiling. Legacy `maxRequestsPerProjectPerDay` and `authorization.maxCallsPerDay`
+values do not gate requests. Daily usage and the audit trail remain recorded;
+unchanged evidence, cooldown, backoff and explicit material/model/project
+authorization still govern when a classification can run.
 
 After the model responds, dashboard sessions, workbench observation, packet
 fingerprint, the discovered scope and the charter hash are re-read. If anything
@@ -253,8 +259,7 @@ Before enabling, obtain explicit confirmation for:
 - the exact external upstream host, provider and model id;
 - the loopback proxy/base URL and who operates its upstream;
 - the material scope (`metadata` or the exact approved extract file paths);
-- the one project in `projectAllowlist` and `authorization.project`;
-- the daily request and cost expectations.
+- the one project in `projectAllowlist` and `authorization.project`.
 
 A loopback URL by itself is not export permission. Without this authorization,
 leave `enabled: false` or omit the `authorization` object; the daemon reports a

@@ -19,8 +19,6 @@ function assertReady(store, descriptor, signal) {
   const scope = store.readResearchBudgetScope(descriptor);
   if (scope.scopeId !== descriptor.scopeId || scope.parentSessionId !== descriptor.parentSessionId) fail('research-budget-scope-mismatch');
   const snapshot = store.readResearchBudget(descriptor);
-  if (!Number.isSafeInteger(snapshot.limits.attempts) || !Number.isSafeInteger(snapshot.limits.modelRequests)) fail('research-budget-not-configured');
-  if (snapshot.usage.attempts >= snapshot.limits.attempts) fail('research-budget-attempts-exhausted');
   checkSignal(signal);
   return snapshot;
 }
@@ -38,7 +36,7 @@ function guardedResponse(response, settle, signal) {
   return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
 }
 
-/** One proxy per admitted research scope; the original shared runtime is never changed. */
+/** Scope-bound usage accounting only; the original shared runtime is never changed. */
 export async function bindResearchBudgetRuntime(runtime, descriptor, options={}) {
   if (!sameScope(descriptor, descriptor) || typeof descriptor.cwd !== 'string' || typeof descriptor.scopeId !== 'string' || typeof descriptor.parentSessionId !== 'string') fail('research-budget-scope-mismatch');
   const store=options.store ?? await import('./research-budget.mjs');

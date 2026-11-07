@@ -1,0 +1,189 @@
+{
+  "schema": "pi-research.no-research-caps-validation.v1",
+  "date": "2026-11-07",
+  "baselineHarnessCommit": "0dafb83ea41a8d9ca0e57914495cc80b3cb7d7ba",
+  "upstreamDashboardCommit": "65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0",
+  "environment": {
+    "node": "24.22.1",
+    "pi": "1.3.0",
+    "goal": "0.1.0",
+    "provider": "synthetic; no external inference"
+  },
+  "checks": {
+    "npmTest": {
+      "core": {
+        "tests": 414,
+        "passed": 414,
+        "failed": 0,
+        "skipped": 0
+      },
+      "mainlineSupervision": {
+        "tests": 64,
+        "passed": 64,
+        "failed": 0,
+        "skipped": 0
+      }
+    },
+    "nativeBudgetIdleAndGoalInstaller": {
+      "tests": 51,
+      "passed": 51,
+      "failed": 0
+    },
+    "intakeBackend": {
+      "tests": 25,
+      "passed": 25,
+      "failed": 0,
+      "suites": {
+        "agentBudget": 7,
+        "confirmConnection": 13,
+        "actualSdkAndMaterialPlan": 5
+      }
+    },
+    "intakeClient": {
+      "files": 5,
+      "tests": 44,
+      "passed": 44,
+      "failed": 0
+    },
+    "goalPlugin": {
+      "tests": 188,
+      "passed": 188,
+      "failed": 0,
+      "typecheck": "passed"
+    },
+    "dashboardTypecheck": {
+      "command": "node scripts/tsc7.mjs --noEmit",
+      "exitCode": 0
+    },
+    "dashboardBuild": {
+      "client": "passed",
+      "precompression": "passed",
+      "teamApp": "passed",
+      "demoEntry": "installed in isolated checkout",
+      "nodeHeapMiB": 4096,
+      "initialAttempt": "The default roughly 2 GiB Node heap ran out after Vite emitted bundles; the same source built successfully with a 4 GiB build-process heap.",
+      "warnings": [
+        "Existing minimatch default-export compatibility warning",
+        "Large bundled chunks"
+      ]
+    },
+    "dashboardOverlay": {
+      "files": 675,
+      "changedAfterVerification": 0,
+      "sourceSnapshotUnchangedDuringBuild": true
+    },
+    "syntax": "passed",
+    "releaseFindings": [],
+    "gitDiffCheck": {
+      "result": "passed",
+      "scope": "source and documentation; unified-diff payloads excluded because context prefixes preserve required whitespace"
+    }
+  },
+  "regressionEvidence": {
+    "legacyBudget": {
+      "absentPolicy": "allowed",
+      "zeroOrFinitePolicy": "ignored for dispatch; original policy bytes preserved",
+      "physicalRetries": "accounted independently"
+    },
+    "intakeStore": {
+      "requestsInLegacyZeroCapFixture": 131,
+      "coldRestore": "passed",
+      "grantUnchanged": true,
+      "fabricatedConsentOrRevision": false
+    },
+    "intakeReadonlySdk": {
+      "modelRequests": 9,
+      "pageReads": 40,
+      "readBytesExceed": 131072,
+      "networkAttempts": 0
+    },
+    "intakeRecoverySdk": {
+      "physicalCalls": 6,
+      "attemptsOnOneNode": 5,
+      "policies": [
+        "absent",
+        "legacy zero"
+      ],
+      "networkAttempts": 0
+    },
+    "materialPlan": "more than 128 nodes prepared and cold-read successfully",
+    "oldPausedJobs": {
+      "reasons": [
+        "budget-exhausted",
+        "node-attempt-limit"
+      ],
+      "directResumeWithoutBudgetAmendment": true,
+      "grantAndRevisionUnchanged": true
+    },
+    "idleStage": {
+      "sameDayRequests": 11,
+      "restarted": true,
+      "unchangedEvidenceDeduplicated": true
+    }
+  },
+  "nativeGoal": {
+    "schema": "pi-research.goal-no-budget-validation.v1",
+    "pi": "1.3.0",
+    "goal": "0.1.0",
+    "checks": [
+      "the actual judge loads on Pi 1.3 and records configured-provider response usage",
+      "new goals never impose a default or caller-supplied legacy turn cap",
+      "legacy exhausted sessions restore without modifying saved history or used turns",
+      "obsolete numeric cap metadata never makes restoration select an older goal",
+      "41 real judge-loop transitions exceed the old 20-turn cap while recording each turn",
+      "an actual blocked verdict still pauses the goal",
+      "the malformed-judge circuit breaker remains active",
+      "completed work still terminates normally",
+      "a stale judge cannot mark a replacement goal complete",
+      "the actual Resume command continues an exhausted legacy goal without resetting usage",
+      "legacy budget messages cannot reinstate limits or change goal scope",
+      "manual pause and clear remain effective"
+    ],
+    "networkAttempts": 0
+  },
+  "goalInstallation": [
+    {
+      "release": "pristine",
+      "dry": {
+        "patched": false,
+        "wouldApply": true,
+        "files": 9
+      },
+      "applied": {
+        "patched": true,
+        "appliedNow": true,
+        "files": 9
+      },
+      "repeated": {
+        "patched": true,
+        "appliedNow": false
+      },
+      "checked": {
+        "patched": true,
+        "appliedNow": false
+      }
+    },
+    {
+      "release": "previous",
+      "dry": {
+        "patched": false,
+        "wouldApply": true,
+        "files": 9
+      },
+      "applied": {
+        "patched": true,
+        "appliedNow": true,
+        "files": 9
+      },
+      "repeated": {
+        "patched": true,
+        "appliedNow": false
+      },
+      "checked": {
+        "patched": true,
+        "appliedNow": false
+      }
+    }
+  ],
+  "scope": "Local implementation and isolated offline validation; production services were not updated or restarted."
+}

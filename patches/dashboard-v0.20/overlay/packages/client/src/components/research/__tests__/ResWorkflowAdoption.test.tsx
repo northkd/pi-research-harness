@@ -212,7 +212,8 @@ describe("res-workflow inline explicit adoption", () => {
     expect(api.getResWorkflowHistoryCandidates).not.toHaveBeenCalled();
     expect(api.createResWorkflowAdoption).not.toHaveBeenCalled();
     expect(api.analyzeResWorkflowAdoption).not.toHaveBeenCalled();
-    expect(vi.mocked(api.analyzeResWorkflowHistoryReview).mock.calls[0][1]).toMatchObject({ model, consent: { analysisMode: "full-history-review-v1", planId: "fixed-plan", planHash: "fixed-hash", maxRequests: 2 } });
+    expect(vi.mocked(api.analyzeResWorkflowHistoryReview).mock.calls[0][1]).toMatchObject({ model, consent: { analysisMode: "full-history-review-v1", planId: "fixed-plan", planHash: "fixed-hash" } });
+    expect(vi.mocked(api.analyzeResWorkflowHistoryReview).mock.calls[0][1].consent).not.toHaveProperty("maxRequests");
     expect(vi.mocked(api.analyzeResWorkflowHistoryReview).mock.calls[0][1]).not.toHaveProperty("historySelection");
   });
 

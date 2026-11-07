@@ -1,0 +1,432 @@
+--- a/continuation-prompt.ts
++++ b/continuation-prompt.ts
+@@ -8,11 +8,17 @@
+ const MAX_IDLE_RETRIES = 10;
+ 
+ export function makeContinuationPrompt(state: PiLocalGoalState): string {
++	const context = `Continue from the current conversation and saved progress. Read the latest task records and work on the remaining deliverables.
++Do not rerun completed stages, discard accepted outputs, or reset used turns, failure history, or usage accounting. The project does not impose research request, turn, attempt, or spending caps; the user controls the research budget.
++The existing goal and prior authorization remain in force. A user Resume requests continuation within that scope; do not ask again merely to continue already authorized work. Ask only for genuinely missing information or a new decision outside that scope.
++Goal completion requires the requested deliverables. Blocked work pauses the loop instead of becoming done; readiness to start is not completion.
++
++`;
+ 	if (state.subgoals.length === 0) {
+-		return `Continue working toward the goal:\n${state.goal}`;
++		return `${context}Continue working toward the goal:\n${state.goal}`;
+ 	}
+ 
+-	return `Continue working toward the goal AND all additional criteria:\n${state.goal}\n\nAdditional criteria:\n${state.subgoals.map((subgoal, index) => `${index + 1}. ${subgoal}`).join("\n")}`;
++	return `${context}Continue working toward the goal AND all additional criteria:\n${state.goal}\n\nAdditional criteria:\n${state.subgoals.map((subgoal, index) => `${index + 1}. ${subgoal}`).join("\n")}`;
+ }
+ 
+ export function queueContinuation(
+--- a/event-renderer.ts
++++ b/event-renderer.ts
+@@ -15,7 +15,7 @@
+ 	goal: string;
+ 	status: string;
+ 	turnsUsed: number;
+-	maxTurns: number;
++	maxTurns: number | null;
+ 	lastVerdict: string | null;
+ 	lastReason: string | null;
+ 	pausedReason: string | null;
+@@ -47,7 +47,7 @@
+ 		case "goal-set":
+ 			return `Goal set: ${state.goal}`;
+ 		case "goal-continuing":
+-			return `Goal continuing (${state.turnsUsed}/${state.maxTurns} turns)`;
++			return `Goal continuing (${state.turnsUsed} turns used)`;
+ 		case "goal-achieved":
+ 			return `Goal achieved: ${state.goal}`;
+ 		case "goal-paused":
+@@ -85,7 +85,7 @@
+ 	const lines: string[] = [`${icon} ${label}`];
+ 
+ 	lines.push(theme.fg("dim", `  Objective: ${details.goal}`));
+-	lines.push(theme.fg("dim", `  Progress: ${details.turnsUsed}/${details.maxTurns} turns`));
++	lines.push(theme.fg("dim", `  Usage: ${details.turnsUsed} turns`));
+ 
+ 	if (details.lastVerdict) {
+ 		lines.push(theme.fg("dim", `  Verdict: ${details.lastVerdict}`));
+@@ -124,7 +124,7 @@
+ 		case "goal-set":
+ 			return "Goal set";
+ 		case "goal-continuing":
+-			return `Goal continuing (${details.turnsUsed}/${details.maxTurns})`;
++			return `Goal continuing (${details.turnsUsed} turns used)`;
+ 		case "goal-achieved":
+ 			return "Goal achieved";
+ 		case "goal-paused":
+--- a/goal-manager.ts
++++ b/goal-manager.ts
+@@ -14,7 +14,10 @@
+ 	ctx: ExtensionContext,
+ 	state: PiLocalGoalState,
+ 	lastResponse: string,
++	isCurrentGoal: () => boolean,
+ ): Promise<EvaluateWithJudgeResult> {
++	const startedAt = state.updatedAt;
++	state.maxTurns = null;
+ 	state.turnsUsed += 1;
+ 
+ 	const verdict = await new JudgeService().evaluate(
+@@ -26,9 +29,25 @@
+ 		ctx,
+ 		pi,
+ 	);
++	// A replaced goal or explicit pause/clear owns the newer state.
++	if (!isCurrentGoal() || state.status !== "active") return { shouldContinue: false };
++	if (state.updatedAt !== startedAt) {
++		state.status = "paused";
++		state.pausedReason = "goal or acceptance criteria changed while judging; resume to evaluate current progress";
++		state.updatedAt = Date.now();
++		persist(pi, ctx, state);
++		return { shouldContinue: false, statusMessage: `Goal paused: ${state.pausedReason}` };
++	}
+ 
+ 	state.lastVerdict = verdict.verdict;
+ 	state.lastReason = verdict.reason;
++	if (verdict.blocked) {
++		state.status = "paused";
++		state.pausedReason = verdict.reason;
++		state.updatedAt = Date.now();
++		persist(pi, ctx, state);
++		return { shouldContinue: false, statusMessage: `Goal paused: ${verdict.reason}` };
++	}
+ 
+ 	if (verdict.done) {
+ 		state.status = "done";
+@@ -52,14 +71,6 @@
+ 		return { shouldContinue: false };
+ 	}
+ 
+-	if (state.turnsUsed >= state.maxTurns) {
+-		state.status = "paused";
+-		state.pausedReason = "maxTurns budget exhausted";
+-		state.updatedAt = Date.now();
+-		persist(pi, ctx, state);
+-		return { shouldContinue: false };
+-	}
+-
+ 	state.status = "active";
+ 	state.pausedReason = null;
+ 	state.updatedAt = Date.now();
+--- a/goal-state.ts
++++ b/goal-state.ts
+@@ -2,17 +2,18 @@
+ import type { CustomEntry, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+ 
+ export const GOAL_CUSTOM_TYPE = "pi-goal-hermes:state";
+-export const DEFAULT_MAX_TURNS = 20;
++// null is an unbounded policy, not a large synthetic turn allowance.
++export const DEFAULT_MAX_TURNS = null;
+ 
+ export type PiLocalGoalStatus = "active" | "paused" | "done" | "cleared";
+-export type PiLocalGoalVerdict = "done" | "continue";
++export type PiLocalGoalVerdict = "done" | "continue" | "blocked";
+ 
+ export interface PiLocalGoalState {
+ 	id: string;
+ 	goal: string;
+ 	status: PiLocalGoalStatus;
+ 	turnsUsed: number;
+-	maxTurns: number;
++	maxTurns: number | null;
+ 	lastVerdict: PiLocalGoalVerdict | null;
+ 	lastReason: string | null;
+ 	pausedReason: string | null;
+@@ -26,7 +27,7 @@
+ 	goal: PiLocalGoalState;
+ }
+ 
+-export function createPiLocalGoalState(goal: string, maxTurns: number = DEFAULT_MAX_TURNS): PiLocalGoalState {
++export function createPiLocalGoalState(goal: string, _legacyMaxTurns: number | null = DEFAULT_MAX_TURNS): PiLocalGoalState {
+ 	const now = Date.now();
+ 
+ 	return {
+@@ -34,7 +35,7 @@
+ 		goal,
+ 		status: "active",
+ 		turnsUsed: 0,
+-		maxTurns,
++		maxTurns: null,
+ 		lastVerdict: null,
+ 		lastReason: null,
+ 		pausedReason: null,
+@@ -66,7 +67,9 @@
+ 		const data = entry.data;
+ 		if (!isRecord(data) || !isPiLocalGoalState(data.goal)) continue;
+ 		if (data.goal.status === "cleared") return null;
+-		return data.goal;
++		// Preserve the stored history and used turns; legacy caps are no longer
++		// execution policy. Resume still requires the user's existing goal scope.
++		return { ...data.goal, maxTurns: null, subgoals: [...data.goal.subgoals] };
+ 	}
+ 
+ 	return null;
+@@ -84,14 +87,16 @@
+ 
+ 	const hasValidStatus = status === "active" || status === "paused" || status === "done" || status === "cleared";
+ 	const hasValidVerdict =
+-		lastVerdict === null || lastVerdict === "done" || lastVerdict === "continue";
++		lastVerdict === null || lastVerdict === "done" || lastVerdict === "continue" || lastVerdict === "blocked";
+ 
+ 	return (
+ 		typeof value.id === "string" &&
+ 		typeof value.goal === "string" &&
+ 		hasValidStatus &&
+ 		typeof value.turnsUsed === "number" &&
+-		typeof value.maxTurns === "number" &&
++		// Keep the previous numeric read contract: even obsolete non-integer caps
++		// must not make restoration fall back to an older, unrelated goal.
++		(value.maxTurns === null || typeof value.maxTurns === "number") &&
+ 		hasValidVerdict &&
+ 		(value.lastReason === null || typeof value.lastReason === "string") &&
+ 		(value.pausedReason === null || typeof value.pausedReason === "string") &&
+--- a/index.ts
++++ b/index.ts
+@@ -13,6 +13,31 @@
+ 	let lastAssistantStopReason: string | null = null;
+ 	let lastAssistantErrorMessage: string | null = null;
+ 	const continuationState: ContinuationState = { queued: false };
++	let currentContext: ExtensionContext | null = null;
++	const normalized = (text: string) => text.replace(/\s+/g, " ").trim();
++
++	// Compatibility reply for old dashboards. Research quotas are disabled;
++	// acknowledge the effective policy without changing scope or starting work.
++	pi.events.on("pi-goal-hermes:turn-budget", (value: unknown) => {
++		const data = value as { requestId?: unknown; objective?: unknown; maxTurns?: unknown; engineGoalId?: unknown; forNewGoal?: unknown } | null;
++		const reply = (accepted: boolean, error?: string) => pi.events.emit("dashboard:plugin-message", {
++			pluginId: "goal", messageType: "goal_budget_ack",
++			payload: { requestId: data?.requestId, accepted, error, objective: data?.objective, maxTurns: null, budgetEnforced: false,
++				engineGoalId: goal?.id, turnsUsed: goal?.turnsUsed, pending: data?.forNewGoal === true },
++		});
++		if (!data || typeof data.requestId !== "string" || typeof data.objective !== "string" || !normalized(data.objective)
++			|| !(data.maxTurns === null || (typeof data.maxTurns === "number" && Number.isSafeInteger(data.maxTurns) && data.maxTurns >= 0))) {
++			reply(false, "invalid turn budget"); return;
++		}
++		if (data.forNewGoal === true) {
++			reply(true); return;
++		}
++		if (!goal || goal.status === "cleared" || !currentContext || normalized(goal.goal) !== normalized(data.objective)
++			|| (typeof data.engineGoalId === "string" && data.engineGoalId !== goal.id)) {
++			reply(false, "goal identity changed"); return;
++		}
++		reply(true);
++	});
+ 
+ 	pi.registerMessageRenderer("pi-goal-hermes:event", goalEventRenderer);
+ 	pi.registerMessageRenderer("pi-goal-hermes:continuation", continuationRenderer);
+@@ -37,6 +62,7 @@
+ 	}
+ 
+ 	pi.on("session_start", (event, ctx) => {
++		currentContext = ctx;
+ 		goal = latestStateFromSession(ctx);
+ 		if (!goal) return;
+ 
+@@ -106,16 +132,20 @@
+ 
+ 		if (!lastAssistantContent.trim()) return;
+ 
+-		const result = await evaluateWithJudge(pi, ctx, goal, lastAssistantContent);
++		const judgedGoal = goal;
++		const result = await evaluateWithJudge(pi, ctx, judgedGoal, lastAssistantContent, () => goal === judgedGoal);
++		if (goal !== judgedGoal) return;
++		// Judge evaluation mutates status across the await.
++		const currentStatus = (goal as PiLocalGoalState).status;
+ 
+ 		if (result.statusMessage) {
+ 			ctx.ui.notify(result.statusMessage, "info");
+ 		}
+ 
+-		if (goal.status === "done") {
++		if (currentStatus === "done") {
+ 			emitGoalEvent(pi, "goal-achieved", goal);
+ 			updateFooterStatus(ctx);
+-		} else if (goal.status === "paused") {
++		} else if (currentStatus === "paused") {
+ 			emitGoalEvent(pi, "goal-paused", goal);
+ 			updateFooterStatus(ctx);
+ 		} else if (result.shouldContinue) {
+@@ -203,7 +233,8 @@
+ 		const lines = [
+ 			`Goal: ${goal.goal}`,
+ 			`Status: ${goal.status}`,
+-			`Progress: ${goal.turnsUsed}/${goal.maxTurns} turns`,
++			`Usage: ${goal.turnsUsed} turns`,
++			"Policy: blocked pauses; resume preserves used turns and reopens the same goal.",
+ 		];
+ 		if (goal.lastVerdict) {
+ 			lines.push(`Last verdict: ${goal.lastVerdict}`);
+@@ -232,11 +263,14 @@
+ 	}
+ 
+ 	function handleGoalResume(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
+-		if (!goal || goal.status !== "paused") {
+-			ctx.ui.notify("No paused goal to resume.", "warning");
+-			return;
+-		}
+-		goal.turnsUsed = 0;
++		if (!goal || goal.status === "cleared") {
++			ctx.ui.notify("No existing goal to resume. Set a goal first.", "warning");
++			return;
++		}
++		if (goal.status === "active") {
++			ctx.ui.notify("Goal is already active.", "info");
++			return;
++		}
+ 		goal.consecutiveParseFailures = 0;
+ 		goal.status = "active";
+ 		goal.pausedReason = null;
+--- a/judge-service.ts
++++ b/judge-service.ts
+@@ -1,17 +1,17 @@
+-import { streamSimple, type AssistantMessage, type Model, type UserMessage } from "@earendil-works/pi-ai";
++import type { AssistantMessage, Model, UserMessage } from "@earendil-works/pi-ai";
+ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+ 
+-export const JUDGE_SYSTEM_PROMPT = `You are a strict judge evaluating whether an autonomous agent has achieved a user's stated goal. You receive the goal text and the agent's most recent response. Your only job is to decide whether the goal is fully satisfied based on that response.
+-
+-A goal is DONE only when:
+-- The response explicitly confirms the goal was completed, OR
+-- The response clearly shows the final deliverable was produced, OR
+-- The response explains the goal is unachievable / blocked / needs user input (treat this as DONE with reason describing the block).
+-
+-Otherwise the goal is NOT done — CONTINUE.
+-
+-Reply ONLY with a single JSON object on one line:
+-{"done": <true|false>, "reason": "<one-sentence rationale>"}`;
++export const JUDGE_SYSTEM_PROMPT = `You are a strict judge evaluating whether an autonomous agent completed the user's stated task and every additional criterion.
++
++DONE requires concrete evidence in the response that all required work and deliverables were completed. A readiness check, permission to proceed, a plan, a promise, or generic claims are not completion. A scientifically limited or negative result can complete a task only when the required execution and reporting actually happened; you do not certify the scientific hypothesis.
++
++BLOCKED means a required input, resource, permission or user decision is genuinely unavailable, or the task cannot proceed. It is NOT completion: set done=false and blocked=true so the loop pauses. Do not invent blockers or demand repeated approval for work already authorized.
++
++If work remains and can proceed within the existing scope, CONTINUE with done=false and blocked=false.
++
++Reply ONLY with one JSON object:
++{"done": <true|false>, "blocked": <true|false>, "reason": "<one-sentence rationale>"}
++done and blocked must never both be true.`;
+ 
+ const DEFAULT_JUDGE_MAX_TOKENS = 4096;
+ const DEFAULT_JUDGE_TIMEOUT_MS = 30000;
+@@ -26,8 +26,9 @@
+ }
+ 
+ export interface JudgeVerdict {
+-	verdict: "done" | "continue";
++	verdict: "done" | "continue" | "blocked";
+ 	done: boolean;
++	blocked: boolean;
+ 	reason: string;
+ 	parseFailed: boolean;
+ 	preserveParseFailureCounter: boolean;
+@@ -38,8 +39,9 @@
+ 		const model = findJudgeModel(ctx);
+ 		if (!model) {
+ 			return {
+-				verdict: "continue",
++				verdict: "blocked",
+ 				done: false,
++				blocked: true,
+ 				reason: "no judge model available",
+ 				parseFailed: false,
+ 				preserveParseFailureCounter: true,
+@@ -49,8 +51,9 @@
+ 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+ 		if (!auth.ok) {
+ 			return {
+-				verdict: "continue",
++				verdict: "blocked",
+ 				done: false,
++				blocked: true,
+ 				reason: auth.error,
+ 				parseFailed: false,
+ 				preserveParseFailureCounter: true,
+@@ -62,7 +65,7 @@
+ 		const startMs = Date.now();
+ 
+ 		try {
+-			const stream = streamSimple(
++			const stream = ctx.modelRegistry.streamSimple(
+ 				model,
+ 				{
+ 					systemPrompt: JUDGE_SYSTEM_PROMPT,
+@@ -115,7 +118,7 @@
+ 						model: model.id,
+ 						prompt: judgePrompt,
+ 						rawResponse: null,
+-						verdict: "continue",
++						verdict: "blocked",
+ 						reason,
+ 						done: false,
+ 						parseFailed: false,
+@@ -126,8 +129,9 @@
+ 			}
+ 
+ 			return {
+-				verdict: "continue",
++				verdict: "blocked",
+ 				done: false,
++				blocked: true,
+ 				reason,
+ 				parseFailed: false,
+ 				preserveParseFailureCounter: true,
+@@ -140,7 +144,7 @@
+ 	model: string;
+ 	prompt: string;
+ 	rawResponse: string | null;
+-	verdict: "done" | "continue";
++	verdict: "done" | "continue" | "blocked";
+ 	reason: string;
+ 	done: boolean;
+ 	parseFailed: boolean;
+@@ -170,7 +174,7 @@
+ Agent's most recent response:
+ ${truncate(response, RESPONSE_MAX_LENGTH)}
+ 
+-Decision: For each numbered criterion above, find concrete evidence in the agent's response that the criterion is satisfied. Do not accept generic phrases like 'all requirements met' or 'implying it was done' — require specific evidence (a file contents excerpt, an output line, a command result). If ANY criterion lacks specific evidence in the response, the goal is NOT done — return CONTINUE.
++Decision: For each numbered criterion above, find concrete evidence in the agent's response that the criterion is satisfied. Do not accept generic phrases like 'all requirements met' or 'implying it was done' — require specific evidence (a file contents excerpt, an output line, a command result). If ANY criterion lacks specific evidence in the response, the goal is NOT done: CONTINUE if the work can proceed, or BLOCKED if a required input or decision is unavailable.
+ 
+ Is the goal AND every additional criterion satisfied?`;
+ }
+@@ -184,7 +188,9 @@
+ 		return ".".repeat(maxLen);
+ 	}
+ 
+-	return `${text.slice(0, maxLen - 3)}...`;
++	const head = Math.ceil((maxLen - 3) / 2);
++	const tail = maxLen - 3 - head;
++	return `${text.slice(0, head)}...${tail > 0 ? text.slice(-tail) : ""}`;
+ }
+ 
+ export function parseJudgeResponse(raw: string): JudgeVerdict {
+@@ -203,6 +209,7 @@
+ 	return {
+ 		verdict: "continue",
+ 		done: false,
++		blocked: false,
+ 		reason: `judge reply was not JSON: ${snippet || "empty response"}`,
+ 		parseFailed: true,
+ 		preserveParseFailureCounter: false,
+@@ -262,13 +269,15 @@
+ 		}
+ 
+ 		const done = normalizeDone(value.done);
+-		if (done === null) {
++		const blocked = value.blocked === undefined ? false : normalizeDone(value.blocked);
++		if (done === null || blocked === null) {
+ 			return null;
+ 		}
+ 
+ 		return {
+-			verdict: done ? "done" : "continue",
+-			done,
++			verdict: blocked ? "blocked" : done ? "done" : "continue",
++			done: done && !blocked,
++			blocked,
+ 			reason: typeof value.reason === "string" && value.reason.length > 0 ? value.reason : "no reason provided",
+ 			parseFailed: false,
+ 			preserveParseFailureCounter: false,

@@ -5,6 +5,7 @@ import path from "node:path";
 import type { FullHistoryAgentBudgetAuthorization } from "./full-history-agent-contract.js";
 import type { ResWorkflowAgentBudgetChoice } from "@blackbelt-technology/pi-dashboard-shared/res-workflow.js";
 
+/** Accept legacy budget metadata without giving it dispatch authority. */
 export function validAgentBudgetChoice(value: unknown): value is ResWorkflowAgentBudgetChoice {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const v = value as ResWorkflowAgentBudgetChoice, c = v.consent;

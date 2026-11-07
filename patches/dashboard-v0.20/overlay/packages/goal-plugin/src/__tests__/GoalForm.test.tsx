@@ -1,0 +1,108 @@
+/**
+ * GoalForm (Screen A) — rich authoring form.
+ * Verifies a full payload (objective + criteria + judge) reaches
+ * onSubmit (task 4.1) and the model picker + cross-model/self-judge badge
+ * (task 4.2).
+ *
+ * See change: sophisticate-goal-authoring-and-control.
+ */
+
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import React from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GoalForm, type GoalFormPayload } from "../client/GoalForm.js";
+
+beforeEach(() => {
+  (globalThis as any).fetch = vi.fn(async () => ({
+    ok: true,
+    json: async () => ({ success: true, data: { labels: ["anthropic/claude", "openai/gpt-5"] } }),
+  }));
+});
+const originalFetch = globalThis.fetch;
+afterEach(() => { cleanup(); vi.restoreAllMocks(); globalThis.fetch = originalFetch; });
+
+describe("GoalForm", () => {
+  it("does not expose or resubmit historical turn and spend caps", async () => {
+    const onSubmit = vi.fn(async (_p: GoalFormPayload) => {});
+    const initial = { objective: "Continue research", budget: { maxTurns: 1, maxSpendUsd: 0.01 } };
+    const { getByTestId, queryByTestId } = render(<GoalForm initial={initial} onSubmit={onSubmit} />);
+    expect(queryByTestId("goal-form-max-turns")).toBeNull();
+    expect(queryByTestId("goal-form-max-spend")).toBeNull();
+    fireEvent.click(getByTestId("goal-form-submit"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ objective: "Continue research" }));
+    expect(initial.budget).toEqual({ maxTurns: 1, maxSpendUsd: 0.01 });
+  });
+
+  it("submits a full payload (objective + criteria + judge)", async () => {
+    const onSubmit = vi.fn(async (_p: GoalFormPayload) => {});
+    const { getByTestId } = render(<GoalForm onSubmit={onSubmit} />);
+    await waitFor(() => expect(getByTestId("goal-form-judge").querySelectorAll("option").length).toBe(3));
+
+    fireEvent.change(getByTestId("goal-form-objective"), { target: { value: "Ship goals" } });
+    fireEvent.click(getByTestId("goal-form-add-criterion"));
+    fireEvent.change(getByTestId("goal-form-criterion").querySelector("input")!, { target: { value: "Tests pass" } });
+    fireEvent.change(getByTestId("goal-form-judge"), { target: { value: "anthropic/claude" } });
+    fireEvent.click(getByTestId("goal-form-submit"));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0]![0]).toEqual({
+      objective: "Ship goals",
+      criteria: [{ text: "Tests pass", done: false }],
+      judge: { provider: "anthropic", modelId: "claude" },
+    });
+  });
+
+  it("renders model options and a cross-model badge by default", async () => {
+    const { getByTestId } = render(<GoalForm onSubmit={async () => {}} />);
+    await waitFor(() => expect(getByTestId("goal-form-judge").querySelectorAll("option").length).toBe(3));
+    fireEvent.change(getByTestId("goal-form-judge"), { target: { value: "openai/gpt-5" } });
+    expect(getByTestId("goal-form-judge-badge").textContent).toBe("cross-model");
+  });
+
+  it("shows self-judge badge when the toggle is on", async () => {
+    const { getByTestId } = render(<GoalForm onSubmit={async () => {}} />);
+    await waitFor(() => expect(getByTestId("goal-form-judge").querySelectorAll("option").length).toBe(3));
+    fireEvent.change(getByTestId("goal-form-judge"), { target: { value: "openai/gpt-5" } });
+    fireEvent.click(getByTestId("goal-form-self-judge"));
+    expect(getByTestId("goal-form-judge-badge").textContent).toBe("self-judge");
+  });
+
+  it("omits optional fields when only an objective is given", async () => {
+    const onSubmit = vi.fn(async (_p: GoalFormPayload) => {});
+    const { getByTestId } = render(<GoalForm onSubmit={onSubmit} />);
+    fireEvent.change(getByTestId("goal-form-objective"), { target: { value: "Just objective" } });
+    fireEvent.click(getByTestId("goal-form-submit"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0]![0]).toEqual({ objective: "Just objective" });
+  });
+
+  // ── add-goal-session-supervisor (task 5.2) ────────────────────────
+  it("includes autoRespawn when the toggle is enabled", async () => {
+    const onSubmit = vi.fn(async (_p: GoalFormPayload) => {});
+    const { getByTestId } = render(<GoalForm onSubmit={onSubmit} />);
+    fireEvent.change(getByTestId("goal-form-objective"), { target: { value: "Persistent goal" } });
+    fireEvent.click(getByTestId("goal-form-auto-respawn"));
+    fireEvent.click(getByTestId("goal-form-submit"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0]![0]).toEqual({ objective: "Persistent goal", autoRespawn: true });
+  });
+
+  // E9 (autoRespawnLabel): user-facing copy says "restart", never "respawn";
+  // the i18n key and the autoRespawn payload field are unchanged.
+  // See change: align-ui-with-theme-tokens (design D9, task 5.20).
+  it("labels the toggle 'Auto-restart on driver death …'", () => {
+    const { getByTestId } = render(<GoalForm onSubmit={async () => {}} />);
+    const label = getByTestId("goal-form-auto-respawn").closest("label");
+    expect(label?.textContent).toBe("Auto-restart on driver death (with crash-loop protection)");
+  });
+
+  it("defaults the autoRespawn toggle from the autoRespawnDefault prop", async () => {
+    const onSubmit = vi.fn(async (_p: GoalFormPayload) => {});
+    const { getByTestId } = render(<GoalForm onSubmit={onSubmit} autoRespawnDefault />);
+    expect((getByTestId("goal-form-auto-respawn") as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(getByTestId("goal-form-objective"), { target: { value: "Inherits default" } });
+    fireEvent.click(getByTestId("goal-form-submit"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0]![0]).toEqual({ objective: "Inherits default", autoRespawn: true });
+  });
+});

@@ -24,8 +24,8 @@
 | --- | --- | --- |
 | `cli-to-main`、`chat-to-main` | Pi CLI 和 Dashboard 对话均围绕真实 Pi 会话工作；切换工作空间视图不会另建 Pi 会话。CLI 本身来自安装的 Pi runtime，仓库通过扩展接入。 | [research-loop 扩展入口](../../extensions/research-loop/package.json)、[registerTool](../../extensions/research-loop/src/index.ts)、[WorkspaceNavigation](../../patches/dashboard-v0.20/overlay/packages/client/src/components/split/WorkspaceNavigation.tsx)、[SessionSplitView](../../patches/dashboard-v0.20/overlay/packages/client/src/components/split/SessionSplitView.tsx) |
 | `dashboard` | 顶层视图顺序是「对话 / 研究工作台 / 智能体 / 文件 / Science」；目录入口尚无会话时，对话项显示「新对话」。这些视图不是五个自动科研阶段。 | [WorkspaceNavigation 的 `items` / `select`](../../patches/dashboard-v0.20/overlay/packages/client/src/components/split/WorkspaceNavigation.tsx) |
-| `main-session` | `research_loop configure` 冻结 charter；后续 `log`、`claim`、`stage`、`run` 等由调用者显式选择。配置预算本身不启动模型。 | [index.ts：`configure` / `run`](../../extensions/research-loop/src/index.ts)、[research-budget-bridge.mjs：`spawnBudgetedResearchWorkflow`](../../extensions/research-loop/src/research-budget-bridge.mjs) |
-| `main-delegates`、`subordinate` | `subagent` 和 workflow 是父会话下的执行能力；自动编排明确调用角色任务。可用工具和安装包由当前 runtime 决定。 | [auto-research.js：`budgetedRuns`](../../extensions/research-loop/workflows/auto-research.js)、[delegation-policy.mjs](../../extensions/research-loop/src/delegation-policy.mjs) |
+| `main-session` | `research_loop configure` 冻结 charter；后续 `log`、`claim`、`stage`、`run` 等由调用者显式选择。配置研究约定本身不启动模型，启动不要求预算额度。 | [index.ts：`configure` / `run`](../../extensions/research-loop/src/index.ts)、[workflow-launch.mjs：`spawnResearchWorkflow`](../../extensions/research-loop/src/workflow-launch.mjs) |
+| `main-delegates`、`subordinate` | `subagent` 和 workflow 是父会话下的执行能力；自动编排明确调用角色任务。可用工具和安装包由当前 runtime 决定。 | [auto-research.js：原生运行与可选旧适配器](../../extensions/research-loop/workflows/auto-research.js)、[delegation-policy.mjs](../../extensions/research-loop/src/delegation-policy.mjs) |
 | `main-creates-collaborator`、`top-level-session` | `research_session` 经 `/api/res-workflow/participants/spawn` 创建独立顶层 Pi 会话，加入父会话已经确认的同一工作台，并保留 parent session、role、stage、charter 和 adoption 来源。它不是 native subagent。 | [workbench-session-tool.mjs：`createResearchSessionTool`](../../extensions/research-loop/src/workbench-session-tool.mjs)、[research-session-service.mjs：`createResearchSessionService`](../../patches/dashboard-v0.20/overlay/packages/server/src/res-workflow/research-session-service.mjs)、[participants/spawn 路由](../../patches/dashboard-v0.20/overlay/packages/server/src/routes/res-workflow-research-session-routes.ts) |
 | `main-direct-tools`、`subordinate-tools`、`collaborator-tools` | 会话或被委派角色使用实际可用的工具。SSH 必须有具体主机、路径、操作范围与已转交授权；不会因图中存在 SSH 节点就自动获得远程写权限。 | [research-numerics](../../agents/research-numerics.md)、[research-ssh](../../agents/research-ssh.md)、[research_session 子会话任务约束](../../extensions/research-loop/src/workbench-session-tool.mjs) |
 | `return-to-explicit-record`、`write-ledger` | 结果返回后，由调用者显式登记真实尝试与主张。`.pi/research-loop/` 存放 `state.json`、`ledger.jsonl`、`events.jsonl` 等正式记录；评审轮次和 trace 路径在图 03 单独解释。 | [index.ts：`log` / `claim`](../../extensions/research-loop/src/index.ts)、[ledger.mjs：`rootDir` / `appendAttempt` / `upsertClaim`](../../extensions/research-loop/src/ledger.mjs) |
@@ -35,7 +35,7 @@
 | `user-opens-science`、`science` | 用户从 Dashboard 打开独立 Science 查看通道；原生工作区/任务画面与产物 viewer 不需要 Pi 会话。图中没有 Pi → Science 自动派发边。 | [ScienceTabViewer](../../patches/dashboard-v0.20/overlay/packages/client/src/components/research/ScienceTabViewer.tsx)、[WorkspaceNavigation：`ctx.openScience()`](../../patches/dashboard-v0.20/overlay/packages/client/src/components/split/WorkspaceNavigation.tsx) |
 | `science-view-to-dashboard` | 原生画面、查看状态和产物由 Dashboard 的 Science viewer 展示；蓝色返回表示查看结果，不表示 Science 任务被 Pi 自动安排。 | [ScienceTabViewer](../../patches/dashboard-v0.20/overlay/packages/client/src/components/research/ScienceTabViewer.tsx)、[science-viewer-routes.ts](../../patches/dashboard-v0.20/overlay/packages/server/src/routes/science-viewer-routes.ts) |
 
-**物理路径与 UI 范围。** `review-round` 默认将 memory 写到 `review-stage/REVIEWER_MEMORY.md`，将轮次轨迹写到 `review-stage/traces/round-N.json`；它同时在 `.pi/research-loop/events.jsonl` 追加评审事件。`stageDir` 可以由调用者指定，不能把所有 trace 都画进 `.pi/research-loop/`。见 [reviewer.mjs：`reviewDir` / `memoryPath` / `tracePath`](../../extensions/research-loop/src/reviewer.mjs)。Science 实例列表、详情和观测状态位于研究工作台的「总览与预算」/「全部看板」内部；顶层 Science 视图负责原生画面或产物查看。图将其简写为独立可选通道，没有把两种界面混为同一个实例列表。
+**物理路径与 UI 范围。** `review-round` 默认将 memory 写到 `review-stage/REVIEWER_MEMORY.md`，将轮次轨迹写到 `review-stage/traces/round-N.json`；它同时在 `.pi/research-loop/events.jsonl` 追加评审事件。`stageDir` 可以由调用者指定，不能把所有 trace 都画进 `.pi/research-loop/`。见 [reviewer.mjs：`reviewDir` / `memoryPath` / `tracePath`](../../extensions/research-loop/src/reviewer.mjs)。Science 实例列表、详情和观测状态位于研究工作台的「研究总览」/「全部看板」内部；顶层 Science 视图负责原生画面或产物查看。图将其简写为独立可选通道，没有把两种界面混为同一个实例列表。
 
 **顶层会话不等于统一派发来源。** 图中的 `research_session` 边专指该工具保存的父会话和任务 provenance。UI 的阶段启动也可以创建并加入工作台的独立会话，但不能据此声称它与 `research_session` 拥有相同的 parent/role/stage 派发边；工作台切换视图更不会创建会话。
 
@@ -45,7 +45,7 @@
 
 | 箭头 / 节点 ID | 实际执行与停止条件 | 源码定位 |
 | --- | --- | --- |
-| `run-entry`、`admitted-run` | 主入口 `launchAuto` 先做 explorer 内存准入，再经 scoped native budget bridge 调用 workflow；缺少有效预算、桥或内存余量时不能当作启动成功。 | [index.ts：`admitExplorers` / `launchAuto`，193–246 行](../../extensions/research-loop/src/index.ts)、[research-budget-bridge.mjs：37–65 行](../../extensions/research-loop/src/research-budget-bridge.mjs) |
+| `run-entry`、`admitted-run` | 主入口 `launchAuto` 先做 explorer 内存准入，再经原生 RPC 调用 workflow；缺少当前会话、native runtime 或内存余量不能当作启动成功。常规启动不注入预算桥，也不要求请求或尝试额度。 | [index.ts：`admitExplorers` / `launchAuto`](../../extensions/research-loop/src/index.ts)、[workflow-launch.mjs](../../extensions/research-loop/src/workflow-launch.mjs) |
 | `explorers` | `runs.all` 为不同 angle 启动 fresh-context `research-explorer`，返回假设卡。代码含 6 个 angle；虽然参数上限为 8，当前 angle pool 不会产生 8 个不同角度调用。 | `ANGLE_POOL`；125–141 行 |
 | `cards-to-screen` | `research-critic` 把假设卡当作未验证材料，检查可证伪性、证据缺口及增量性。 | 143–155 行 |
 | `screen-to-plan` | `research-strategist` 同时收到原始 cards 和 critic 的筛选输出，选择方向并产生带 executor、kill criteria 的结构化 milestones。该箭头不表示原始 cards 被 critic 改写后才可进入计划。 | 157–175 行 |
@@ -59,7 +59,7 @@
 
 ### 自动运行的实际前置条件
 
-当前 [`agents/`](../../agents/) 发布 10 个角色模板，**没有** `research-explorer`、`research-strategist`、`research-reframer`。自动脚本直接引用前两者；reframer 出现在策略/映射中，但不是上述默认自动链路的阶段。`scripts/configure.mjs` 的角色安装只复制现有 `agents/*.md`，不能声称安装本仓库就已自动补齐这三个角色。调用前应确认缺少的角色已经在实际 Pi 环境中定义，并且相关模型、native subagent 包及预算桥可用。见 [角色复制逻辑](../../scripts/configure.mjs)、[自动脚本引用](../../extensions/research-loop/workflows/auto-research.js)。
+当前 [`agents/`](../../agents/) 发布 10 个角色模板，**没有** `research-explorer`、`research-strategist`、`research-reframer`。自动脚本直接引用前两者；reframer 出现在策略/映射中，但不是上述默认自动链路的阶段。`scripts/configure.mjs` 的角色安装只复制现有 `agents/*.md`，不能声称安装本仓库就已自动补齐这三个角色。调用前应确认缺少的角色已经在实际 Pi 环境中定义，并且相关模型与 native subagent 包可用。见 [角色复制逻辑](../../scripts/configure.mjs)、[自动脚本引用](../../extensions/research-loop/workflows/auto-research.js)。
 
 入口的内存准入保留约 1 GiB 余量，并给出本次 explorer 数量；这不是所有会话、工具和外部进程的全局并发锁或硬内存隔离。`maxMilestones` 默认 2、上限 6；`maxRounds` 默认 4、上限 4。自动任务的步骤事件还区分 `executionStatus` 和 `businessStatus`，不能仅凭 native 调用结束就标记某次实验完成。
 

@@ -24,9 +24,15 @@ export function applyGoalHermesPatch(agentDir, {apply = false, checkOnly = false
   });
   if (records.every(([, hashes], i) => current[i] === hashes.afterSha256)) return {patched: true, appliedNow: false};
   if (checkOnly) throw new Error('Required released Goal patch is absent');
-  if (!records.every(([, hashes], i) => current[i] === hashes.beforeSha256)) throw new Error('Refuse unknown or partially patched Goal source');
-  patchFile ??= path.join(repo, metadata.patch);
-  if (sha256(fs.readFileSync(patchFile)) !== metadata.patchSha256) throw new Error('Goal patch checksum mismatch');
+  let selected = metadata;
+  if (!records.every(([, hashes], i) => current[i] === hashes.beforeSha256)) {
+    selected = (metadata.upgrades ?? []).find(upgrade =>
+      upgrade.files && Object.keys(upgrade.files).length === records.length &&
+      records.every(([name], index) => Object.hasOwn(upgrade.files, name) && current[index] === upgrade.files[name]));
+    if (!selected) throw new Error('Refuse unknown or partially patched Goal source');
+  }
+  patchFile ??= path.join(repo, selected.patch);
+  if (sha256(fs.readFileSync(patchFile)) !== selected.patchSha256) throw new Error('Goal patch checksum mismatch');
   const run = extra => {
     const result = spawnSync('git', ['apply', ...extra, patchFile], {
       cwd: packageRoot, shell: false, encoding: 'utf8',

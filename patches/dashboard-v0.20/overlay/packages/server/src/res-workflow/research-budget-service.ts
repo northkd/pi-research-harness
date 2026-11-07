@@ -56,10 +56,10 @@ export function createResWorkflowResearchBudgetService(deps: ResWorkflowResearch
       // Only contract fields leave the trusted native boundary.
       return {
         cwd: result.cwd, revision: result.revision,
-        limits: { attempts: result.limits.attempts, modelRequests: result.limits.modelRequests },
+        limits: { attempts: null, modelRequests: null },
         usage: { attempts: result.usage.attempts, modelRequests: result.usage.modelRequests, inFlight: result.usage.inFlight, unknown: result.usage.unknown },
         updatedAt: result.updatedAt,
-        enforcement: { attempts: result.enforcement.attempts, modelRequests: result.enforcement.modelRequests, scope: "native-research-workflow", physicalTransport: "sse-http" },
+        enforcement: { attempts: false, modelRequests: false, scope: "native-research-workflow", physicalTransport: "sse-http" },
       };
     } catch (error) {
       if (error instanceof ResWorkflowError) throw error;

@@ -100,6 +100,8 @@ bash scripts/test-dashboard-v020.sh
 
 ## 已知边界
 
+2026-11-07 同时取消项目自设的研究预算上限，覆盖旧预算适配器、资料接入、Goal 与空闲阶段识别；用量记录、停止/暂停和材料范围授权继续保留。此项涉及 Dashboard 与运行扩展，Goal 还需原生包补丁，详见[预算策略与升级步骤](research-budget-policy.md)。
+
 `research-theory` 的技能按需加载修复和已有安装的定向升级命令见 [子代理技能按需加载](subagent-skill-loading.md)。这项更新涉及原生 subagents 与 agent 设置，不要求重建前端。
 
 - 在 macOS 全新构建验证中，上游可选的 `ffmpeg-static` 视频组件下载超时；Dashboard 本身构建成功，该视频能力需另行安装验证。

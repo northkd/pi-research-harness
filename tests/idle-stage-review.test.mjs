@@ -204,7 +204,7 @@ test('observation heartbeats neither invalidate an in-flight reply nor defeat un
   assert.equal(env.modelCalls, 1);
 });
 
-test('a charter revision resets classification state but never resets the project daily quota', async t => {
+test('a charter revision keeps daily usage without enforcing the legacy daily quota', async t => {
   const env = makeEnv({ cooldownMs: 0, maxRequestsPerProjectPerDay: 1 });
   const reviewer = env.makeReviewer();
   t.after(() => reviewer.close());
@@ -213,8 +213,8 @@ test('a charter revision resets classification state but never resets the projec
   write(env.project.stateFile, { schema: 'pi-research-state.v1', stage: '1-idea', charter });
   env.project.charterHash = 'sha256:' + digest(charter);
   assert.equal((await reviewer.tick()).results[0].reason, 'idle-threshold-pending');
-  assert.equal((await reviewer.tick()).results[0].reason, 'daily-limit');
-  assert.equal(env.modelCalls, 1);
+  assert.equal((await reviewer.tick()).results[0].status, 'reviewed');
+  assert.equal(env.modelCalls, 2);
 });
 
 test('a standalone enabled daemon stays alive until signalled and releases its singleton', async t => {
@@ -254,15 +254,22 @@ test('cooldown blocks changed evidence without a model request', async t => {
   assert.equal(env.modelCalls, 1);
 });
 
-test('daily limit blocks further requests for the project', async t => {
-  const env = makeEnv({ cooldownMs: 0, maxRequestsPerProjectPerDay: 1 });
-  const reviewer = env.makeReviewer();
+test('legacy daily limits do not cap changed-evidence reviews, including after restart', async t => {
+  const env = makeEnv({ cooldownMs: 0, maxRequestsPerProjectPerDay: 1, maxCallsPerDay: 1 });
+  let reviewer = env.makeReviewer();
   t.after(() => reviewer.close());
   await settleIdle(reviewer);
-  env.sessions.push(sessionRow(env.project, { id: 'session-2', status: 'ended', endedAt: '2026-11-04T11:00:00.000Z' }));
-  const second = await reviewer.tick();
-  assert.equal(second.results[0].reason, 'daily-limit');
-  assert.equal(env.modelCalls, 1);
+  for (let index = 2; index <= 10; index += 1) {
+    env.sessions.push(sessionRow(env.project, { id: 'session-' + index, status: 'ended', endedAt: '2026-11-04T11:00:00.000Z' }));
+    assert.equal((await reviewer.tick()).results[0].status, 'reviewed');
+  }
+  reviewer.close();
+  reviewer = env.makeReviewer();
+  env.sessions.push(sessionRow(env.project, { id: 'session-11', status: 'ended', endedAt: '2026-11-04T11:00:00.000Z' }));
+  assert.equal((await reviewer.tick()).results[0].status, 'reviewed');
+  assert.equal(env.modelCalls, 11);
+  assert.equal(env.readAudit().filter(entry => entry.event === 'requested').length, 11);
+  assert.equal((await reviewer.tick()).results[0].reason, 'unchanged');
 });
 
 test('busy sessions, tools, permission waits and subagents fail closed', async t => {
@@ -527,14 +534,13 @@ async function skipAfterIdle(env) {
   }
 }
 
-test('authorization binds exact project, upstream host, model and daily limit', async () => {
+test('authorization still binds exact project, upstream host and model', async () => {
   const cases = [
     ['two allowlisted projects', env => { env.config.projectAllowlist.push('/tmp/other-project'); }, 'authorization-project-scope-required'],
     ['different authorized project', env => { env.config.authorization.project = '/tmp/other-project'; }, 'authorization-project-mismatch'],
     ['missing upstream host', env => { delete env.config.authorization.upstreamHost; }, 'authorization-upstream-required'],
     ['different upstream host', env => { env.config.authorization.upstreamHost = 'other-upstream.example'; }, 'authorization-upstream-mismatch'],
     ['missing configured upstream host', env => { delete env.config.modelUpstreamHost; }, 'model-upstream-host-required'],
-    ['unapproved daily limit', env => { env.config.maxRequestsPerProjectPerDay = 13; }, 'authorization-daily-limit-exceeded'],
   ];
   for (const [name, mutate, reason] of cases) {
     const env = makeEnv();

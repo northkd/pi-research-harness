@@ -3,7 +3,7 @@ import type { ResWorkflowProposal, ResWorkflowSource } from "@blackbelt-technolo
 import type { FullHistoryAgentAttempt, FullHistoryAgentAttemptDraft, FullHistoryAgentAttemptIntent, FullHistoryAgentAttemptKind, FullHistoryAgentAttemptReceipt, FullHistoryAgentCheckpoint, FullHistoryAgentOutcome, FullHistoryAgentRunnerDeps, FullHistoryAgentRunnerResult, FullHistoryAgentStopReason, FullHistoryAgentUsage } from "./full-history-agent-contract.js";
 import { validateProposal } from "./analysis.js";
 
-export const FULL_HISTORY_AGENT_LIMITS = Object.freeze({ nodes: 128, attempts: 128, summaryBytes: 8192, proposalBytes: 128 * 1024, thinkingBytes: 128 * 1024, metadataBytes: 64 * 1024, eventBytes: 2 * 1024 * 1024, requestMs: 10 * 60 * 1000, overallMs: 24 * 60 * 60 * 1000 });
+export const FULL_HISTORY_AGENT_LIMITS = Object.freeze({ summaryBytes: 8192, proposalBytes: 128 * 1024, thinkingBytes: 128 * 1024, metadataBytes: 64 * 1024, eventBytes: 2 * 1024 * 1024, requestMs: 10 * 60 * 1000, overallMs: 24 * 60 * 60 * 1000 });
 const digest = (value: unknown) => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 function fail(code: string): never { throw new Error(code); }
 const plain = (value: unknown): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -53,9 +53,7 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
   const projection = () => ({ planId: deps.plan.planId, planHash: deps.plan.planHash, model: deps.plan.model, maxRequests: deps.plan.maxRequests, nodes: deps.plan.nodes });
   const planIdentity = digest(projection()), grantIdentity = digest(deps.grant);
   const plan = structuredClone(projection()), grant = structuredClone(deps.grant), policy = grant.policy;
-  const expectedReserve = Array.isArray(plan.nodes) ? Math.min(16, Math.ceil(plan.nodes.length * 0.2), limits.attempts - plan.nodes.length) : -1;
-  if (!deps.jobId || !deps.workerEpoch || !Array.isArray(plan.nodes) || !plan.nodes.length || plan.nodes.length > limits.nodes || plan.maxRequests !== plan.nodes.length || !hex(plan.planHash) || grant.analysisMode !== "full-history-agent-v2" || !hex(grant.grantHash) || grant.materialPlanId !== plan.planId || grant.materialPlanHash !== plan.planHash || grant.baseRequests !== plan.nodes.length || !Number.isSafeInteger(grant.retryReserve) || grant.retryReserve < 0 || grant.retryReserve > plan.nodes.length * 2 || grant.maxRequests !== grant.baseRequests + grant.retryReserve || grant.maxRequests > limits.attempts || grant.model.provider !== plan.model.provider || grant.model.id !== plan.model.id || !policy || policy.id !== "bounded-intake-v2" || policy.maxNodeAttempts !== 3 || policy.maxJsonRepairsPerNode !== 1 || policy.maxUnknownRetriesPerNode !== 1 || policy.maxLengthEscalationsPerNode !== 1 || policy.unknownRetryMayBillAgain !== true || policy.grantLifetimeMs !== 86400000 || !Number.isSafeInteger(policy.initialOutputTokens) || policy.initialOutputTokens < 1 || policy.initialOutputTokens > 8192 || !Number.isSafeInteger(policy.maxOutputTokens) || policy.maxOutputTokens < policy.initialOutputTokens || policy.maxOutputTokens > 16384 || policy.maxOutputTokens > plan.model.maxTokens || !Number.isSafeInteger(plan.model.contextWindow) || plan.model.contextWindow < 1 || !deps.resolved.agentFactory) fail("analysis-full-agent-grant-invalid");
-  if (grant.retryReserve !== expectedReserve) fail("analysis-full-agent-grant-invalid");
+  if (!deps.jobId || !deps.workerEpoch || !Array.isArray(plan.nodes) || !plan.nodes.length || plan.maxRequests !== plan.nodes.length || !hex(plan.planHash) || grant.analysisMode !== "full-history-agent-v2" || !hex(grant.grantHash) || grant.materialPlanId !== plan.planId || grant.materialPlanHash !== plan.planHash || grant.baseRequests !== plan.nodes.length || !Number.isSafeInteger(grant.retryReserve) || grant.retryReserve < 0 || grant.maxRequests !== grant.baseRequests + grant.retryReserve || !Number.isSafeInteger(grant.maxRequests) || grant.model.provider !== plan.model.provider || grant.model.id !== plan.model.id || !policy || policy.id !== "bounded-intake-v2" || policy.maxNodeAttempts !== 3 || policy.maxJsonRepairsPerNode !== 1 || policy.maxUnknownRetriesPerNode !== 1 || policy.maxLengthEscalationsPerNode !== 1 || policy.unknownRetryMayBillAgain !== true || policy.grantLifetimeMs !== 86400000 || !Number.isSafeInteger(policy.initialOutputTokens) || policy.initialOutputTokens < 1 || policy.initialOutputTokens > 8192 || !Number.isSafeInteger(policy.maxOutputTokens) || policy.maxOutputTokens < policy.initialOutputTokens || policy.maxOutputTokens > 16384 || policy.maxOutputTokens > plan.model.maxTokens || !Number.isSafeInteger(plan.model.contextWindow) || plan.model.contextWindow < 1 || !deps.resolved.agentFactory) fail("analysis-full-agent-grant-invalid");
   const nodeIds = new Set<string>();
   for (const node of plan.nodes) {
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(node.id) || nodeIds.has(node.id) || !["batch", "merge", "final"].includes(node.kind) || !Array.isArray(node.inputNodeIds) || node.inputNodeIds.length > 4 || new Set(node.inputNodeIds).size !== node.inputNodeIds.length || node.inputNodeIds.some(id => !nodeIds.has(id)) || !Array.isArray(node.sourceIds) || !node.sourceIds.length || new Set(node.sourceIds).size !== node.sourceIds.length || node.sourceIds.some(id => !/^src-[A-Za-z0-9_-]{1,80}$/.test(id)) || node.kind === "batch" && (node.inputNodeIds.length !== 0 || !hex(node.materialHash)) || node.kind !== "batch" && !node.inputNodeIds.length) fail("analysis-full-agent-plan-invalid");
@@ -69,9 +67,9 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
   const own = new AbortController(), signal = AbortSignal.any([deps.signal, own.signal]), workerEpoch = deps.workerEpoch, jobId = deps.jobId;
   const modelIdentity = (value: { provider: string; id: string; fingerprint: string; contextWindow: number; maxTokens: number; baseUrl?: string; model: unknown }) => JSON.stringify([value.provider, value.id, value.fingerprint, value.contextWindow, value.maxTokens, value.baseUrl, value.model]);
   const pinnedModel = modelIdentity(deps.resolved);
-  // Explicit count authority (finite total or unlimited) replaces the old
-  // reserve/per-node count policy. The store atomically enforces its current cap.
-  let unlimited = false, budgetAuthorizationIdentity: string | undefined, budgetRevision = -1;
+  // Preserve and validate historical budget records without applying their counts.
+  // Model/material authorization, cancellation and expiry still gate every send.
+  let budgetAuthorizationIdentity: string | undefined, budgetRevision = -1;
   let overallFailure: string | undefined, activeAgent: ReturnType<FullHistoryAgentRunnerDeps["resolved"]["agentFactory"]["createAgent"]> | undefined;
   const timer = setTimeout(() => { overallFailure = "analysis-full-agent-timeout"; own.abort(); activeAgent?.abort(); }, Math.min(deps.timeoutMs ?? limits.overallMs, limits.overallMs));
   const alive = () => { if (signal.aborted) throw new FatalBoundary(overallFailure ?? "cancelled"); };
@@ -91,13 +89,13 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
     alive();
     if (!authorization) {
       if (budgetAuthorizationIdentity) throw new FatalBoundary("analysis-full-agent-budget-authorization-changed");
-      unlimited = false; return;
+      return;
     }
     const revision = authorization.revision ?? 0, cap = authorization.maxRequests ?? null;
     if (!plain(authorization) || !Number.isSafeInteger(revision) || revision < 0 || (cap === null ? authorization.unlimited !== true : !Number.isSafeInteger(cap) || cap < 0 || authorization.unlimited !== undefined) || !hex(authorization.authorizationHash) || authorization.jobId !== jobId || authorization.grantHash !== grant.grantHash || authorization.materialPlanHash !== plan.planHash || authorization.modelFingerprint !== plan.model.fingerprint || authorization.promptSchemaHash !== FULL_HISTORY_AGENT_PROMPT_SCHEMA_HASH || !Number.isFinite(Date.parse(authorization.authorizedAt)) || !Number.isFinite(Date.parse(authorization.expiresAt)) || !deps.verifyOnly && (Date.parse(authorization.expiresAt) <= Date.now() || Date.parse(authorization.authorizedAt) > Date.now())) throw new FatalBoundary("analysis-full-agent-budget-authorization-invalid");
     const identity = digest(authorization);
     if (revision < budgetRevision || budgetAuthorizationIdentity && revision === budgetRevision && identity !== budgetAuthorizationIdentity) throw new FatalBoundary("analysis-full-agent-budget-authorization-changed");
-    budgetAuthorizationIdentity = identity; budgetRevision = revision; unlimited = true;
+    budgetAuthorizationIdentity = identity; budgetRevision = revision;
   }
   async function retryBackoff(attempts: number) {
     await boundary();
@@ -123,19 +121,18 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
   const attempts = new Map<string, FullHistoryAgentAttempt[]>(), checkpoints = new Map<string, FullHistoryAgentCheckpoint>();
   const summaries = new Map<string, { summary: string; sourceIds: string[] }>(), sources = new Map<string, ResWorkflowSource>();
   const attemptIds = new Set<string>(), slots = new Set<number>();
-  let reserveUsed = 0, baseUsed = 0, reusedCheckpoints = 0, budgetBlocked = false;
+  let reserveUsed = 0, baseUsed = 0, reusedCheckpoints = 0;
   const progress = async (phase: Parameters<FullHistoryAgentRunnerDeps["onProgress"]>[0]["phase"]) => { if (deps.verifyOnly) return; await boundary(); await fenced(deps.onProgress({ phase, completedNodes: checkpoints.size, reusedCheckpoints })); };
   function validateHistory(nodeId: string, history: FullHistoryAgentAttempt[]) {
-    if (!Array.isArray(history) || !unlimited && history.length > policy.maxNodeAttempts) fail("analysis-full-agent-attempt-invalid");
-    const counts = { "retry-length": 0, "retry-unknown": 0, "repair-json": 0 };
+    if (!Array.isArray(history)) fail("analysis-full-agent-attempt-invalid");
+    const recoveryKinds = new Set(["retry-length", "retry-unknown", "repair-json"]);
     for (let index = 0; index < history.length; index++) {
       const { intent, receipt } = history[index], previous = history[index - 1];
-      if (!intent || intent.schema !== "pi-full-agent-attempt-intent.v2" || intent.jobId !== deps.jobId || !intent.workerEpoch || intent.grantHash !== grant.grantHash || intent.materialPlanHash !== plan.planHash || intent.nodeId !== nodeId || !Number.isSafeInteger(intent.nodeAttempt) || intent.nodeAttempt !== index + 1 || intent.modelFingerprint !== plan.model.fingerprint || intent.promptSchemaHash !== FULL_HISTORY_AGENT_PROMPT_SCHEMA_HASH || !hex(intent.baseInputHash) || !hex(intent.requestHash) || !Number.isSafeInteger(intent.requestBytes) || intent.requestBytes < 1 || !Number.isSafeInteger(intent.slot) || intent.slot < 1 || !unlimited && intent.slot > grant.maxRequests || !intent.attemptId || attemptIds.has(intent.attemptId) || slots.has(intent.slot) || intent.bucket !== (index === 0 ? "base" : "reserve") || index === 0 && (intent.kind !== "initial" || intent.maxTokens !== policy.initialOutputTokens) || index > 0 && !Object.hasOwn(counts, intent.kind)) fail("analysis-full-agent-attempt-invalid");
+      if (!intent || intent.schema !== "pi-full-agent-attempt-intent.v2" || intent.jobId !== deps.jobId || !intent.workerEpoch || intent.grantHash !== grant.grantHash || intent.materialPlanHash !== plan.planHash || intent.nodeId !== nodeId || !Number.isSafeInteger(intent.nodeAttempt) || intent.nodeAttempt !== index + 1 || intent.modelFingerprint !== plan.model.fingerprint || intent.promptSchemaHash !== FULL_HISTORY_AGENT_PROMPT_SCHEMA_HASH || !hex(intent.baseInputHash) || !hex(intent.requestHash) || !Number.isSafeInteger(intent.requestBytes) || intent.requestBytes < 1 || !Number.isSafeInteger(intent.slot) || intent.slot < 1 || !intent.attemptId || attemptIds.has(intent.attemptId) || slots.has(intent.slot) || intent.bucket !== (index === 0 ? "base" : "reserve") || index === 0 && (intent.kind !== "initial" || intent.maxTokens !== policy.initialOutputTokens) || index > 0 && !recoveryKinds.has(intent.kind)) fail("analysis-full-agent-attempt-invalid");
       if (index > 0) {
-        counts[intent.kind as keyof typeof counts]++;
-        if (intent.kind === "retry-length" && (previous.receipt?.sdkStopReason !== "length" || previous.receipt.outcome !== "incomplete" || !previous.receipt.providerTerminalObserved || intent.maxTokens !== policy.maxOutputTokens || (unlimited ? intent.maxTokens < previous.intent.maxTokens : intent.maxTokens <= previous.intent.maxTokens)) || intent.kind === "retry-unknown" && (previous.receipt && previous.receipt.outcome !== "unknown" || intent.maxTokens !== previous.intent.maxTokens) || intent.kind === "repair-json" && (!canRepair(previous.receipt) || intent.maxTokens !== previous.intent.maxTokens)) fail("analysis-full-agent-attempt-invalid");
+        if (intent.kind === "retry-length" && (previous.receipt?.sdkStopReason !== "length" || previous.receipt.outcome !== "incomplete" || !previous.receipt.providerTerminalObserved || intent.maxTokens !== policy.maxOutputTokens || intent.maxTokens < previous.intent.maxTokens) || intent.kind === "retry-unknown" && (previous.receipt && previous.receipt.outcome !== "unknown" || intent.maxTokens !== previous.intent.maxTokens) || intent.kind === "repair-json" && (!canRepair(previous.receipt) || intent.maxTokens !== previous.intent.maxTokens)) fail("analysis-full-agent-attempt-invalid");
       }
-      if (intent.maxTokens > policy.maxOutputTokens || intent.maxTokens < 1 || !Number.isSafeInteger(intent.maxTokens) || !unlimited && Object.values(counts).some(count => count > 1)) fail("analysis-full-agent-attempt-invalid");
+      if (intent.maxTokens > policy.maxOutputTokens || intent.maxTokens < 1 || !Number.isSafeInteger(intent.maxTokens)) fail("analysis-full-agent-attempt-invalid");
       if (receipt && (receipt.schema !== "pi-full-agent-attempt-receipt.v2" || receipt.attemptId !== intent.attemptId || receipt.nodeId !== nodeId || receipt.slot !== intent.slot || receipt.requestHash !== intent.requestHash || !["valid", "invalid-output", "invalid-source", "incomplete", "unknown"].includes(receipt.outcome) || !stops.has(receipt.sdkStopReason) || typeof receipt.providerTerminalObserved !== "boolean" || receipt.raw !== undefined && (typeof receipt.raw !== "string" || Buffer.byteLength(receipt.raw) > limits.proposalBytes || receipt.rawHash !== digest(receipt.raw)) || receipt.outcome === "valid" && (receipt.sdkStopReason !== "stop" || !receipt.providerTerminalObserved || receipt.raw === undefined || index !== history.length - 1))) fail("analysis-full-agent-attempt-invalid");
       attemptIds.add(intent.attemptId); slots.add(intent.slot); if (intent.bucket === "base") baseUsed++; else reserveUsed++;
     }
@@ -167,7 +164,7 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
     const prompt = JSON.stringify({ ...baseInput, ...(repair ? { repair } : {}) });
     await progress(attemptKind !== "initial" ? "repairing" : kind === "batch" ? "reviewing" : "merging");
     const local = new AbortController(), attemptSignal = AbortSignal.any([signal, local.signal]);
-    const state: { intent?: FullHistoryAgentAttemptIntent; fatal?: unknown; denied: boolean; dispatched: boolean; observed: boolean; sdkStopReason: FullHistoryAgentStopReason; raw?: string; usage?: FullHistoryAgentUsage; outcome: FullHistoryAgentOutcome; errorCode?: FullHistoryAgentAttemptReceipt["errorCode"] } = { denied: false, dispatched: false, observed: false, sdkStopReason: "none", outcome: "unknown", errorCode: "analysis-full-result-unknown" };
+    const state: { intent?: FullHistoryAgentAttemptIntent; fatal?: unknown; dispatched: boolean; observed: boolean; sdkStopReason: FullHistoryAgentStopReason; raw?: string; usage?: FullHistoryAgentUsage; outcome: FullHistoryAgentOutcome; errorCode?: FullHistoryAgentAttemptReceipt["errorCode"] } = { dispatched: false, observed: false, sdkStopReason: "none", outcome: "unknown", errorCode: "analysis-full-result-unknown" };
     let agent: typeof activeAgent, producer: Promise<void> | undefined;
     const safeError = () => ({ role: "assistant", content: [], api: deps.resolved.api ?? "unknown", provider: deps.resolved.provider, model: deps.resolved.id, stopReason: "error", errorMessage: "analysis-full-result-unknown", timestamp: Date.now(), usage: { input: 0, output: 0, totalTokens: 0, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
     const requestTimer = setTimeout(() => local.abort(), limits.requestMs);
@@ -191,11 +188,11 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
           const requestHash = digest({ context: normalized, maxTokens, temperature: 0, reasoning: "off", maxRetries: 0, modelFingerprint: plan.model.fingerprint });
           const draft: FullHistoryAgentAttemptDraft = { nodeId, nodeAttempt: history.length + 1, kind: attemptKind, baseInputHash, requestHash, promptSchemaHash: FULL_HISTORY_AGENT_PROMPT_SCHEMA_HASH, modelFingerprint: plan.model.fingerprint, requestBytes, maxTokens };
           await boundary();
-          let issued; try { issued = await fenced(deps.onBeforeSend(draft)); } catch (error) { if ((error as Error)?.message === "analysis-full-agent-budget-exhausted") { state.denied = true; output.push({ type: "error", reason: "error", error: safeError() }); return; } throw new FatalBoundary((error as Error)?.message || "analysis-full-agent-storage-unavailable"); }
+          let issued; try { issued = await fenced(deps.onBeforeSend(draft)); } catch (error) { throw new FatalBoundary((error as Error)?.message || "analysis-full-agent-storage-unavailable"); }
           const fields = Object.fromEntries(Object.keys(draft).map(key => [key, (issued as any)[key]]));
-          if (digest(fields) !== digest(draft) || issued.schema !== "pi-full-agent-attempt-intent.v2" || issued.jobId !== deps.jobId || issued.workerEpoch !== deps.workerEpoch || issued.grantHash !== grant.grantHash || issued.materialPlanHash !== plan.planHash || !issued.attemptId || attemptIds.has(issued.attemptId) || slots.has(issued.slot) || !Number.isSafeInteger(issued.slot) || issued.slot < 1 || issued.slot !== slots.size + 1 || !unlimited && issued.slot > grant.maxRequests || issued.bucket !== (history.length ? "reserve" : "base")) throw new FatalBoundary("analysis-full-agent-intent-invalid");
+          if (digest(fields) !== digest(draft) || issued.schema !== "pi-full-agent-attempt-intent.v2" || issued.jobId !== deps.jobId || issued.workerEpoch !== deps.workerEpoch || issued.grantHash !== grant.grantHash || issued.materialPlanHash !== plan.planHash || !issued.attemptId || attemptIds.has(issued.attemptId) || slots.has(issued.slot) || !Number.isSafeInteger(issued.slot) || issued.slot < 1 || issued.slot !== slots.size + 1 || issued.bucket !== (history.length ? "reserve" : "base")) throw new FatalBoundary("analysis-full-agent-intent-invalid");
           state.intent = issued; history.push({ intent: issued }); attemptIds.add(issued.attemptId); slots.add(issued.slot); if (issued.bucket === "base") baseUsed++; else reserveUsed++;
-          if (!Number.isSafeInteger(baseUsed + reserveUsed) || baseUsed > grant.baseRequests || !unlimited && reserveUsed > grant.retryReserve) throw new FatalBoundary("analysis-full-agent-budget-invalid");
+          if (!Number.isSafeInteger(baseUsed + reserveUsed) || baseUsed > grant.baseRequests) throw new FatalBoundary("analysis-full-agent-budget-invalid");
           await boundary(); state.dispatched = true;
           const stream = deps.resolved.runtime.streamSimple(fullHistoryAgentRequestModel(deps.resolved.model), normalized, { signal: attemptSignal, maxTokens, temperature: 0, reasoning: undefined, maxRetries: 0, timeoutMs: limits.requestMs } as any);
           iterator = stream[Symbol.asyncIterator]();
@@ -237,7 +234,6 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
       agent = deps.resolved.agentFactory.createAgent({ initialState: { model: deps.resolved.model, thinkingLevel: "off", systemPrompt: SYSTEM, tools: [] }, streamFn, finishTurn: () => ({ action: "end" }) }); activeAgent = agent;
       await bounded(agent.prompt(prompt)); await bounded(agent.waitForIdle()); if (producer) await bounded(producer); await boundary();
       if (state.fatal) throw state.fatal;
-      if (state.denied) return { denied: true as const };
       const intent = state.intent;
       if (!intent || !state.dispatched) throw new FatalBoundary("analysis-full-agent-send-invalid");
       if (state.outcome === "valid") { const message = [...agent.state.messages].reverse().find((value: any) => value.role === "assistant"); if (message?.stopReason !== "stop" || message.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("") !== state.raw) { state.outcome = "incomplete"; state.errorCode = "analysis-full-output-incomplete"; } }
@@ -253,7 +249,7 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
   try {
     await boundary();
     for (const node of plan.nodes) { const history = await fenced(deps.readAttempts(node.id)); validateHistory(node.id, history); attempts.set(node.id, history); }
-    if (!Number.isSafeInteger(baseUsed + reserveUsed) || baseUsed > grant.baseRequests || !unlimited && (reserveUsed > grant.retryReserve || slots.size > grant.maxRequests) || [...slots].sort((a, b) => a - b).some((slot, index) => slot !== index + 1)) fail("analysis-full-agent-budget-invalid");
+    if (!Number.isSafeInteger(baseUsed + reserveUsed) || baseUsed > grant.baseRequests || [...slots].sort((a, b) => a - b).some((slot, index) => slot !== index + 1)) fail("analysis-full-agent-budget-invalid");
     let finalProposal: ResWorkflowProposal | undefined, finalSourceIds: string[] = [];
     for (const node of plan.nodes) {
       await boundary();
@@ -277,24 +273,22 @@ export async function runFullHistoryAgent(deps: FullHistoryAgentRunnerDeps): Pro
         if (node.kind === "final") { finalProposal = valid.proposal; finalSourceIds = valid.sourceIds; }
         continue;
       }
-      while (unlimited || history.length < policy.maxNodeAttempts) {
+      while (true) {
         const previous = history.at(-1); let attemptKind: FullHistoryAgentAttemptKind, maxTokens = previous?.intent.maxTokens ?? policy.initialOutputTokens;
         if (!previous) attemptKind = "initial";
-        else if (previous.receipt?.sdkStopReason === "length" && previous.receipt.outcome === "incomplete" && previous.receipt.providerTerminalObserved && (unlimited || !history.some(attempt => attempt.intent.kind === "retry-length")) && (unlimited || maxTokens < policy.maxOutputTokens)) { attemptKind = "retry-length"; maxTokens = policy.maxOutputTokens; }
-        else if ((!previous.receipt || previous.receipt.outcome === "unknown") && (unlimited || !history.some(attempt => attempt.intent.kind === "retry-unknown"))) attemptKind = "retry-unknown";
-        else if (canRepair(previous.receipt) && (unlimited || !history.some(attempt => attempt.intent.kind === "repair-json"))) attemptKind = "repair-json";
+        else if (previous.receipt?.sdkStopReason === "length" && previous.receipt.outcome === "incomplete" && previous.receipt.providerTerminalObserved) { attemptKind = "retry-length"; maxTokens = policy.maxOutputTokens; }
+        else if ((!previous.receipt || previous.receipt.outcome === "unknown")) attemptKind = "retry-unknown";
+        else if (canRepair(previous.receipt)) attemptKind = "repair-json";
         else break;
-        if (!unlimited && history.length && reserveUsed >= grant.retryReserve) { budgetBlocked = true; break; }
-        if (unlimited && history.length) await retryBackoff(history.length);
+        if (history.length) await retryBackoff(history.length);
         const result = await physicalAttempt(node.id, node.kind, input, baseInputHash, allowed, history, attemptKind, maxTokens);
-        if ("denied" in result) { budgetBlocked = true; break; }
         if (result.receipt.outcome === "valid") { const valid = await accept(node.id, node.kind, baseInputHash, allowed, result.intent, result.receipt, result.receiptHash); if (node.kind === "final") { finalProposal = valid.proposal; finalSourceIds = valid.sourceIds; } break; }
       }
     }
     await boundary();
     if (checkpoints.size === plan.nodes.length && finalProposal) { await progress("proposal-ready"); return { outcome: "complete", proposal: finalProposal, sources: finalSourceIds.map(id => sources.get(id)!), checkpoints: [...checkpoints.values()] }; }
     if (deps.verifyOnly) fail("analysis-full-agent-completion-invalid");
-    await progress("awaiting-user"); return { outcome: "awaiting-user", reason: budgetBlocked ? "budget-exhausted" : "node-attempt-limit", sources: [], checkpoints: [...checkpoints.values()] };
+    await progress("awaiting-user"); return { outcome: "awaiting-user", reason: "result-incomplete", sources: [], checkpoints: [...checkpoints.values()] };
   } catch (error) {
     if (deps.verifyOnly && !(error instanceof FatalBoundary)) fail("analysis-full-agent-completion-invalid");
     throw error;

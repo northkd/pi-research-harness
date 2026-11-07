@@ -56,3 +56,29 @@ test('wrong package version, changed patch and symlink source refuse before writ
   assert.throws(() => applyGoalHermesPatch(f.dir, {...f, apply: true}), /unsafe/);
   assert.equal(fs.readFileSync(path.join(f.root, 'engine.ts'), 'utf8'), 'before\n');
 });
+
+test('a complete previous Goal release upgrades, while mixed inventories cannot', t => {
+  const f = fixture(t);
+  let patch = '';
+  const files = {};
+  for (const name of Object.keys(f.metadata.files)) {
+    fs.writeFileSync(path.join(f.root, name), 'previous\n');
+    files[name] = sha('previous\n');
+    patch += `--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-previous\n+after\n`;
+  }
+  fs.writeFileSync(f.patchFile, patch);
+  f.metadata.upgrades = [{files, patchSha256: sha(patch)}];
+  assert.equal(applyGoalHermesPatch(f.dir, {...f, apply: true}).appliedNow, true);
+  assert.equal(applyGoalHermesPatch(f.dir, {...f, checkOnly: true}).patched, true);
+  fs.writeFileSync(path.join(f.root, 'state.ts'), 'previous\n');
+  assert.throws(() => applyGoalHermesPatch(f.dir, {...f, apply: true}), /unknown or partially/);
+});
+
+test('released Goal patches authenticate their complete source and upgrade inventories', () => {
+  const repo = new URL('../', import.meta.url);
+  const metadata = JSON.parse(fs.readFileSync(new URL('config/goal-hermes-patch.json', repo), 'utf8'));
+  for (const release of [metadata, ...(metadata.upgrades ?? [])]) {
+    assert.equal(sha(fs.readFileSync(new URL(release.patch, repo))), release.patchSha256);
+    assert.deepEqual(Object.keys(release.files).sort(), Object.keys(metadata.files).sort());
+  }
+});

@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -59,7 +60,7 @@ export async function streamLocalHistory(options: Options): Promise<LocalHistory
   const reasons = new Set<string>(), rows: Row[] = [], byId = new Map<string, Row>();
   let scannedBytes = 0, indexedEntries = 0, normalMessages = 0, maxBufferedLineBytes = 0;
   let leaf: string | undefined, explicitLeaf: string | undefined, id = "", unknownMetadata = false;
-  let before;
+  let before: Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs" | "isFile">;
   try { before = await handle.stat(); } catch (error) { await handle.close(); throw error; }
   const stamp = (stat: typeof before) => [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
   const original = stamp(before);

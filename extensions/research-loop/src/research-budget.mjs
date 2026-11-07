@@ -142,7 +142,7 @@ function state(b, a) {
     const settlement = readRecord(a, `settlement-${record.reservationId}.json`, b);
     if (settlement) { if (settlement.schema !== 'pi-research-budget-settlement.v1' || settlement.reservationId !== record.reservationId || !['completed', 'failed', 'unknown'].includes(settlement.outcome)) fail(CODE_UNAVAILABLE); safeUsage(settlement.usage); settlements.set(record.reservationId, settlement); }
   }
-  if (reservations.length && !policies.length || names.some(n => /^settlement-/.test(n) && !reservations.some(r => n === `settlement-${r.reservationId}.json`))) fail(CODE_UNAVAILABLE);
+  if (names.some(n => /^settlement-/.test(n) && !reservations.some(r => n === `settlement-${r.reservationId}.json`))) fail(CODE_UNAVAILABLE);
   let scopedRuns = 0; const scopes = anchor(b.cwd, [...rootParts, 'scopes']);
   if (scopes) try { for (const name of fs.readdirSync(scopes.target)) { if (!/^[a-f0-9]{64}$/.test(name)) fail(CODE_SCOPE); const one = anchor(b.cwd, [...rootParts, 'scopes', name]); let record; try { record = readRecord(one, 'scope.json', b); } finally { one?.close(); } if (!record || hash(record.scopeId) !== name) fail(CODE_SCOPE); if (scopeDescriptor(b, record.scopeId).attested) scopedRuns++; } } finally { scopes.close(); }
   return { policies, reservations, settlements, scopedRuns };
@@ -151,7 +151,9 @@ function snapshot(b, s) {
   const policy = s.policies.at(-1); let inFlight = 0, unknown = 0;
   for (const r of s.reservations) { const end = s.settlements.get(r.reservationId); if (end?.outcome === 'unknown') unknown++; else if (!end) { try { process.kill(r.pid, 0); inFlight++; } catch (error) { if (error.code === 'ESRCH') unknown++; else inFlight++; } } }
   const times = [...s.policies, ...s.reservations, ...s.settlements.values()].map(v => v.at).filter(v => typeof v === 'string').sort();
-  return { cwd: b.cwd, revision: policy ? hash(policy) : null, configured: !!policy, scopedRuns: s.scopedRuns, limits: policy ? { ...policy.limits } : { attempts: null, modelRequests: null }, usage: { attempts: scientificAttempts(b.cwd), modelRequests: s.reservations.length, inFlight, unknown }, updatedAt: times.at(-1) ?? null, enforcement: { attempts: !!policy, modelRequests: !!policy && s.scopedRuns > 0, scope: 'native-research-workflow', physicalTransport: 'sse-http' } };
+  // Old policy journals remain available for compatibility and audit. Their
+  // finite values never become execution limits, including on restored runs.
+  return { cwd: b.cwd, revision: policy ? hash(policy) : null, configured: false, scopedRuns: s.scopedRuns, limits: { attempts: null, modelRequests: null }, usage: { attempts: scientificAttempts(b.cwd), modelRequests: s.reservations.length, inFlight, unknown }, updatedAt: times.at(-1) ?? null, enforcement: { attempts: false, modelRequests: false, scope: 'native-research-workflow', physicalTransport: 'sse-http' } };
 }
 export function readResearchBudget(options) { return fixedErrors(() => { const b = binding(options), a = anchor(b.cwd, rootParts); try { return snapshot(b, state(b, a)); } finally { a?.close(); } }); }
 export function updateResearchBudget(options) {
@@ -177,7 +179,23 @@ export function attestResearchBudgetScope(options) {
 }
 export function reserveResearchBudget(options) {
   const b = binding(options), metadata = safeMetadata(options.metadata); if (!token(options.scopeId) || !requestId(options.requestId) || options.kind !== 'model-request') fail(CODE_INVALID);
-  return withLock(b, a => { const s = state(b, a), policy = s.policies.at(-1); if (!policy) fail('research-budget-not-configured'); scopeDescriptor(b, options.scopeId, undefined, true); const requestHash = hash({ scopeId: options.scopeId, kind: options.kind, ...(metadata ? { metadata } : {}) }), old = s.reservations.find(r => r.requestId === options.requestId); if (old && old.requestHash !== requestHash) fail('research-budget-request-conflict'); let r = old; if (!r) { if (scientificAttempts(b.cwd) >= policy.limits.attempts) fail('research-budget-attempts-exhausted'); if (s.reservations.length >= policy.limits.modelRequests) fail('research-budget-model-requests-exhausted'); const slot = s.reservations.length + 1; if (!safeInt(slot)) fail(CODE_UNAVAILABLE); r = { schema: 'pi-research-budget-reservation.v1', ...b, reservationId: `reservation-${hash([b, options.requestId]).slice(0, 32)}`, slot, scopeId: options.scopeId, requestId: options.requestId, requestHash, kind: 'model-request', ...(metadata ? { metadata } : {}), pid: process.pid, at: new Date().toISOString() }; writeRecord(a, `reservation-${slotName(slot)}.json`, r); s.reservations.push(r); } const end = s.settlements.get(r.reservationId); return { reservationId: r.reservationId, slot: r.slot, scopeId: r.scopeId, kind: r.kind, reused: !!old, outcome: end?.outcome ?? 'in-flight', budget: snapshot(b, s) }; });
+  return withLock(b, a => {
+    const s = state(b, a);
+    scopeDescriptor(b, options.scopeId, undefined, true);
+    const requestHash = hash({ scopeId: options.scopeId, kind: options.kind, ...(metadata ? { metadata } : {}) });
+    const old = s.reservations.find(r => r.requestId === options.requestId);
+    if (old && old.requestHash !== requestHash) fail('research-budget-request-conflict');
+    let r = old;
+    if (!r) {
+      const slot = s.reservations.length + 1;
+      if (!safeInt(slot)) fail(CODE_UNAVAILABLE);
+      r = { schema: 'pi-research-budget-reservation.v1', ...b, reservationId: `reservation-${hash([b, options.requestId]).slice(0, 32)}`, slot, scopeId: options.scopeId, requestId: options.requestId, requestHash, kind: 'model-request', ...(metadata ? { metadata } : {}), pid: process.pid, at: new Date().toISOString() };
+      writeRecord(a, `reservation-${slotName(slot)}.json`, r);
+      s.reservations.push(r);
+    }
+    const end = s.settlements.get(r.reservationId);
+    return { reservationId: r.reservationId, slot: r.slot, scopeId: r.scopeId, kind: r.kind, reused: !!old, outcome: end?.outcome ?? 'in-flight', budget: snapshot(b, s) };
+  });
 }
 export function settleResearchBudget(options) {
   const b = binding(options), usage = safeUsage(options.usage); if (!/^reservation-[a-f0-9]{32}$/.test(options.reservationId) || !['completed', 'failed', 'unknown'].includes(options.outcome)) fail(CODE_INVALID);
@@ -187,5 +205,5 @@ export function withResearchAttemptBudget(options, action) {
   if (typeof action !== 'function') fail(CODE_INVALID); const b = binding(options), a = anchor(b.cwd, rootParts);
   let configured; try { configured = !!state(b, a).policies.length; } finally { a?.close(); }
   if (!configured) return action();
-  return withLock(b, locked => { const s = state(b, locked), limit = s.policies.at(-1)?.limits.attempts; if (limit === undefined) fail('research-budget-not-configured'); const result = action(); if (result && typeof result.then === 'function') fail(CODE_INVALID); const scientific = anchor(b.cwd, ['.pi', 'research-loop']); let fd; try { scientific.check(); fd = fs.openSync(scientific.leaf('ledger.jsonl'), fs.constants.O_RDONLY | FILE_FLAGS); const before = fs.fstatSync(fd); regular(before); fs.fsyncSync(fd); scientific.check(); const named = fs.lstatSync(path.join(scientific.target, 'ledger.jsonl')), after = fs.fstatSync(fd); regular(named); regular(after); if (stamp(before) !== stamp(after) || stamp(after) !== stamp(named)) fail(CODE_UNAVAILABLE); } finally { if (fd !== undefined) fs.closeSync(fd); scientific?.close(); } return result; });
+  return withLock(b, locked => { state(b, locked); const result = action(); if (result && typeof result.then === 'function') fail(CODE_INVALID); const scientific = anchor(b.cwd, ['.pi', 'research-loop']); let fd; try { scientific.check(); fd = fs.openSync(scientific.leaf('ledger.jsonl'), fs.constants.O_RDONLY | FILE_FLAGS); const before = fs.fstatSync(fd); regular(before); fs.fsyncSync(fd); scientific.check(); const named = fs.lstatSync(path.join(scientific.target, 'ledger.jsonl')), after = fs.fstatSync(fd); regular(named); regular(after); if (stamp(before) !== stamp(after) || stamp(after) !== stamp(named)) fail(CODE_UNAVAILABLE); } finally { if (fd !== undefined) fs.closeSync(fd); scientific?.close(); } return result; });
 }

@@ -7,7 +7,7 @@ export type FullHistoryAgentAttemptKind = "initial" | "retry-length" | "retry-un
 export type FullHistoryAgentStopReason = "stop" | "length" | "toolUse" | "deferred" | "error" | "aborted" | "none";
 export type FullHistoryAgentOutcome = "valid" | "invalid-output" | "invalid-source" | "incomplete" | "unknown";
 export interface FullHistoryAgentUsage { input?: number; output?: number; totalTokens?: number; cacheRead?: number; cacheWrite?: number; reasoning?: number }
-/** Append-only count authority. Does not replace or renew the original grant. */
+/** Historical append-only count choice. Validated for provenance, never an effective request cap or renewed grant. */
 export interface FullHistoryAgentBudgetAuthorization {
   unlimited?: true;
   /** Absent only on the historical unlimited sibling. */
@@ -102,7 +102,7 @@ export interface FullHistoryAgentRunnerDeps {
 }
 export interface FullHistoryAgentRunnerResult {
   outcome: "complete" | "awaiting-user";
-  reason?: "budget-exhausted" | "node-attempt-limit";
+  reason?: "budget-exhausted" | "node-attempt-limit" | "result-incomplete";
   proposal?: ResWorkflowProposal;
   sources: ResWorkflowSource[];
   checkpoints: FullHistoryAgentCheckpoint[];
