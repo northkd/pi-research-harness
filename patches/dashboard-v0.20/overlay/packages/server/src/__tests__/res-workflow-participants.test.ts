@@ -43,6 +43,40 @@ function setup(archived = false) {
 }
 
 describe("res-workflow metadata-only participation", () => {
+  it("detaches a resident association without deleting its transcript, status or unrelated plugin bags", async () => {
+    const f = setup(); await f.participants.join(f.access, f.sessionId, "manual");
+    const bytes = fs.readFileSync(f.sessionFile, "utf8");
+    f.metaPersistence.save(f.sessionFile, sessionToMeta(f.sessionManager.get(f.sessionId)!));
+    const result = await f.participants.detach({ ...f.access, write: true }, f.sessionId);
+    expect(result).toEqual({ sessionId: f.sessionId, removed: true });
+    expect(fs.readFileSync(f.sessionFile, "utf8")).toBe(bytes);
+    expect(f.sessionManager.get(f.sessionId)?.status).toBe("ended");
+    expect(f.sessionManager.get(f.sessionId)?.resWorkflow).toBeUndefined();
+    expect(readSessionMeta(f.sessionFile)?.pluginRefs?.demo).toEqual({ demoKey: "keep" });
+    expect(readSessionMeta(f.sessionFile)?.pluginRefs?.["res-workflow"]?.resWorkflow).toBeUndefined();
+    f.metaPersistence.save(f.sessionFile, sessionToMeta(f.sessionManager.get(f.sessionId)!)); f.metaPersistence.flush(f.sessionFile);
+    expect(sessionFromMeta(f.sessionId, f.sessionFile, f.cwd, readSessionMeta(f.sessionFile)!, 100).resWorkflow).toBeUndefined();
+    expect(f.broadcast).toHaveBeenLastCalledWith(f.sessionId, expect.objectContaining({ resWorkflow: null }));
+  });
+
+  it("detaches an archive row without unarchiving or resuming it", async () => {
+    const f = setup(true); await f.participants.join(f.access, f.sessionId, "manual");
+    const restore = vi.spyOn(f.archive, "unarchiveSession");
+    await f.participants.detach({ ...f.access, write: true }, f.sessionId);
+    expect(f.archive.getById(f.sessionId)?.resWorkflow).toBeUndefined();
+    expect(f.sessionManager.get(f.sessionId)).toBeUndefined(); expect(restore).not.toHaveBeenCalled();
+    expect(readSessionMeta(f.sessionFile)?.archived).toBe(true);
+  });
+
+  it("refuses unauthorized removal and preserves memory if association metadata cannot be written", async () => {
+    const f = setup(); await f.participants.join(f.access, f.sessionId, "manual");
+    await expect(f.participants.detach({ ...f.access, write: false }, f.sessionId)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(f.participants.detach({ ...f.access, write: true, canReadHistory: async () => false }, f.sessionId)).rejects.toMatchObject({ statusCode: 404 });
+    vi.mocked(writeSessionMeta).mockImplementationOnce(() => { throw new Error("write-failed"); });
+    await expect(f.participants.detach({ ...f.access, write: true }, f.sessionId)).rejects.toMatchObject({ statusCode: 503 });
+    expect(f.sessionManager.get(f.sessionId)?.resWorkflow).toBeDefined();
+  });
+
   it("joins an ended resident, preserves plugin bags and survives a routine save/restart without resuming", async () => {
     const f = setup();
     f.metaPersistence.save(f.sessionFile, sessionToMeta(f.sessionManager.get(f.sessionId)!));

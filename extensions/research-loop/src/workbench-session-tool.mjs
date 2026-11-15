@@ -34,6 +34,8 @@ export const RESEARCH_DISPATCH_TASK_SCHEMA = {
 };
 const ROLE = /^[a-z][a-z0-9-]{1,39}$/;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
+const REQUEST_ID = /^[A-Za-z0-9_-]{8,128}$/;
+const CAPACITY_ERRORS = new Set(['research-session-concurrency-limit', 'research-session-capacity-limit', 'research-session-resident-limit', 'research-session-memory-limit', 'research-session-resource-budget-unavailable']);
 const ENDPOINT_PATH = '/api/res-workflow/participants/spawn';
 const LOCAL_TOKEN_HEADER = 'x-pi-local-token';
 const MAX_AUTH_BYTES = 4096;
@@ -166,7 +168,13 @@ export function buildResearchSessionPrompt(provenance, taskContext) {
 
 
 function blocked(error, extra = {}) {
-  const result = { status: 'blocked', tool: RESEARCH_SESSION_TOOL_NAME, error, ...extra };
+  const guidance = CAPACITY_ERRORS.has(error) ? {
+    queued: false, retryable: true, retryWith: { tool: 'research_dispatch', action: 'plan' },
+    hint: 'This direct launch did NOT start and was NOT queued. Preserve the original role, task, stage and dependencies. Submit separable work as one prepared research_dispatch plan (2-12 tasks, stable planId); excess work is durably queued and visible in the workbench. Do not invent empty tasks or repeatedly retry direct launches. For a single broad goal use delegate, or wait for capacity for an indivisible direct task.',
+  } : /(?:spawn-outcome-unknown|launch-recovery-required|spawn-in-progress|timeout|unavailable|cancelled|response-too-large)$/.test(error) ? {
+    hint: 'The process outcome may be unknown. Do not replace this request with a new requestId or a duplicate plan. Inspect the workbench; retry only the SAME requestId and unchanged payload to obtain its existing receipt.',
+  } : {};
+  const result = { status: 'blocked', tool: RESEARCH_SESSION_TOOL_NAME, error, ...guidance, ...extra };
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result, isError: true };
 }
 
@@ -202,6 +210,7 @@ export function createResearchSessionTool(pi, options = {}) {
     if (!text(params?.task, RESEARCH_SESSION_LIMITS.maxTaskChars)) return blocked('research-session-task-invalid');
     if (!RESEARCH_SESSION_STAGES.includes(params?.stage)) return blocked('research-session-stage-invalid');
     if (params?.readOnly !== undefined && params.readOnly !== true) return blocked('research-session-readonly-invalid');
+    if (params?.requestId !== undefined && (typeof params.requestId !== 'string' || !REQUEST_ID.test(params.requestId))) return blocked('research-session-request-id-invalid');
 
     let context;
     try {
@@ -218,6 +227,7 @@ export function createResearchSessionTool(pi, options = {}) {
     if (parentCount >= maxPerParent) return blocked('research-session-concurrency-limit');
     if ([...inFlight.values()].reduce((sum, count) => sum + count, 0) >= maxTotal) return blocked('research-session-capacity-limit');
     inFlight.set(sessionId, parentCount + 1);
+    let submittedRequestId;
     try {
       let auth;
       try { auth = await resolveAuth(); }
@@ -232,10 +242,11 @@ export function createResearchSessionTool(pi, options = {}) {
         role: params.role,
         task: params.task,
         stage: params.stage,
-        requestId: requestId(),
+        requestId: params.requestId ?? requestId(),
         ...(params.tasks === undefined ? {} : { tasks: params.tasks }),
         ...((params.readOnly === true || context.researchSession?.readOnly === true || restrictions.get(sessionId)?.readOnly === true) ? { readOnly: true } : {}),
       };
+      submittedRequestId = body.requestId;
       const timeout = AbortSignal.timeout(timeoutMs);
       const combined = signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout;
       const response = await fetchImpl(target, {
@@ -252,7 +263,7 @@ export function createResearchSessionTool(pi, options = {}) {
         const code = object(reply) && typeof reply.code === 'string' && /^[a-z0-9-]{1,100}$/.test(reply.code)
           ? reply.code
           : 'research-session-spawn-refused';
-        return blocked(code);
+        return blocked(code, { requestId: body.requestId });
       }
       const result = {
         status: 'spawned',
@@ -272,9 +283,10 @@ export function createResearchSessionTool(pi, options = {}) {
       };
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result };
     } catch (error) {
-      if (signal?.aborted) return blocked('research-session-cancelled');
-      if (error?.message === 'response-too-large') return blocked('research-session-response-too-large');
-      return blocked(error?.name === 'TimeoutError' ? 'research-session-timeout' : 'research-session-unavailable');
+      const reference = submittedRequestId ? { requestId: submittedRequestId } : {};
+      if (signal?.aborted) return blocked('research-session-cancelled', reference);
+      if (error?.message === 'response-too-large') return blocked('research-session-response-too-large', reference);
+      return blocked(error?.name === 'TimeoutError' ? 'research-session-timeout' : 'research-session-unavailable', reference);
     } finally {
       const remaining = (inFlight.get(sessionId) ?? 1) - 1;
       if (remaining > 0) inFlight.set(sessionId, remaining);
@@ -285,16 +297,19 @@ export function createResearchSessionTool(pi, options = {}) {
   return {
     name: RESEARCH_SESSION_TOOL_NAME,
     label: 'Research session (linked collaborator)',
-    description: 'Create a real top-level Pi session collaborator joined to the current confirmed res-workflow, with a specific role, task and stage. This is NOT the bundled subagent tool (agent/task/async) and NOT the separately installed Agent/SubagentWorkflow package: both start subordinate runs that return to the current session. Use research_session only from the joined res-workflow. For a coordinator receiving several jobs, include a structured tasks array: the server automatically schedules its child tasks after registration, preserving real parent links. The runtime supplies the parent session, workspace, owner, charter and adoption; role/task/stage cannot redirect them.',
+    description: 'Immediately create one real top-level Pi session collaborator joined to the current confirmed res-workflow if its live capacity allows. Direct research_session capacity refusals are NOT queued: prefer research_dispatch plan for multiple prepared jobs, or delegate for a broad goal, so excess work is durable and visible before execution. This is NOT the bundled subagent tool (agent/task/async) and NOT the separately installed Agent/SubagentWorkflow package. For a coordinator receiving several jobs, a structured tasks array schedules its children after registration. The runtime supplies the parent, workspace, owner, charter and adoption; role/task/stage cannot redirect them.',
     promptSnippet: 'Create a top-level res-workflow collaborator (role+task+stage), distinct from a subordinate subagent.',
     promptGuidelines: [
       'Call research_session only from a session already joined to the confirmed res-workflow.',
+      'Prefer research_dispatch plan for multiple prepared assignments; all tasks are saved before execution and overflow waits in the sortable workbench queue. A refused direct research_session call is not itself queued.',
+      'Use a stable requestId for direct retries. When a response is missing or unknown, reuse the returned requestId with the unchanged payload; never create a second request or a second plan for the same uncertain process.',
       'Include tasks for multiple separable assignments so the server actually dispatches them, instead of asking a coordinator to do every assignment locally.',
       'The tool derives the workspace, owner and charter from this session. Do not try to pass a project, model, URL or session id.',
     ],
     parameters: {
       type: 'object', additionalProperties: false, required: ['role', 'task', 'stage'],
       properties: {
+        requestId: { type: 'string', minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$', description: 'Stable direct-create idempotency key. Reuse the exact key and unchanged payload after an uncertain result; do not create a duplicate plan. Generated and returned if omitted.' },
         role: { type: 'string', minLength: 2, maxLength: RESEARCH_SESSION_LIMITS.maxRoleChars, pattern: '^[a-z][a-z0-9-]{1,39}$', description: 'Bounded collaborator role, for example literature or experiment.' },
         task: { type: 'string', minLength: 1, maxLength: RESEARCH_SESSION_LIMITS.maxTaskChars, description: 'Concrete task stored unchanged in verified metadata. Startup uses a bounded brief; if truncated, the worker must retrieve the complete task with research_dispatch status detail/self before execution.' },
         readOnly: { type: 'boolean', const: true, description: 'Narrow this assignment to read-only work. Inherited user/parent read-only restrictions are always preserved and cannot be cleared by tool arguments.' },

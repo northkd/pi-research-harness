@@ -47,6 +47,8 @@ interface ParticipantDeps {
   accessFor(cwd: string, identity: ResWorkflowIdentity): Promise<ResWorkflowAccess>;
   connection(access: ResWorkflowAccess): Promise<ResWorkflowConnection>;
   broadcast(sessionId: string, update: Partial<DashboardSession>): void;
+  /** Synchronous barrier against late registration after a subtree was removed. */
+  assertParticipationAllowed?(input: { cwd: string; sessionId: string; researchSession?: ResearchSessionProvenance; via: string }): void;
 }
 const sameOwner = (a: HistoryCandidate["principalOwner"], b: HistoryCandidate["principalOwner"]) => a?.iss === b?.iss && a?.sub === b?.sub;
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -93,6 +95,7 @@ export function createResWorkflowParticipants(deps: ParticipantDeps) {
     // projection update. A queued whole-meta save is flushed before the merge.
     const current = lookup(sessionId);
     if (!matches(current, access) || (current!.sessionFile ?? registeredFile) !== file || !sameOwner(current!.principalOwner, expected.principalOwner) || spawn && !sameOwner(current!.principalOwner, spawn.principalOwner)) throw new ResWorkflowError(404, "participant-session-not-found");
+    deps.assertParticipationAllowed?.({ cwd: access.cwd, sessionId, researchSession, via });
     try {
       const parent = path.dirname(file);
       if (!lstatSync(parent).isDirectory() || realpathSync(parent) !== parent) throw new ResWorkflowError(409, "participant-metadata-unsafe");
@@ -135,6 +138,59 @@ export function createResWorkflowParticipants(deps: ParticipantDeps) {
       return { sessionId, resWorkflow, ...(researchSession ? { researchSession } : {}) };
     } catch (err) {
       if (err instanceof ResWorkflowError) throw err;
+      throw new ResWorkflowError(503, "participant-metadata-write-failed");
+    }
+  }
+
+  /** Remove only the workbench association, never the conversation, transcript,
+   * research provenance or running process. The collaboration ledger has already
+   * persisted its removal barrier before it calls this metadata operation. */
+  async function detach(access: ResWorkflowAccess, sessionId: string): Promise<{ sessionId: string; removed: true }> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) throw new ResWorkflowError(400, "real-session-id-required");
+    if (access.write !== true) throw new ResWorkflowError(403, "res-workflow-write-required");
+    await access.revalidate();
+    const row = lookup(sessionId);
+    if (!matches(row, access) || !access.canReadHistory || !(await access.canReadHistory(row!))) throw new ResWorkflowError(404, "participant-session-not-found");
+    const expected = { ...row! }, file = expected.sessionFile;
+    if (typeof file !== "string" || !path.isAbsolute(file) || path.resolve(file) !== file || !file.endsWith(".jsonl") || file.length > 4096) throw new ResWorkflowError(409, "participant-session-file-unavailable");
+    const initial = await lstat(file).catch(() => null);
+    if (initial) {
+      try { await readLocalHistoryHeader(file, access.cwd, sessionId); }
+      catch { throw new ResWorkflowError(409, "participant-session-file-unavailable"); }
+    }
+    await access.revalidate();
+    const current = lookup(sessionId);
+    if (!matches(current, access) || current!.sessionFile !== file || !sameOwner(current!.principalOwner, expected.principalOwner)) throw new ResWorkflowError(404, "participant-session-not-found");
+    try {
+      const parent = path.dirname(file);
+      if (!lstatSync(parent).isDirectory() || realpathSync(parent) !== parent) throw new ResWorkflowError(409, "participant-metadata-unsafe");
+      const inspect = (target: string) => { try { return lstatSync(target); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; } };
+      const actual = inspect(file);
+      if (actual && (!initial || !actual.isFile() || actual.isSymbolicLink() || realpathSync(file) !== file || actual.dev !== initial.dev || actual.ino !== initial.ino) || initial && !actual) throw new ResWorkflowError(409, "participant-metadata-unsafe");
+      const sidecar = metaPath(file);
+      const read = (): SessionMeta => {
+        const side = inspect(sidecar);
+        if (side && (!side.isFile() || side.isSymbolicLink() || side.size > 128 * 1024) || inspect(`${sidecar}.tmp`)) throw new ResWorkflowError(409, "participant-metadata-unsafe");
+        let meta: SessionMeta = {};
+        if (side) { try { const parsed: unknown = JSON.parse(readFileSync(sidecar, "utf8")); if (!object(parsed)) throw new Error(); meta = parsed as SessionMeta; } catch { throw new ResWorkflowError(409, "participant-metadata-invalid"); } }
+        if (isResWorkflowServiceSession(meta) || meta.principalOwner && !sameOwner(meta.principalOwner, current!.principalOwner) || meta.cwd && canonPath(meta.cwd) !== access.cwd) throw new ResWorkflowError(409, "participant-session-changed");
+        return meta;
+      };
+      read(); deps.metaPersistence.flush(file); const meta = read();
+      const bags = { ...sanitizePersistedBags(meta.pluginRefs) };
+      for (const [owner, bag] of Object.entries(sanitizePersistedBags((current as DashboardSession).pluginRefs) ?? {})) bags[owner] = { ...bags[owner], ...bag };
+      if (bags["res-workflow"]) { const bag = { ...bags["res-workflow"] }; delete bag.resWorkflow; if (Object.keys(bag).length) bags["res-workflow"] = bag; else delete bags["res-workflow"]; }
+      const nextMeta = { ...meta, pluginRefs: bags };
+      delete (nextMeta as Record<string, unknown>).resWorkflow;
+      writeSessionMeta(file, nextMeta);
+      if (deps.sessionManager.get(sessionId)) deps.sessionManager.update(sessionId, { pluginRefs: bags, resWorkflow: undefined });
+      else deps.sessionArchive.updatePluginRefs(sessionId, bags);
+      // JSON null is an explicit clearing delta. An omitted/undefined field would
+      // leave an already mounted browser's old participation badge intact.
+      deps.broadcast(sessionId, { pluginRefs: bags, resWorkflow: null } as unknown as Partial<DashboardSession>);
+      return { sessionId, removed: true };
+    } catch (error) {
+      if (error instanceof ResWorkflowError) throw error;
       throw new ResWorkflowError(503, "participant-metadata-write-failed");
     }
   }
@@ -198,5 +254,5 @@ export function createResWorkflowParticipants(deps: ParticipantDeps) {
     if (!matches(row, access) || !sameOwner(row!.principalOwner, expectedOwner) || row!.sessionFile && row!.sessionFile !== registration.sessionFile) throw new ResWorkflowError(404, "participant-session-not-found");
     return join(access, sessionId, "spawn", { resWorkflow: intent, sessionFile: registration.sessionFile, principalOwner: expectedOwner, researchSession: raw.researchSession, sessionCreation: raw.sessionCreation });
   }
-  return { join, prepareSpawn, registerSpawn };
+  return { join, detach, prepareSpawn, registerSpawn };
 }

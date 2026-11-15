@@ -86,7 +86,7 @@ describe("research workspace surfaces", () => {
     expect(screen.getByRole("complementary", { name: "任务概览" })).toBeTruthy();
   });
 
-  it("opens the exact collaborator execution even when provenance supplies a different display role", async () => {
+  it.each([true, false])("opens the exact collaborator execution when provenance supplies a different display role (collaboration available: %s)", async (collaborationAvailable) => {
     liveState.observationStatus = "current";
     liveState.workbench = {
       schema: "res-workflow.workbench-observation.v1", cwd: "/test/project", adoptionId: "adopt-one", charterHash: `sha256:${"a".repeat(64)}`, revision: `sha256:${"b".repeat(64)}`,
@@ -94,12 +94,31 @@ describe("research workspace surfaces", () => {
       executions: [{ id: "session-collab", sessionId: "collab", kind: "pi-session", status: "idle" }], relations: [], observedUsage: { responses: 0, inputTokens: 0, outputTokens: 0, inheritedExcluded: 0, metric: "observed-assistant-responses" },
     };
     const provenance = { schema: "pi-research-session.v1", parentSessionId: "parent", creatorSessionId: "parent", creatorAgent: "research_session", role: "experiment", task: "A bounded task", stage: "2-experiment", charterHash: `sha256:${"a".repeat(64)}`, adoptionId: `adopt-${"b".repeat(24)}`, workflowCwd: "/test/project", spawnToken: "spawn-token-1234", createdAt: "2026-11-04T00:00:00Z", origin: "research_session", relation: "dispatch" };
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "collab", name: "实验协作者", nameSource: "manual", researchSession: provenance }] }))));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/res-workflow/collaboration")) return new Response(JSON.stringify(collaborationAvailable ? {
+        schema: "pi-research-collaboration.v1", cwd: "/test/project", adopted: true, revision: 1,
+        currentTenureId: "tenure-1", currentMainSessionId: "collab", limits: { maxMultiAgents: 4, maxSubagents: 3 },
+        limitMaximums: { maxMultiAgents: 32, maxSubagents: 32 }, detachedSessionIds: [], plans: [], nativeQueue: [],
+        tenures: [{ id: "tenure-1", ordinal: 1, mainSessionId: "collab", sessionIds: ["collab"], status: "current", startedAt: "2026-11-05T00:00:00Z" }],
+      } : { error: "temporarily-unavailable" }), { status: collaborationAvailable ? 200 : 503 });
+      if (url.includes("/api/res-workflow/connection")) return new Response(JSON.stringify({ cwd: "/test/project", adopted: true }));
+      if (url.endsWith("/api/sessions")) return new Response(JSON.stringify({ data: [{ id: "collab", cwd: "/test/project", status: "idle", driver: "pi", name: "实验协作者", nameSource: "manual", researchSession: provenance }] }));
+      return new Response(JSON.stringify({ data: [] }));
+    }));
     render(<ResearchPipelinePage cwd="/test/project" surface="agents" />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "聚焦实验协作者" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "聚焦实验协作者" }));
-    fireEvent.click(screen.getByRole("button", { name: "会话详情与纠偏" }));
+    if (collaborationAvailable) {
+      await waitFor(() => expect(screen.getByRole("button", { name: "查看 实验协作者 会话详情" })).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "查看 实验协作者 会话详情" }));
+    } else {
+      await waitFor(() => expect(screen.getByRole("button", { name: "聚焦实验协作者" })).toBeTruthy());
+      expect((screen.getByTestId("research-concurrency-open") as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByTestId("research-main-agent-select") as HTMLSelectElement).disabled).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "聚焦实验协作者" }));
+      fireEvent.click(screen.getByRole("button", { name: "会话详情与纠偏" }));
+    }
     expect(screen.getByTestId("research-correction-target").textContent).toContain("发送到会话 collab");
     expect(screen.queryByText("暂无可验证运行记录")).toBeNull();
+    expect(vi.mocked(globalThis.fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
   });
 });

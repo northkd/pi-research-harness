@@ -35,6 +35,8 @@ import {
 import { executionRecordStatus, researchStatusLabel, roleLabel } from "./ResearchAgentDetail.js";
 import { CollapsibleSection } from "./CollapsibleSection.js";
 import { ResearchAgentCanvas } from "./ResearchAgentCanvas.js";
+import { ResearchConcurrencyControls, ResearchDetachDialog, ResearchDispatchQueue } from "./ResearchCollaborationControls.js";
+import type { ResearchCollaborationController } from "./use-research-collaboration.js";
 import { Dialog } from "@blackbelt-technology/pi-dashboard-client-utils/Dialog";
 import {
   leadArt,
@@ -167,6 +169,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
   cwd,
   compactStages = false,
   visible = true,
+  collaboration,
 }: {
   projection: ResearchProjection;
   stage: StageId | null;
@@ -179,6 +182,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
   cwd?: string;
   compactStages?: boolean;
   visible?: boolean;
+  collaboration?: ResearchCollaborationController;
 }, ref: ForwardedRef<ResearchExecutionPanelsHandle>) {
   const apiBase = useApiBase();
   const live = (row: ResearchExecution) => !(stale && row.source === "observation") && hasRunningStatus(row);
@@ -307,6 +311,10 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [showAllSubagents, setShowAllSubagents] = useState(false);
   const [stageDrafts, setStageDrafts] = useState<Partial<Record<StageId, string>>>({});
+  const [detachTarget, setDetachTarget] = useState<{
+    sessionId: string; title: string; tenureId?: string; main: boolean; scope: string;
+  } | null>(null);
+  const collaborationScope = collaboration?.scope ?? sessionInfoScope;
 
   // Agent 协作网络折叠/展开覆盖状态：记录用户手动切换（完成/关闭默认收起，激活默认展开）
   const [collapsedOverrides, setCollapsedOverrides] = useState<Record<string, boolean>>({});
@@ -453,8 +461,6 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
     parentById,
     fusedSessionClusters,
     subagentRoleSummaries,
-    sessionsWithSubsCount,
-    sessionsWithoutSubsCount,
   } = useMemo(() => {
     const execTime = (ex: ResearchExecution) =>
       ex.startedAt ?? ex.lastActivityAt ?? ex.observedAt ?? "";
@@ -579,18 +585,80 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
     };
   }, [executions, captainExecution, configured, roles, sessionInfoMap]);
 
+  // Removed membership is scoped to a tenure. A session reused by the current
+  // lead must never erase its earlier, still-retained historical appearance.
+  const linkedClusters = useMemo(() => {
+    const snapshot = collaboration?.snapshot;
+    if (!snapshot) return fusedSessionClusters;
+    const known = new Set(snapshot.tenures.flatMap(tenure => [tenure.mainSessionId, ...tenure.sessionIds]));
+    const linked = new Set(snapshot.tenures.filter(tenure => tenure.status !== "removed").flatMap(tenure => {
+      const detached = new Set(tenure.detachedSessionIds ?? []);
+      return [tenure.mainSessionId, ...tenure.sessionIds].filter(id => !detached.has(id) &&
+        (tenure.id !== snapshot.currentTenureId || !snapshot.detachedSessionIds.includes(id)));
+    }));
+    return fusedSessionClusters.filter(cluster => {
+      const id = sessionIdFor(cluster.sessionExec);
+      return linked.has(id) || (!known.has(id) && !snapshot.detachedSessionIds.includes(id));
+    });
+  }, [fusedSessionClusters, collaboration?.snapshot]);
+
   const visibleClusters = useMemo(() => {
     if (fusionFilter === "with-subs") {
-      return fusedSessionClusters.filter((c) => c.childSubs.length > 0);
+      return linkedClusters.filter((c) => c.childSubs.length > 0);
     }
     if (fusionFilter === "standalone") {
-      return fusedSessionClusters.filter((c) => c.childSubs.length === 0);
+      return linkedClusters.filter((c) => c.childSubs.length === 0);
     }
-    return fusedSessionClusters;
-  }, [fusedSessionClusters, fusionFilter]);
+    return linkedClusters;
+  }, [linkedClusters, fusionFilter]);
+
+  const retainedTenuresFor = (sessionId: string) => {
+    const snapshot = collaboration?.snapshot;
+    return snapshot?.tenures.filter(tenure =>
+      tenure.status !== "removed" && (tenure.mainSessionId === sessionId || tenure.sessionIds.includes(sessionId)) &&
+      !tenure.detachedSessionIds?.includes(sessionId) &&
+      (tenure.id !== snapshot.currentTenureId || !snapshot.detachedSessionIds.includes(sessionId)),
+    ) ?? [];
+  };
+  const sessionName = (sessionId: string) => fusedSessionClusters.find(cluster => sessionIdFor(cluster.sessionExec) === sessionId)?.title
+    ?? collaboration?.snapshot?.tenures.find(tenure => tenure.id === collaboration?.snapshot?.currentTenureId)?.snapshots?.[sessionId]?.title
+    ?? "协作会话";
+  const requestDetach = (sessionId: string, tenureId?: string) => {
+    if (!collaboration?.snapshot || collaboration.busy || collaboration.stale) return;
+    const memberships = retainedTenuresFor(sessionId);
+    const tenure = tenureId
+      ? memberships.find(item => item.id === tenureId)
+      : memberships.find(item => item.id === collaboration.snapshot?.currentTenureId) ?? memberships.at(-1);
+    // Do not silently change the target if another tab already removed it.
+    if (tenureId && !tenure) return;
+    setDetachTarget({
+      scope: collaborationScope, sessionId, tenureId: tenure?.id,
+      title: tenure?.status === "historical" ? tenure.snapshots?.[sessionId]?.title ?? sessionName(sessionId) : sessionName(sessionId),
+      main: tenure ? tenure.mainSessionId === sessionId : collaboration.snapshot.currentMainSessionId === sessionId,
+    });
+  };
+  const detachMenu = (sessionId: string, title: string) => {
+    if (!collaboration) return null;
+    const memberships = retainedTenuresFor(sessionId);
+    return <details className="relative shrink-0" onClick={event => event.stopPropagation()}>
+      <summary aria-label={`更多操作：${title}`} className="win11-btn list-none cursor-pointer px-2.5 py-1.5 text-xs">···</summary>
+      <div className="absolute right-0 top-full z-20 mt-1 min-w-48 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-1 shadow-lg" role="menu" aria-label={`${title} 的接入管理`}>
+        {(memberships.length ? memberships : [undefined]).map(tenure => <button
+          key={tenure?.id ?? "unclassified"} type="button" role="menuitem"
+          disabled={!collaboration.snapshot || collaboration.busy || collaboration.stale}
+          className="w-full rounded px-3 py-2 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+          onClick={event => { event.stopPropagation(); event.currentTarget.closest("details")?.removeAttribute("open"); requestDetach(sessionId, tenure?.id); }}>
+          移出 res-workflow{tenure ? ` · ${tenure.status === "current" ? "当前" : `第 ${tenure.ordinal} 任期`}` : ""}
+        </button>)}
+      </div>
+    </details>;
+  };
+  const dispatchQueue = collaboration ? <ResearchDispatchQueue controller={collaboration} sessionName={sessionName} /> : null;
 
   return (
     <div className="research-execution-panels space-y-4">
+      {collaboration && <ResearchDetachDialog controller={collaboration}
+        target={detachTarget?.scope === collaborationScope ? detachTarget : null} onClose={() => setDetachTarget(null)} />}
       {/* Stage Start Notification Banner */}
       {stageStartNotification && !editingStagePrompt && (
         <div
@@ -931,7 +999,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                     协作网络
                   </h2>
                   <span className="tint-action-blue rounded-full border px-2.5 py-0.5 font-mono text-[10.5px] font-semibold">
-                    🤖 {piSessions.length} 个 Multi-Agent 会话
+                    {linkedClusters.length} 个 Multi-Agent 会话
                   </span>
                   <span className="tint-action-purple rounded-full border px-2.5 py-0.5 font-mono text-[10.5px] font-semibold">
                     {subagentExecutions.length} 项原生 Subagent · {executions.filter(row => row.kind === "workflow-step").length} 条工作流步骤
@@ -942,6 +1010,8 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                 </p>
               </div>
             </div>
+
+            {collaboration && <ResearchConcurrencyControls controller={collaboration} />}
 
             {/* Segmented View Switcher (WinUI 3 Segmented Control) */}
             <div className="win11-card-subtle inline-flex items-center gap-1 p-1">
@@ -1130,20 +1200,20 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
               )}
 
               {/* 3. 核心融合区：Multi-Agent 协同会话 ⇄ 下辖派发 Subagent 一体化拓扑树 */}
-              {fusedSessionClusters.length > 0 && (
+              {(fusedSessionClusters.length > 0 || collaboration) && (
                 <div className="research-collaboration-map win11-card p-4 space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-primary)] pb-3">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-                          会话与子代理
+                          会话与下属角色
                         </h3>
                         <span className="tint-action-purple rounded-full border px-2 py-0.5 text-[10.5px] font-semibold">
-                          父子协同树一体展示
+                          {collaboration?.snapshot ? "按主 Agent 任期分组" : "父子协同树一体展示"}
                         </span>
                       </div>
                       <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-                        先查看会话总览，点击会话聚焦其下属角色；也可切换到详细列表。
+                        {collaboration?.snapshot ? "连线表示真实派发归属；点击卡片查看模型、任务与会话详情。" : "先查看会话总览，点击会话聚焦其下属角色；也可切换到详细列表。"}
                       </p>
                     </div>
 
@@ -1183,7 +1253,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                     </div>
 
                     {/* Filter Pills for Multi-Agent + Subagent Clusters */}
-                    {fusedSessionClusters.length > 1 && (
+                    {linkedClusters.length > 1 && (!collaboration?.snapshot || fusionLayout === "list") && (
                       <div className="win11-card-subtle inline-flex flex-wrap items-center gap-1 p-1 text-xs">
                         <button
                           type="button"
@@ -1194,7 +1264,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                               : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
                           }`}
                         >
-                          全部协同会话 ({fusedSessionClusters.length})
+                          全部协同会话 ({linkedClusters.length})
                         </button>
                         <button
                           type="button"
@@ -1205,7 +1275,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                               : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
                           }`}
                         >
-                          含派发 Subagent ({sessionsWithSubsCount})
+                          含派发 Subagent ({linkedClusters.filter(cluster => cluster.childSubs.length > 0).length})
                         </button>
                         <button
                           type="button"
@@ -1216,7 +1286,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                               : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
                           }`}
                         >
-                          本地专项会话 ({sessionsWithoutSubsCount})
+                          本地专项会话 ({linkedClusters.filter(cluster => cluster.childSubs.length === 0).length})
                         </button>
                       </div>
                     )}
@@ -1224,10 +1294,21 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
 
                   {/* Keep the detailed list available, with the canvas as the compact default. */}
                   {fusionLayout === "canvas" ? (
-                    visibleClusters.length ? <ResearchAgentCanvas clusters={visibleClusters} stale={stale} relations={relations} onAgent={onAgent} statusLabel={researchStatusLabel} roleLabel={getSubagentRoleDisplayTitle} visible={visible} />
-                      : <div className="win11-card-subtle p-4 text-xs text-[var(--text-secondary)]">没有符合筛选条件的会话。</div>
+                    <>
+                      {(visibleClusters.length > 0 || collaboration?.snapshot) ? <ResearchAgentCanvas
+                        clusters={collaboration?.snapshot ? fusedSessionClusters : visibleClusters}
+                        stale={stale} relations={relations} onAgent={onAgent}
+                        statusLabel={researchStatusLabel} roleLabel={getSubagentRoleDisplayTitle} visible={visible}
+                        collaboration={collaboration?.snapshot}
+                        onDetach={collaboration?.snapshot && !collaboration.stale && !collaboration.busy ? requestDetach : undefined}
+                        afterCurrent={dispatchQueue}
+                      /> : <div className="win11-card-subtle p-4 text-xs text-[var(--text-secondary)]">{collaboration?.loading ? "正在读取协作任期…" : "没有符合筛选条件的会话。"}</div>}
+                      {!collaboration?.snapshot && dispatchQueue}
+                    </>
                   ) : (
                   <div className="space-y-3.5">
+                    {dispatchQueue}
+                    {collaboration?.snapshot && <p className="text-xs text-[var(--text-tertiary)]">列表按会话展示；任期归属与历史派发关系请在画布中查看。</p>}
                     {visibleClusters.map((cluster) => {
                       const { sessionExec, title, roleObj, isCaptain, childSubs, childRoleGroups } = cluster;
                       const isLive = live(sessionExec);
@@ -1306,6 +1387,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                                     <Icon path={mdiClockOutline} size={0.45} />
                                     <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {isLive ? "持续执行中" : formatTime(sessionExec.endedAt)}</span>
                                   </span>
+                                  <span className="font-mono text-[11px] text-[var(--text-secondary)]">模型：{sessionExec.observedModel || "未记录"}</span>
                                   {childSubs.length > 0 && (
                                     <span className="tint-action-purple rounded-full border px-2 py-0.5 text-[10px] font-semibold">
                                       ⚡ 下辖 {childSubs.length} 个 Subagent ({childRoleGroups.length} 类角色)
@@ -1315,6 +1397,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                               </div>
 
                               <div className="flex items-center justify-end gap-2 shrink-0">
+                                {detachMenu(sessionIdFor(sessionExec), title)}
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -1449,17 +1532,16 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                                     <Icon path={mdiClockOutline} size={0.45} />
                                     <span>开始: {formatTime(sessionExec.startedAt)} · 结束: {isLive ? "持续执行中" : formatTime(sessionExec.endedAt)}</span>
                                   </span>
-                                  {sessionExec.observedModel && (
                                     <span className="rounded bg-[var(--bg-secondary)] border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[var(--text-primary)]">
-                                      最新观测模型：{sessionExec.observedModel}
+                                      最新观测模型：{sessionExec.observedModel || "未记录"}
                                       {stale && sessionExec.source === "observation" ? "（观测已过期）" : ""}
                                     </span>
-                                  )}
                                 </div>
                               </div>
                             </div>
 
                             <div className="shrink-0 flex items-center justify-end gap-2">
+                              {detachMenu(sessionIdFor(sessionExec), title)}
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -1660,7 +1742,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
 
                                                 <div className="pt-1 border-t border-[var(--border-primary)]/50 space-y-1 text-[10px] text-[var(--text-tertiary)]">
                                                   <div className="flex items-center justify-between font-mono">
-                                                    <span>模型: {exec.observedModel ?? "默认"}</span>
+                                                    <span>模型: {exec.observedModel ?? "未记录"}</span>
                                                     <span className="text-[var(--accent-text)] font-semibold inline-flex items-center gap-0.5">
                                                       <span>查看此轮详情</span>
                                                       <Icon path={mdiArrowRight} size={0.4} />
@@ -1892,14 +1974,14 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
                     <Icon path={mdiAccountGroup} size={0.7} className="text-[var(--accent-blue)]" />
-                    <span>1. 多智能体协作会话 ({piSessions.length} 个研究会话)</span>
+                    <span>1. 多智能体协作会话 ({linkedClusters.length} 个研究会话)</span>
                   </div>
                   <span className="text-[11px] text-[var(--text-secondary)]">
                     每个会话拥有独立上下文；来源与协作关系按记录展示
                   </span>
                 </div>
                 <div className="win11-grid-cards">
-                  {fusedSessionClusters.map(({ sessionExec, title, roleObj, isCaptain, origin, originLabel, creatorLabel, workflowDuty, childSubs }) => (
+                  {linkedClusters.map(({ sessionExec, title, roleObj, isCaptain, origin, originLabel, creatorLabel, workflowDuty, childSubs }) => (
                     <div
                       key={sessionExec.id}
                       onClick={() => onAgent(roleObj, sessionExec)}
@@ -1921,6 +2003,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                             {title}
                           </span>
                           <div className="flex items-center gap-1.5">
+                            {detachMenu(sessionIdFor(sessionExec), title)}
                             <span className={`rounded-full border px-2 py-0.2 text-[9.5px] font-medium ${originBadgeClass(origin)}`}>
                               {originLabel}{origin !== "unknown" && ` · 创建者：${creatorLabel}`}
                             </span>

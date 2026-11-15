@@ -13,7 +13,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getDashboardConfigDir } from "@blackbelt-technology/pi-dashboard-shared/dashboard-paths.js";
 import type { ResearchSessionProvenance } from "@blackbelt-technology/pi-dashboard-shared/research-session.js";
 import { LOCAL_OPERATOR, isLocalOperator, sessionPrincipalOf } from "../identity/session-access.js";
-import { resolveInstalledResearchLoopRoot, type ResWorkflowAccess } from "../res-workflow/adoption-service.js";
+import { resolveInstalledResearchLoopRoot, ResWorkflowError, type ResWorkflowAccess } from "../res-workflow/adoption-service.js";
 import type { ResWorkflowSpawnRef } from "../res-workflow/participants.js";
 import type { ResWorkflowIdentity } from "../res-workflow/access.js";
 import type { PendingPluginRefRegistry } from "../pending/pending-plugin-ref-registry.js";
@@ -23,7 +23,8 @@ import type { SpawnResult } from "../spawn-process/process-manager.js";
 import type { SpawnStrategy } from "@blackbelt-technology/pi-dashboard-shared/config.js";
 import type { NetworkGuard } from "./route-deps.js";
 import { createResearchDispatchService, createResearchDispatchStore } from "../res-workflow/research-dispatch-service.mjs";
-import { createResearchSessionService, ResearchSessionError } from "../res-workflow/research-session-service.mjs";
+import { createResearchSessionService, createResearchSessionStore, ResearchSessionError } from "../res-workflow/research-session-service.mjs";
+import { createResearchCollaborationService, createResearchCollaborationStore, ResearchCollaborationError } from "../res-workflow/research-collaboration-service.mjs";
 
 export interface ResearchSessionInitialPromptRegistry {
   enqueue(cwd: string, prompt: string, spawnToken?: string): boolean;
@@ -47,6 +48,10 @@ export interface ResearchSessionRouteDeps {
   privateDir?: string;
   notifyParent?(sessionId: string, text: string, promptId: string): boolean | Promise<boolean>;
   subscribeReceiptAcks?(handler: (sessionId: string, promptId: string) => void): () => void;
+  history?(): any[];
+  connection?(access: ResWorkflowAccess): Promise<{ adopted: boolean }>;
+  joinParticipant?(access: ResWorkflowAccess, sessionId: string): Promise<unknown>;
+  detachParticipant?(access: ResWorkflowAccess, sessionId: string): Promise<unknown>;
 }
 
 function sameOwner(a: { iss: string; sub: string } | null | undefined, b: { iss: string; sub: string } | null | undefined): boolean {
@@ -102,6 +107,8 @@ export function createDefaultResearchSessionVerifier(deps: Pick<ResearchSessionR
 
 export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstance, deps: ResearchSessionRouteDeps) {
   const verifyParent = createDefaultResearchSessionVerifier(deps);
+  const managed = !!deps.connection && !!deps.joinParticipant && !!deps.detachParticipant;
+  let collaboration: ReturnType<typeof createResearchCollaborationService>;
   const verifyLaunch = async ({ parent }: { parent: any }) => {
     // Ordinary session ownership/membership still governs dispatch. The retired
     // task grant is not a second authorization or expiry gate for either mode.
@@ -114,6 +121,7 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
   };
   let dispatcher: ReturnType<typeof createResearchDispatchService> | undefined;
   const service = createResearchSessionService({
+    store: createResearchSessionStore(path.join(deps.privateDir ?? path.join(getDashboardConfigDir(), "res-workflow"), "session-reservations")),
     getSession: id => deps.sessionManager.get(id),
     listSessions: () => deps.sessionManager.listAll(),
     verifyParent,
@@ -132,18 +140,60 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
     isWaitingCoordinator: id => dispatcher?.isWaitingCoordinator(id) ?? false,
     isRecoveringSession: session => dispatcher?.isRecoveringSession(session) ?? false,
     unregisteredReservations: () => dispatcher?.unregisteredReservations() ?? [],
+    ...(managed ? {
+      getSchedulingPolicy: (input: { parent: any; verified: any }) => collaboration.getSchedulingPolicy(input),
+      assertDispatchAllowed: (input: { parent: any; verified: any }) => collaboration.assertDispatchAllowed(input),
+      acquireSchedulingReservation: input => collaboration.acquireSchedulingReservation(input),
+      releaseSchedulingReservation: token => collaboration.releaseSchedulingReservation(token),
+    } : {}),
     isLocalOperator: principal => isLocalOperator(principal as { iss: string; sub: string } | null | undefined),
   });
 
   dispatcher = createResearchDispatchService({
     store: createResearchDispatchStore(path.join(deps.privateDir ?? path.join(getDashboardConfigDir(), "res-workflow"), "dispatch")),
     getSession: id => deps.sessionManager.get(id), listSessions: () => deps.sessionManager.listAll(),
-    authorize: service.authorize, createSession: service.create, releaseSession: service.release,
+    authorize: async input => {
+      try { return await service.authorize(input); }
+      catch (error) {
+        // Removal ends participation, not the already launched process. Its own
+        // authenticated terminal receipt may settle a retained historical task.
+        // This fallback is NEVER used by service.create; new dispatch is also
+        // rejected by the live collaboration gate before every launch.
+        if (!managed || !(error instanceof ResearchSessionError) || error.code !== "research-session-parent-not-joined") throw error;
+        const parent = deps.sessionManager.get(input.sessionId);
+        if (!parent) throw error;
+        const access = await deps.accessFor(parent.cwd, { principal: input.principal, expiresAt: input.expiresAt, write: false });
+        if (!access.canReadHistory || !(await access.canReadHistory(parent))) throw error;
+        await access.revalidate();
+        const binding = collaboration.retainedBinding(parent);
+        if (!binding) throw error;
+        return { parent, ...binding };
+      }
+    }, createSession: service.create, releaseSession: service.release,
     notifyParent: deps.notifyParent,
     beforeLaunch: verifyLaunch,
+    ...(managed ? {
+      getSchedulingPolicy: (input: { parent: any; verified: any }) => collaboration.getSchedulingPolicy(input),
+      assertDispatchAllowed: (input: { parent: any; verified: any }) => collaboration.assertDispatchAllowed(input),
+    } : {}),
     // Host-internal execution retains the real identity sentinel for an
     // explicitly adopted local session; never synthesize a look-alike principal.
     principalForSession: session => session?.principalOwner ?? LOCAL_OPERATOR,
+  });
+  collaboration = createResearchCollaborationService({
+    store: createResearchCollaborationStore(path.join(deps.privateDir ?? path.join(getDashboardConfigDir(), "res-workflow"), "collaboration")),
+    listSessions: () => deps.history?.() ?? deps.sessionManager.listAll(),
+    connection: access => deps.connection ? deps.connection(access) : Promise.reject(new ResearchCollaborationError(503, "research-collaboration-unavailable")),
+    verifySelected: (parent, actor) => verifyParent({ parent, principal: actor.principal, expiresAt: actor.expiresAt }),
+    join: (access, sessionId) => deps.joinParticipant ? deps.joinParticipant(access, sessionId) : Promise.reject(new ResearchCollaborationError(503, "research-collaboration-unavailable")),
+    detach: (access, sessionId) => deps.detachParticipant ? deps.detachParticipant(access, sessionId) : Promise.reject(new ResearchCollaborationError(503, "research-collaboration-unavailable")),
+    listPlans: scope => dispatcher!.listForScope(scope),
+    manageQueue: input => dispatcher!.manageQueue(input),
+    suspendSessions: (ids, reason, tenureId) => dispatcher!.suspendSessions(ids, reason, tenureId),
+    isSessionCompleted: token => dispatcher!.isCompleted(token),
+    isRecoveringSession: session => dispatcher!.isRecoveringSession(session),
+    onChanged: () => dispatcher!.tick(),
+    sendMainTask: deps.notifyParent,
   });
   const unsubscribeReceipts = deps.subscribeReceiptAcks?.((sessionId, promptId) => {
     void dispatcher!.acknowledgeReceipt(sessionId, promptId).catch(() => { /* retry durable receipt */ });
@@ -156,11 +206,43 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
   fastify.addHook("onClose", async () => { clearInterval(timer); unsubscribeReceipts?.(); dispatcher!.dispose(); });
   tick();
 
+  const shape = (value: unknown, keys: string[]): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
+  const actorFor = (request: FastifyRequest) => ({ principal: sessionPrincipalOf(request), expiresAt: (request as FastifyRequest & { principalExpiresAt?: number | null }).principalExpiresAt ?? null });
+  const collaborationFailure = (reply: FastifyReply, error: unknown) => {
+    if (error instanceof ResearchCollaborationError || error instanceof ResearchSessionError || error instanceof ResWorkflowError) {
+      reply.code(error.statusCode); return { success: false, error: error.code, code: error.code };
+    }
+    reply.code(503); return { success: false, error: "research-collaboration-unavailable", code: "research-collaboration-unavailable" };
+  };
+  fastify.get("/api/res-workflow/collaboration", { preHandler: deps.networkGuard }, async (request, reply) => {
+    try {
+      if (!shape(request.query, ["cwd"]) || typeof request.query.cwd !== "string") throw new ResearchCollaborationError(400, "only-cwd-query-allowed");
+      const access = await deps.accessFor(request.query.cwd, { ...actorFor(request), write: false });
+      return await collaboration.snapshot(access);
+    } catch (error) { return collaborationFailure(reply, error); }
+  });
+  fastify.post("/api/res-workflow/collaboration", { preHandler: deps.networkGuard }, async (request, reply) => {
+    try {
+      if (!shape(request.body, ["cwd", "action", "expectedRevision", "sessionId", "tenureId", "maxMultiAgents", "maxSubagents", "planId", "taskId", "taskIds", "queueRevision", "text", "requestId"]) || typeof request.body.cwd !== "string") throw new ResearchCollaborationError(400, "research-collaboration-request-invalid");
+      const actor = actorFor(request), access = await deps.accessFor(request.body.cwd, { ...actor, write: true });
+      return await collaboration.mutate(access, request.body, actor);
+    } catch (error) { return collaborationFailure(reply, error); }
+  });
+  fastify.post("/api/res-workflow/collaboration/native", { preHandler: deps.networkGuard }, async (request, reply) => {
+    try {
+      if (!shape(request.body, ["sessionId", "action", "requestId", "attemptId", "role", "model", "task", "leaseToken", "phase", "childSessionId"]) || typeof request.body.sessionId !== "string") throw new ResearchCollaborationError(400, "research-native-request-invalid");
+      const parent = deps.sessionManager.get(request.body.sessionId);
+      if (!parent || parent.originDeviceId) throw new ResearchCollaborationError(404, "research-collaboration-session-not-found");
+      const actor = actorFor(request), access = await deps.accessFor(parent.cwd, { ...actor, write: true });
+      return await collaboration.native(access, request.body, actor);
+    } catch (error) { return collaborationFailure(reply, error); }
+  });
+
   fastify.post("/api/res-workflow/dispatch", { preHandler: deps.networkGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       return await dispatcher!.handle({ body: request.body, principal: sessionPrincipalOf(request), expiresAt: (request as FastifyRequest & { principalExpiresAt?: number | null }).principalExpiresAt ?? null });
     } catch (error) {
-      if (error instanceof ResearchSessionError) {
+      if (error instanceof ResearchSessionError || error instanceof ResearchCollaborationError) {
         reply.code(error.statusCode);
         return { success: false, error: error.code, code: error.code };
       }
@@ -177,7 +259,7 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
         expiresAt: (request as FastifyRequest & { principalExpiresAt?: number | null }).principalExpiresAt ?? null,
       });
     } catch (error) {
-      if (error instanceof ResearchSessionError) {
+      if (error instanceof ResearchSessionError || error instanceof ResearchCollaborationError) {
         reply.code(error.statusCode);
         return { success: false, error: error.code, code: error.code };
       }
@@ -185,4 +267,5 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
       return { success: false, error: "research-session-unavailable", code: "research-session-unavailable" };
     }
   });
+  return collaboration;
 }

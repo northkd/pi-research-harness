@@ -13,6 +13,7 @@ interface Props {
   connectionGeneration?: number;
   refreshSignal?: string;
   onRebound?: () => void;
+  defaultExpanded?: boolean;
 }
 
 function bindingLabel(value: ResearchCharterBinding | null, sessionId?: string | null): string {
@@ -36,7 +37,7 @@ function guidance(value: ResearchCharterBinding | null): string | null {
 }
 
 /** Selection, workflow membership and charter binding are displayed as separate facts. */
-export function ResearchCharterBindingControls({ cwd, sessionId, visible = true, connectionGeneration = 0, refreshSignal, onRebound }: Props) {
+export function ResearchCharterBindingControls({ cwd, sessionId, visible = true, connectionGeneration = 0, refreshSignal, onRebound, defaultExpanded = false }: Props) {
   const apiBase = useApiBase();
   const scope = JSON.stringify([apiBase, cwd, sessionId ?? null, connectionGeneration]);
   const currentScope = useRef(scope);
@@ -48,6 +49,8 @@ export function ResearchCharterBindingControls({ cwd, sessionId, visible = true,
   const onReboundRef = useRef(onRebound);
   onReboundRef.current = onRebound;
   const [state, setState] = useState<{ scope: string; value: ResearchCharterBinding | null; reading: boolean; saving: boolean; error: string | null }>({ scope, value: null, reading: false, saving: false, error: null });
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  useEffect(() => { setExpanded(defaultExpanded); }, [cwd, defaultExpanded]);
   const current = state.scope === scope ? state : { value: null, reading: false, saving: false, error: null };
 
   useEffect(() => {
@@ -136,7 +139,7 @@ export function ResearchCharterBindingControls({ cwd, sessionId, visible = true,
     </div>
     {current.error && <p role="alert" className="research-warning" data-testid="research-charter-binding-error">{current.error}</p>}
     {hint && <p className="research-main-agent-caption">{hint}</p>}
-    {charter && <details className="research-charter-binding-preview" data-testid="research-charter-binding-preview">
+    {charter && <details className="research-charter-binding-preview" data-testid="research-charter-binding-preview" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}>
       <summary>查看当前目标与约束</summary>
       <p>目标版本 {charter.revision}：{charter.objective}</p>
       {([

@@ -158,6 +158,28 @@ describe('native research_session tool', () => {
     assert.equal((await first).details.status, 'spawned');
   });
 
+  it('explains that refused direct capacity is not queued and preserves a stable retry reference', async () => {
+    const calls = [];
+    const tool = captureTool({
+      readContext: async () => ({ sessionId: 'parent-1', charterHash: CHARTER }),
+      resolveAuth: async () => ({ baseUrl: 'http://127.0.0.1:8000', token: 'secret-token' }),
+      requestId: () => 'generated-capacity-reference',
+      fetchImpl: async (_url, input) => { calls.push(JSON.parse(input.body)); return response({ code: 'research-session-concurrency-limit' }, false, 409); },
+    });
+    const result = await tool.execute('call', { role: 'literature', task: 'Preserve this task', stage: '1-idea' }, undefined, undefined, context());
+    assert.equal(result.details.queued, false);
+    assert.equal(result.details.requestId, 'generated-capacity-reference');
+    assert.deepEqual(result.details.retryWith, { tool: 'research_dispatch', action: 'plan' });
+    assert.match(result.details.hint, /NOT queued/);
+    assert.equal(calls[0].task, 'Preserve this task');
+    assert.match(tool.description, /NOT queued/);
+    await tool.execute('retry', { role: 'literature', task: 'Preserve this task', stage: '1-idea', requestId: result.details.requestId }, undefined, undefined, context());
+    assert.equal(calls[1].requestId, calls[0].requestId);
+    const invalid = await tool.execute('invalid', { role: 'literature', task: 'Task', stage: '1-idea', requestId: 'bad/path' }, undefined, undefined, context());
+    assert.equal(invalid.details.error, 'research-session-request-id-invalid');
+    assert.equal(calls.length, 2);
+  });
+
   it('honors caller cancellation and bounds the response body', async () => {
     const cancelled = captureTool({
       readContext: async () => ({ sessionId: 'parent-1', charterHash: CHARTER }),

@@ -49,6 +49,8 @@ export interface ResearchSessionProvenance {
   spawnToken: string;
   requestId?: string;
   rootSessionId?: string;
+  /** Immutable dispatch tenure; a later main change never reparents this child. */
+  tenureId?: string;
   depth?: number;
   tasks?: ResearchDispatchTask[];
   /** Narrowing inherited by every descendant; absence never clears a parent constraint. */
@@ -80,6 +82,7 @@ export function isResearchSessionProvenance(value: unknown): value is ResearchSe
     (row.readOnly === undefined || row.readOnly === true) &&
     (row.requestId === undefined || TOKEN.test(row.requestId)) &&
     (row.rootSessionId === undefined || ID.test(row.rootSessionId)) &&
+    (row.tenureId === undefined || ID.test(row.tenureId)) &&
     (row.depth === undefined || (Number.isSafeInteger(row.depth) && row.depth >= 1 && row.depth <= 3)) &&
     (row.dispatchId === undefined || ID.test(row.dispatchId)) && (row.taskId === undefined || ID.test(row.taskId)) &&
     (row.tasks === undefined || (Array.isArray(row.tasks) && row.tasks.length >= 2 && row.tasks.length <= 12 && row.tasks.every(task =>
@@ -97,6 +100,7 @@ export function normalizeResearchSessionProvenance(value: unknown): ResearchSess
     ...(value.readOnly === true ? { readOnly: true as const } : {}),
     ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
     ...(value.rootSessionId === undefined ? {} : { rootSessionId: value.rootSessionId }),
+    ...(value.tenureId === undefined ? {} : { tenureId: value.tenureId }),
     ...(value.depth === undefined ? {} : { depth: value.depth }),
     ...(value.dispatchId === undefined ? {} : { dispatchId: value.dispatchId }),
     ...(value.taskId === undefined ? {} : { taskId: value.taskId }),

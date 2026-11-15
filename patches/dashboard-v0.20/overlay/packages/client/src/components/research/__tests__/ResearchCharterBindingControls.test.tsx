@@ -33,6 +33,29 @@ beforeEach(() => { api.get.mockReset(); api.update.mockReset(); api.base = ''; }
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe('research target binding beside the chosen main conversation', () => {
+  it('keeps the full objective, success criteria, constraints and exclusions expanded in the workbench', async () => {
+    api.get.mockResolvedValue(state({ current: true }));
+    render(<ResearchCharterBindingControls {...props} defaultExpanded />);
+    const preview = await screen.findByTestId('research-charter-binding-preview');
+    expect((preview as HTMLDetailsElement).open).toBe(true);
+    expect(preview.textContent).toContain('目标版本 2');
+    for (const text of ['保留原研究，核对有限驻留的行为证据。', '完成标准', '保存反例与未定结果', '约束', '仅使用已声明资料', '范围之外', '不扩大为电导提升']) {
+      expect(preview.textContent).toContain(text);
+    }
+    expect(api.update).not.toHaveBeenCalled();
+  });
+
+  it('can collapse the charter on the agent surface without deleting its content or changing the target', async () => {
+    api.get.mockResolvedValue(state({ current: true }));
+    const view = render(<ResearchCharterBindingControls {...props} defaultExpanded />);
+    const preview = await screen.findByTestId('research-charter-binding-preview');
+    view.rerender(<ResearchCharterBindingControls {...props} defaultExpanded={false} />);
+    await waitFor(() => expect((preview as HTMLDetailsElement).open).toBe(false));
+    expect(preview.textContent).toContain('仅使用已声明资料');
+    expect(preview.textContent).toContain('不扩大为电导提升');
+    expect(api.update).not.toHaveBeenCalled();
+  });
+
   it('distinguishes an already joined session with an old charter binding and previews the exact current scope', async () => {
     api.get.mockResolvedValue(state({ boundRevision: null }));
     render(<ResearchCharterBindingControls {...props} />);

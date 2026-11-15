@@ -9,7 +9,7 @@ const MARGIN = 36;
 const SESSION_WIDTH = 246;
 const SESSION_HEIGHT = 124;
 const ROLE_WIDTH = 222;
-const ROLE_HEIGHT = 82;
+const ROLE_HEIGHT = 104;
 const COLUMN_GAP = 30;
 const ROW_GAP = 24;
 export const MIN_CANVAS_SCALE = 0.08;
@@ -166,4 +166,67 @@ export function zoomGraphAt(view: CanvasView, point: CanvasPoint, factor: number
   const scale = Math.min(MAX_CANVAS_SCALE, Math.max(MIN_CANVAS_SCALE, view.scale * factor));
   const ratio = scale / view.scale;
   return { scale, x: point.x - (point.x - view.x) * ratio, y: point.y - (point.y - view.y) * ratio };
+}
+
+export interface CanvasNetworkItem { id: string; kind: "session" | "subagent"; parentId?: string | null }
+export interface CanvasNetworkNode extends CanvasNode { kind: CanvasNetworkItem["kind"]; parentId: string | null; depth: number }
+
+/**
+ * A tenure is a recorded family, not a dependency DAG. Its root stays at the left,
+ * all of its direct collaborator sessions share a horizontal row, and each
+ * collaborator's own children occupy an independent lane below it. Unknown or
+ * conflicting ancestry is kept in a separate row without a fabricated root edge.
+ * Geometry deliberately does not shrink the cards to fit a narrow viewport.
+ */
+export function layoutTenureHierarchy(mainId: string, items: CanvasNetworkItem[]) {
+  const unique = [...new Map(items.map(item => [item.id, item])).values()];
+  if (!unique.some(item => item.id === mainId)) unique.unshift({ id: mainId, kind: "session" });
+  const itemById = new Map(unique.map(item => [item.id, item]));
+  const parents = resolveSessionParents(unique.map(item => item.id), unique.flatMap(item =>
+    item.id !== mainId && item.parentId ? [{ fromExecutionId: item.parentId, toExecutionId: item.id, kind: "dispatch" }] : []));
+  const children = new Map<string, string[]>();
+  for (const item of unique) {
+    const parent = parents.get(item.id);
+    if (parent) children.set(parent, [...(children.get(parent) ?? []), item.id]);
+  }
+  const gap = 16, down = 34, margin = 20, mainWidth = 226;
+  const dimensions = (id: string) => id === mainId ? { width: mainWidth, height: 132 }
+    : itemById.get(id)?.kind === "subagent" ? { width: 184, height: 90 } : { width: 226, height: 108 };
+  interface Branch { id: string; width: number; height: number; rows: Branch[][] }
+  const branch = (id: string): Branch => {
+    const descendants = (children.get(id) ?? []).map(branch);
+    const rows: Branch[][] = [];
+    for (let i = 0; i < descendants.length; i += 2) rows.push(descendants.slice(i, i + 2));
+    const own = dimensions(id);
+    return { id, rows, width: Math.max(own.width, ...rows.map(row => row.reduce((sum, child) => sum + child.width, 0) + gap * (row.length - 1))),
+      height: own.height + (rows.length ? down + rows.reduce((sum, row) => sum + Math.max(...row.map(child => child.height)), 0) + gap * (rows.length - 1) : 0) };
+  };
+  const nodes: CanvasNetworkNode[] = [];
+  const place = (tree: Branch, x: number, y: number, depth: number) => {
+    const own = dimensions(tree.id);
+    nodes.push({ id: tree.id, ...own, x: x + (tree.width - own.width) / 2, y, kind: itemById.get(tree.id)?.kind ?? "session", parentId: parents.get(tree.id) ?? null, depth });
+    let nextY = y + own.height + down;
+    for (const row of tree.rows) {
+      const rowWidth = row.reduce((sum, child) => sum + child.width, 0) + gap * (row.length - 1);
+      let nextX = x + (tree.width - rowWidth) / 2;
+      for (const child of row) { place(child, nextX, nextY, depth + 1); nextX += child.width + gap; }
+      nextY += Math.max(...row.map(child => child.height)) + gap;
+    }
+  };
+  const direct = children.get(mainId) ?? [];
+  const sessions = direct.filter(id => itemById.get(id)?.kind === "session").map(branch);
+  const subs = direct.filter(id => itemById.get(id)?.kind === "subagent").map(branch);
+  const mainLaneWidth = Math.max(mainWidth, ...subs.map(tree => tree.width));
+  const main = { id: mainId, ...dimensions(mainId), x: margin + (mainLaneWidth - mainWidth) / 2, y: 50, kind: "session" as const, parentId: null, depth: 0 };
+  nodes.push(main);
+  let subY = main.y + main.height + down;
+  for (const tree of subs) { place(tree, margin + (mainLaneWidth - tree.width) / 2, subY, 1); subY += tree.height + gap; }
+  let nextX = margin + mainLaneWidth + 34;
+  for (const tree of sessions) { place(tree, nextX, main.y, 1); nextX += tree.width + 24; }
+  const orphanIds = unique.filter(item => item.id !== mainId && !parents.has(item.id)).map(item => item.id);
+  const orphanTop = Math.max(...nodes.map(node => node.y + node.height)) + 42;
+  let orphanX = margin;
+  for (const id of orphanIds) { const tree = branch(id); place(tree, orphanX, orphanTop, 0); orphanX += tree.width + 24; }
+  return { main, nodes, orphanIds, orphanTop, width: Math.max(...nodes.map(node => node.x + node.width)) + margin,
+    height: Math.max(...nodes.map(node => node.y + node.height)) + 20 };
 }

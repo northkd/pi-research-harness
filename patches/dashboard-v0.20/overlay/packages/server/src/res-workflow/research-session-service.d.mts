@@ -3,7 +3,19 @@ import type { ResearchSessionProvenance, ResearchDispatchTask, ResearchSessionSt
 export type { ResearchSessionProvenance, ResearchDispatchTask };
 export interface ResearchSessionRequest { parentSessionId: string; role: string; task: string; stage: ResearchSessionStage; requestId?: string; tasks?: ResearchDispatchTask[]; readOnly?: true }
 export interface UnregisteredResearchSession { requestId: string; spawnToken?: string; parentSessionId: string; rootSessionId: string }
+export interface ResearchSchedulingPolicy {
+  maxMultiAgents: number;
+  maxSubagents: number;
+  tenureId?: string | null;
+  mainSessionId?: string | null;
+  isMainAgent?: boolean;
+  managed?: boolean;
+  importLegacy?: boolean;
+}
+export interface ResearchSchedulingContext { parent: any; verified: { cwd: string; charterHash: string; adoptionId: string; ownerKey?: string } }
+export interface ResearchSessionStore { readAll(): any[]; write(row: any): void; remove(key: string, spawnToken?: string): void }
 export interface CreateResearchSessionServiceDeps {
+  store?: ResearchSessionStore;
   getSession(id: string): any;
   listSessions(): any[];
   verifyParent(input: { parent: any; principal?: { iss: string; sub: string } | null; expiresAt?: number | null }): Promise<{ charterHash: string; adoptionId: string; cwd?: string; ownerKey?: string }>;
@@ -13,6 +25,10 @@ export interface CreateResearchSessionServiceDeps {
   initialPrompts: { enqueue(cwd: string, prompt: string, spawnToken: string): boolean; remove?(cwd: string, spawnToken: string): boolean | void };
   spawn(cwd: string, options: { spawnToken: string; strategy?: SpawnStrategy }): Promise<{ success: boolean }>;
   beforeSpawn?(input: { parent: any; verified: { cwd: string; charterHash: string; adoptionId: string; ownerKey?: string }; body: ResearchSessionRequest }): void | Promise<void>;
+  getSchedulingPolicy?(input: ResearchSchedulingContext): ResearchSchedulingPolicy | Promise<ResearchSchedulingPolicy>;
+  assertDispatchAllowed?(input: ResearchSchedulingContext): void | Promise<void>;
+  acquireSchedulingReservation?(input: ResearchSchedulingContext & { requestId: string; spawnToken: string; tenureId?: string | null }): void | Promise<void>;
+  releaseSchedulingReservation?(spawnToken: string): void | Promise<void>;
   spawnStrategy?(): SpawnStrategy;
   isLocalOperator(principal: unknown): boolean;
   now?(): Date;
@@ -20,7 +36,6 @@ export interface CreateResearchSessionServiceDeps {
   maxPerParent?: number;
   maxTotal?: number;
   maxDepth?: number;
-  maxDescendants?: number;
   maxResident?: number;
   minAvailableMemory?: number;
   availableMemory?(): number;
@@ -30,14 +45,17 @@ export interface CreateResearchSessionServiceDeps {
   unregisteredReservations?(): UnregisteredResearchSession[];
 }
 export class ResearchSessionError extends Error { constructor(statusCode: number, code: string); statusCode: number; code: string }
-export const RESEARCH_SESSION_LIMITS: Readonly<{ maxPerParent: number; maxTotal: number; maxTaskChars: number; maxRoleChars: number; maxDepth: number; maxDescendants: number; maxResident: number; minAvailableMemory: number }>;
+export function createResearchSessionStore(directory: string): ResearchSessionStore;
+export const RESEARCH_SESSION_LIMITS: Readonly<{ maxPerParent: number; maxTotal: number; maxTaskChars: number; maxRoleChars: number; maxDepth: number; maxResident: number; minAvailableMemory: number }>;
 export function validateResearchTasks(tasks: unknown): ResearchDispatchTask[];
 export function researchProvenanceOf(row: any): ResearchSessionProvenance | undefined;
+export function readResearchSchedulingPolicy(deps: Pick<CreateResearchSessionServiceDeps, 'getSchedulingPolicy'>, parent: any, verified: ResearchSchedulingContext['verified']): Promise<ResearchSchedulingPolicy | null>;
+export function researchParentConcurrency(parent: any, policy: ResearchSchedulingPolicy | null, fallback?: number): number;
 export function validateResearchSessionRequest(body: unknown): ResearchSessionRequest;
 export const RESEARCH_SESSION_INITIAL_PROMPT_BYTES: number;
 export function buildResearchSessionInitialPrompt(provenance: ResearchSessionProvenance, taskContext?: { dispatchId?: string; taskId?: string; prerequisiteResults?: Array<{ id: string }> }): string;
 export function createResearchSessionService(deps: CreateResearchSessionServiceDeps): {
   create(input: { body: unknown; principal?: { iss: string; sub: string } | null; expiresAt?: number | null; taskContext?: { dispatchId: string; taskId: string; prerequisiteResults: any[] } }): Promise<Record<string, any>>;
   authorize(input: { sessionId: string; principal?: { iss: string; sub: string } | null; expiresAt?: number | null }): Promise<{ parent: any; cwd: string; charterHash: string; adoptionId: string; ownerKey?: string }>;
-  release(spawnToken: string): void;
+  release(spawnToken: string): Promise<void>;
 };
