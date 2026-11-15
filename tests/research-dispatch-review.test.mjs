@@ -211,21 +211,23 @@ test('a successful websocket send retries until the owning coordinator acknowled
   const f = fixture(t);
   await f.plan('root', 'ack-plan');
   await f.report('child-1');
+  assert.equal(f.notices.length, 1, 'the first child reports before the plan finishes');
+  await f.acknowledge('root', f.notices[0].promptId);
   await f.report('child-2');
-  assert.equal(f.notices.length, 1);
-  const notice = f.notices[0];
+  assert.equal(f.notices.length, 2);
+  const notice = f.notices[1];
   assert.equal(f.records()[0].notifiedAt, undefined, 'socket send is not a delivery acknowledgement');
   await f.acknowledge('another-session', notice.promptId);
   f.advanceClock(RESEARCH_DISPATCH_LIMITS.receiptRetryMs + 1);
   await f.tick();
-  assert.equal(f.notices.length, 2);
-  assert.equal(f.notices[1].promptId, notice.promptId);
+  assert.equal(f.notices.length, 3);
+  assert.equal(f.notices[2].promptId, notice.promptId);
   await f.acknowledge('root', notice.promptId);
   assert.ok(f.records()[0].notifiedAt);
   f.reboot();
   f.advanceClock(RESEARCH_DISPATCH_LIMITS.receiptRetryMs + 1);
   await f.tick();
-  assert.equal(f.notices.length, 2);
+  assert.equal(f.notices.length, 3);
 });
 
 test('cold-start ended placeholders may reattach without failing the persisted plan', async t => {

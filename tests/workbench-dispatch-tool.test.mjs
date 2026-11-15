@@ -65,9 +65,9 @@ test('collaborators get three planning reads and must decide before the fourth',
   assert.equal(await f.emit('tool_call', { toolName: 'bash', input: { command: 'echo work' } }), undefined);
 });
 
-test('pending children gate real research_loop execution and publication actions', async () => {
+test('pending children gate publication while branch coordination remains available', async () => {
   const f = fixture({ decisionRequired: false, childrenPending: true, plans: [{ status: 'running' }] });
-  for (const action of ['run', 'configure', 'stage', 'claim', 'claim-gate', 'publish', 'review-round', 'review-gate']) {
+  for (const action of ['publish']) {
     const decision = await f.emit('tool_call', { toolName: 'research_loop', input: { action, autoRun: true } });
     assert.equal(decision?.block, true, action);
   }
@@ -115,13 +115,12 @@ test('joined lead must decide before bulk work and cannot silently take over on 
   assert.equal((await unavailable.emit('tool_call', { toolName: 'bash', input: { command: 'perform bulk work' } })).block, true);
 });
 
-test('lead stops repeated exploration while the execution coordinator is working', async () => {
+test('lead may inspect evidence while autonomous branches are working', async () => {
   const f = fixture({ collaborator: false, assignment: null, decisionRequired: false, childrenPending: true, plans: [{ id: 'goal', mode: 'delegate', status: 'running' }] }, undefined,
     async () => ({ sessionId: 'child-one' }));
   for (let n = 0; n < 3; n++) assert.equal(await f.emit('tool_call', { toolName: 'read' }), undefined);
-  const blocked = await f.emit('tool_call', { toolName: 'read' });
-  assert.equal(blocked.block, true);
-  assert.match(blocked.reason, /execution coordinator/);
+  assert.equal(await f.emit('tool_call', { toolName: 'read' }), undefined);
+  assert.equal((await f.emit('tool_call', { toolName: 'research_loop', input: { action: 'publish' } })).block, true);
   assert.equal(await f.emit('tool_call', { toolName: 'ask_user' }), undefined);
 });
 

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { buildDelegationGuidance, mergeDelegationRestrictions } from './delegation-policy.mjs';
+import { buildDelegationGuidance, mergeDelegationEventRestrictions } from './delegation-policy.mjs';
 import { readResearchCharterBinding } from './charter-binding.mjs';
 
 export const WORKBENCH_CONTEXT_SECTION = 'res_workflow_records';
@@ -165,7 +165,14 @@ function inspectContext(ctx, { privateDir = path.join(os.homedir(), '.pi', 'dash
     recentFindings: includeHistory ? readRecentFindings(cwd) : '',
     historyPolicy: includeHistory ? 'bounded-lead-preview' : 'references-only',
   };
-  const context = { ...(collaborator ? { researchSession: { parentSessionId: researchSession.parentSessionId, spawnToken: researchSession.spawnToken, depth: researchSession.depth, role: researchSession.role, readOnly: researchSession.readOnly === true, declaredTasks: researchSession.tasks?.length ?? 0 } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, memory };
+  const context = { ...(collaborator ? { researchSession: {
+    parentSessionId: researchSession.parentSessionId, rootSessionId: researchSession.rootSessionId,
+    origin: researchSession.origin, spawnToken: researchSession.spawnToken, depth: researchSession.depth,
+    role: researchSession.role, readOnly: researchSession.readOnly === true,
+    declaredTasks: researchSession.tasks?.length ?? 0,
+    // Field presence is authoritative: malformed dispatcher metadata is not a direct assignment.
+    dispatcherManaged: Object.hasOwn(researchSession, 'dispatchId') || Object.hasOwn(researchSession, 'taskId') || Object.hasOwn(researchSession, 'tasks'),
+  } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, memory };
   return { status: 'ready', context, binding, ownerKey };
 }
 
@@ -266,6 +273,8 @@ export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?
 
   return [
     'This Pi session is joined to the confirmed res-workflow research workbench.',
+    'The lead is the single user-facing research owner: submit the initial decomposition directly through research_dispatch, which owns the one native confirmation for this frozen goal. Do not pre-confirm the same plan with ask_user. Main and branch owners arrange later in-scope tasks without repeated approval; retain the goal approval across reload. Use the native task graph and durable research_communication channel, with no mandatory coordinator. Return to the user for genuinely new scope/authority or an unresolved ownership decision, and reuse a decision already given.',
+    'The host schedules and monitors workers. Routine progress stays in host records; task/plan completion and actionable exceptions notify the lead. While waiting, end the turn or do independent authorized research instead of polling statuses/resources or reading harness implementation. On delivery, verify the referenced evidence and scientific coverage; completion alone is not acceptance. Escalate a platform fault with its concise error rather than turning the research session into harness maintenance.',
     `Verified current record context: ${JSON.stringify(recordContext)}`,
     mem,
     '',
@@ -294,20 +303,20 @@ export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?
 const restrictionBySession = new Map();
 
 /** Keep a user's opt-out/read-only/export limit across neutral follow-up turns. */
-function restrictionsFor(event, ctx) {
+function restrictionsFor(event, ctx, input = false) {
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   if (typeof sessionId !== 'string' || !sessionId) return undefined;
-  if (event?.messageType === 'user' && typeof event?.prompt === 'string') {
-    const restrictions = mergeDelegationRestrictions(restrictionBySession.get(sessionId), event.prompt);
-    if (restrictionBySession.size >= 64) restrictionBySession.delete(restrictionBySession.keys().next().value);
-    restrictionBySession.set(sessionId, restrictions);
-    return restrictions;
-  }
-  return restrictionBySession.get(sessionId);
+  const restrictions = mergeDelegationEventRestrictions(restrictionBySession.get(sessionId), event, input);
+  if (!restrictionBySession.has(sessionId) && restrictionBySession.size >= 64) restrictionBySession.delete(restrictionBySession.keys().next().value);
+  restrictionBySession.set(sessionId, restrictions);
+  return restrictions;
 }
 
 /** New sessions load the hook once; each turn revalidates live membership and metadata. */
 export function registerWorkbenchContext(pi, options = {}) {
+  pi.on('input', (event, ctx) => {
+    if (readWorkbenchRecordContext(ctx, options)) restrictionsFor(event, ctx, true);
+  });
   pi.on('before_agent_start', (event, ctx) => {
     const opts = event?.systemPromptOptions;
     if (!object(opts)) return undefined;

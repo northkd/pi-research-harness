@@ -222,9 +222,9 @@ test('scope narrowing withholds old evidence; explicit file and binary snapshot 
 });
 
 test('bounded source storage and resource availability fail closed', (t) => {
-  const { cwd, store, configure } = setup(t, { meminfo: 'MemAvailable: 2097152 kB\n' }); configure();
-  assert.deepEqual(store.resourceGate(), { ok: true, memAvailableMiB: 2048 });
-  assert.equal(new MainlineStore(cwd, { meminfo: 'MemAvailable: 2097151 kB\n' }).resourceGate().ok, false);
+  const { cwd, store, configure } = setup(t, { meminfo: 'MemAvailable: 1048576 kB\n' }); configure();
+  assert.deepEqual(store.resourceGate(), { ok: true, memAvailableMiB: 1024 });
+  assert.equal(new MainlineStore(cwd, { meminfo: 'MemAvailable: 1048575 kB\n' }).resourceGate().ok, false);
   assert.equal(new MainlineStore(cwd, { meminfo: '' }).resourceGate().ok, false);
   assert.equal(new MainlineStore(cwd, { meminfo: () => { throw new Error('missing'); } }).resourceGate().ok, false);
   fs.writeFileSync(path.join(cwd, 'notes/plan.md'), 'x'.repeat(9000)); capture(store);

@@ -73,10 +73,43 @@ function normalizeRestrictions(value) {
   return restrictionState(value.noDelegate === true, value.readOnly === true, value.exportLimited === true);
 }
 
+/** Quoted examples, fenced diagnostics and field values are not permission instructions. */
+function instructionClauses(text) {
+  const value = typeof text === 'string' ? text : '';
+  return value
+    .replace(/```[^\n]*\n[\s\S]*?(?:```|$)|~~~[^\n]*\n[\s\S]*?(?:~~~|$)/g, '\n')
+    .replace(/^\s*>.*$/gm, '')
+    .replace(/`[^`\n]*`|"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|(?<![\p{L}\p{N}])'[^'\n]*'/gu, ' OBJECT ')
+    .replace(/^\s*(?:[-*+]\s+|\d+[.)、]\s+)/gm, '')
+    .split(/[\n。！!；;，,]+|\.(?=\s|$)/)
+    .map(clause => clause.trim().replace(/^(?:constraints?|restrictions?|permissions?|mode|要求|约束|限制|权限|模式)\s*[:：]\s*/i, '').replace(/^please\s+/i, ''))
+    .filter(clause => clause && !/^(?:readOnly|noDelegate|exportLimited)\s*[:=]/i.test(clause));
+}
+
+/** Object-specific preservation must not become an assignment-wide shell ban. */
+function taskReadOnly(text) {
+  return instructionClauses(text).some(clause => {
+    if (/^(?:read[- ]?only|review[- ]?only)(?:$|[:：]|\s+(?:mode|task|assignment|session|analysis|review|inspection)\b)|^plan mode\b/i.test(clause)
+      || /^(?:(?:this|the|entire|whole|current)\s+)*(?:task|assignment|session|work|project)\s+(?:is|remains?|stays?|(?:must|should|shall)\s+(?:be|remain))\s+(?:strictly\s+)?(?:read[- ]?only|review[- ]?only)\b/i.test(clause)
+      || /^(?:this is (?:a|an)\s+|(?:you (?:must|should) )?keep (?:this|the) (?:task|assignment|session)\s+)(?:read[- ]?only|review[- ]?only)\b/i.test(clause)
+      || /^(?:(?:you|we)\s+(?:must|should|may|can)\s+)?only\s+(?:review|analy[sz]e|inspect|read)\b/i.test(clause)
+      || /^no\s+(?:writes?|edits?|modifications?|changes?)(?:$|\s+(?:allowed|permitted)\b)/i.test(clause)) return true;
+    const english = clause.match(/^(?:(?:you|we)\s+)?(?:do not|don't|must not|should not|never|are not allowed to)\s+(?:modify|edit|write|change)(?:\s+or\s+(?:modify|edit|write|change))*\b\s*(.*)$/i);
+    // Split only a following action, not an object list such as files or folders in data/.
+    const englishTarget = english?.[1].split(/\s+(?:and|or|nor)\s+(?:(?:do not|don't|must not|should not|never)\s+)?(?=(?:run|execute|modify|edit|write|change)\b)/i, 1)[0];
+    if (english && /^(?:to\s+)?(?:(?:any|all|the|project|workspace|existing|source)\s+)*(?:files?|anything|everything|project|repository|workspace|code)?(?:\s+at all)?$/i.test(englishTarget)) return true;
+    const chinese = clause.replace(/^(?:(?:本|当前|整个|全部)(?:任务|会话|工作|项目)\s*)(?:(?:必须|应当|应|需|须)\s*)?(?:(?:保持|为|是|设为|采用)\s*)?/, '')
+      .split(/(?:、|并且|并|且|或者|或|以及)\s*(?:(?:不要|不得|禁止|不允许|不能|不可|严禁)\s*)?(?=(?:运行|执行|修改|编辑|写入|写文件|改动|更改|进行))/, 1)[0].trim();
+    return /^(?:(?:只读|仅读)(?:$|[:：]|模式|分析|审查|评审|查看)|只做分析|仅做分析|只审查|仅审查|只评审|仅评审|只查看|仅查看|只分析|仅分析)/.test(chinese)
+      || /^(?:不要|不得|禁止|不允许|不能|不可|严禁)\s*(?:修改|编辑|写入|写文件|改动|更改)\s*(?:(?:任何|所有|全部)?(?:项目|工作区)?(?:文件|内容|代码)|任何东西)?$/.test(chinese)
+      || /^(?:不要|不得|禁止|不允许|不能|不可|严禁)(?:进行)?(?:任何|所有|全部)?(?:修改|编辑|写入|改动|更改)$/.test(chinese);
+  });
+}
+
 /**
- * Detect explicit user restrictions in the current prompt. Read-only/review
- * phrases constrain specialists to no-write work but do not forbid delegation.
- * Only explicit no-delegate and forbidden data/model export suppress it.
+ * Detect explicit user restrictions in the current prompt. Only task-wide
+ * read-only instructions constrain all tools; object protection stays scoped.
+ * No-delegate and forbidden export detection intentionally remain unchanged.
  */
 export function detectDelegationRestrictions(text) {
   const value = typeof text === 'string' ? text : '';
@@ -84,7 +117,7 @@ export function detectDelegationRestrictions(text) {
     || /\bno\s+(?:sub-?agents?|delegation|delegating|dispatch(?:ing)?)\b/i.test(value)
     || /(?:不要|不得|禁止|别|无需|不需要)\s*(?:(?:再|又|去|继续|恢复|马上|立刻|使用|调用|派发|委派|启用)\s*)*(?:子代理|子智能体|subagent|多智能体|多\s*agent|代理|委派|派发)/i.test(value)
     || /(?:只|仅)(?:能|需|用)?\s*(?:直接|自己)\s*(?:执行|处理|做)/i.test(value);
-  const readOnly = /\bread[- ]?only\b|\breview[- ]?only\b|\bonly\s+(?:review|analy[sz]e|inspect)\b|\bplan mode\b|\b(?:do not|don't|must not|should not)\s+(?:modify|edit|write|change)\b|只读|仅读|只做分析|只审查|仅审查|只评审|仅评审|只查看|不要修改|不得修改|禁止修改/i.test(value);
+  const readOnly = taskReadOnly(value);
   const exportLimited = /\b(?:do not|don't|must not|never)\s+(?:send|share|export|upload|forward)\b[^.\n]{0,80}\b(?:external|third[- ]party|outside|model|provider)\b/i.test(value)
     || /\b(?:do not|don't|must not|never)\s+(?:export|share|upload)\s+(?:the\s+)?(?:data|results?|files?|materials?)\b/i.test(value)
     || /\bno\s+(?:external|third[- ]party)\s+(?:model|data|export|sharing)\b/i.test(value)
@@ -97,7 +130,13 @@ export function detectDelegationRestrictions(text) {
 
 /** Explicit permission to resume delegation, editing or external-model export. */
 function detectDelegationResume(text, current) {
-  const value = typeof text === 'string' ? text : '';
+  // A diagnostic quotation, false field or negated permission never grants access.
+  const value = instructionClauses(text)
+    .map(clause => clause.replace(/^(?:本|当前|整个|全部)(?:任务|会话|工作|项目)\s*/, ''))
+    .filter(clause =>
+    /^(?:you (?:may|can)\b|ok(?:ay)? to\b|go ahead and\b|feel free to\b|(?:delegation|sub-?agents?|external|third[- ]party)\b|(?:resume|restart|continue|enable)\s+delegation\b|delegate\s+again\b|(?:use|call|spawn|dispatch)\s+(?:(?:a|the)\s+)?sub-?agents?\b|read[- ]?write\b|可以|允许|同意|恢复|继续|尽管|使用子代理|调用子代理|派发子代理|委派子代理|启用子代理)/i.test(clause)
+    && !/\b(?:not|never|cannot|can't|no|if|unless|example|diagnostic)\b|[?？()（）]|不(?:允许|得|能|可|要)|禁止|严禁|吗|示例|诊断/i.test(clause)
+  ).join('\n');
   const delegation = !current.noDelegate && (
     /\b(?:you may|you can|ok(?:ay)? to|go ahead and|feel free to)\s+(?:now\s+)?(?:delegate|use\s+(?:a\s+)?sub-?agents?|spawn\s+(?:a\s+)?sub-?agents?)\b/i.test(value)
     || /\b(?:delegation|sub-?agents?)\s+(?:is|are)\s+(?:allowed|enabled|permitted|ok(?:ay)?)\b/i.test(value)
@@ -109,7 +148,7 @@ function detectDelegationResume(text, current) {
   );
   const readOnly = !current.readOnly && (
     /\b(?:you may|you can|ok(?:ay)? to|go ahead and|feel free to)\s+(?:now\s+)?(?:modify|edit|write|change)\b/i.test(value)
-    || /\b(?:not\s+read[- ]?only|read[- ]?write\s+(?:is\s+)?(?:allowed|enabled|ok))\b/i.test(value)
+    || /\bread[- ]?write\s+(?:is\s+)?(?:allowed|enabled|ok)\b/i.test(value)
     || /(?:可以|允许|同意|恢复|继续)\s*(?:修改|编辑|写入|写文件|改动)/i.test(value)
   );
   const exportAllowed = !current.exportLimited && (
@@ -125,15 +164,29 @@ function detectDelegationResume(text, current) {
  * Shared restriction update: neutral follow-ups preserve previous restrictions.
  * Only an explicit user permission clears the corresponding flag.
  */
-export function mergeDelegationRestrictions(previous, text) {
+export function mergeDelegationRestrictions(previous, text, { allowResume = true } = {}) {
   const prior = normalizeRestrictions(previous);
   const current = detectDelegationRestrictions(text);
-  const resume = detectDelegationResume(text, current);
+  const resume = allowResume ? detectDelegationResume(text, current) : {};
   return restrictionState(
     resume.delegation ? false : prior.noDelegate || current.noDelegate,
     resume.readOnly ? false : prior.readOnly || current.readOnly,
     resume.export ? false : prior.exportLimited || current.exportLimited,
   );
+}
+
+/** Startup/sendUserMessage prompts can tighten, never impersonate a human permission update. */
+export function mergeDelegationEventRestrictions(previous, event, input = false) {
+  if (!input && event?.messageType === 'custom') return normalizeRestrictions(previous);
+  const text = input ? event?.text : event?.prompt;
+  if (typeof text !== 'string') return normalizeRestrictions(previous);
+  // This exact generated envelope may arrive through the ordinary RPC input path.
+  // Recognizing it can only withhold a permission relaxation, never remove a limit.
+  const startup = text.startsWith('You are a research collaborator in a fresh Pi session joined to the confirmed research workbench.');
+  return mergeDelegationRestrictions(previous, text, {
+    // RPC identifies a transport, not a human; absent separate proof it only tightens.
+    allowResume: input && !startup && event?.source === 'interactive',
+  });
 }
 
 /** Explicit opt-outs disable advice; child status alone is not an opt-out. */
@@ -205,9 +258,10 @@ export function buildDelegationGuidance({ selectedTools, restrictions, env } = {
     lines.push('- `research_session` is active for independent Pi processes with real parent links. Supply tasks when a collaborator receives several jobs; the server automatically dispatches that structured list.');
   }
   if (caps.researchDispatch) lines.push(
-    '- For a broad goal, prefer `research_dispatch` action=delegate with stable planId, task (goal, mandatory constraints, acceptance criteria and file references) and stage. A separate execution coordinator does the detailed decomposition, dispatch, debugging, evidence review and aggregation. The lead keeps scope, key decisions and the final conclusion; do not bulk-read the project before handing off.',
+    '- The lead decomposes the initial scope and obtains user confirmation, then submits `research_dispatch` action=plan. Branch owners autonomously plan their subsequent children inside the approved scope. A separate coordinator is optional, never mandatory.',
     '- `research_dispatch` action=plan executes an already decomposed DAG, enforces dependencies and concurrency, and records child reports. Use stable planId on retries. For indivisible work record atomic with a reason; never substitute prose for an execution receipt.',
     '- Default dispatch replies are bounded summaries. Read selected evidence with status view=detail and planId/taskId; follow nextOffset for additional pages. Detailed child logs stay in child sessions/files. Wait for completion notifications; do not poll or re-run delegated work in the lead context.',
+    '- Formal parent/child messages and direct-session reports use `research_communication`. Reply to exact request IDs; ack handled non-request messages. Keep only short findings and evidence references in parent contexts. Do not implement ad-hoc shell forwarding or file watchers.',
   );
   return lines.join('\n');
 }
@@ -283,15 +337,16 @@ export function registerDelegationPolicy(pi, options = {}) {
     state.caps = detectDelegationTools(event?.systemPromptOptions?.selectedTools);
     if (!state.joined) return undefined;
     if (event?.messageType === 'user' && typeof event.prompt === 'string') {
-      state.restrictions = mergeDelegationRestrictions(state.restrictions, event.prompt);
+      state.restrictions = mergeDelegationEventRestrictions(state.restrictions, event);
     }
     return undefined;
   }));
   disposers.push(pi.on('input', (event, ctx) => {
     const state = stateFor(ctx);
+    state.joined = isJoined(ctx);
     if (!state.joined) return undefined;
     if (typeof event?.text === 'string') {
-      state.restrictions = mergeDelegationRestrictions(state.restrictions, event.text);
+      state.restrictions = mergeDelegationEventRestrictions(state.restrictions, event, true);
     }
     return undefined;
   }));

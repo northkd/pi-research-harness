@@ -112,7 +112,8 @@ export function projectDispatchContext(snapshot, params = {}) {
   // Most recent plans first; terminal counts include every plan in scope.
   for (const plan of [...plans].reverse()) {
     const tasks = list(plan.tasks), row = { id: identifier(plan?.id), mode: plan?.mode === 'delegate' ? 'delegate' : 'tasks',
-      status: identifier(plan?.status), error: identifier(plan?.error), counts: countsOf(tasks), tasks: [], omittedTasks: tasks.length };
+      status: identifier(plan?.status), schedulingPaused: plan?.schedulingPaused === true,
+      error: identifier(plan?.error), counts: countsOf(tasks), tasks: [], omittedTasks: tasks.length };
     projection.plans.push(row);
     if (bytes(projection) > DISPATCH_CONTEXT_BYTES) { projection.plans.pop(); projection.omittedPlans++; continue; }
     if (!withRows) continue; // Mutations acknowledge once without echoing the whole plan.

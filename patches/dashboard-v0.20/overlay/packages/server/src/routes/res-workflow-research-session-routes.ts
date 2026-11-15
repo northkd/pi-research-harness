@@ -24,6 +24,8 @@ import type { SpawnStrategy } from "@blackbelt-technology/pi-dashboard-shared/co
 import type { NetworkGuard } from "./route-deps.js";
 import { createResearchDispatchService, createResearchDispatchStore } from "../res-workflow/research-dispatch-service.mjs";
 import { createResearchSessionService, ResearchSessionError } from "../res-workflow/research-session-service.mjs";
+import { createResearchCommunicationService } from "../res-workflow/research-communication-service.mjs";
+import { createResearchCommunicationStore } from "../res-workflow/research-communication-service.mjs";
 
 export interface ResearchSessionInitialPromptRegistry {
   enqueue(cwd: string, prompt: string, spawnToken?: string): boolean;
@@ -113,6 +115,7 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
     if (!supervision.resourceGate().ok) throw new ResearchSessionError(409, "research-session-resource-budget-unavailable");
   };
   let dispatcher: ReturnType<typeof createResearchDispatchService> | undefined;
+  let communication: ReturnType<typeof createResearchCommunicationService> | undefined;
   const service = createResearchSessionService({
     getSession: id => deps.sessionManager.get(id),
     listSessions: () => deps.sessionManager.listAll(),
@@ -128,7 +131,7 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
     },
     beforeSpawn: verifyLaunch,
     spawnStrategy: deps.spawnStrategy,
-    isCompleted: token => dispatcher?.isCompleted(token) ?? false,
+    isCompleted: token => (dispatcher?.isCompleted(token) ?? false) || (communication?.isCompleted(token) ?? false),
     isWaitingCoordinator: id => dispatcher?.isWaitingCoordinator(id) ?? false,
     isRecoveringSession: session => dispatcher?.isRecoveringSession(session) ?? false,
     unregisteredReservations: () => dispatcher?.unregisteredReservations() ?? [],
@@ -145,16 +148,41 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
     // explicitly adopted local session; never synthesize a look-alike principal.
     principalForSession: session => session?.principalOwner ?? LOCAL_OPERATOR,
   });
+  communication = createResearchCommunicationService({
+    store: createResearchCommunicationStore(path.join(deps.privateDir ?? path.join(getDashboardConfigDir(), "res-workflow"), "communication")),
+    getSession: id => deps.sessionManager.get(id), listSessions: () => deps.sessionManager.listAll(),
+    authorize: service.authorize, releaseSession: service.release, activateSession: service.activate,
+    reportAssignment: input => dispatcher!.handle(input),
+    isAssignmentCompleted: token => dispatcher!.isCompleted(token),
+    childrenPending: id => dispatcher!.isWaitingCoordinator(id),
+    notifyParent: deps.notifyParent,
+    principalForSession: session => session?.principalOwner ?? LOCAL_OPERATOR,
+  });
   const unsubscribeReceipts = deps.subscribeReceiptAcks?.((sessionId, promptId) => {
     void dispatcher!.acknowledgeReceipt(sessionId, promptId).catch(() => { /* retry durable receipt */ });
+    void communication!.acknowledgeReceipt(sessionId, promptId).catch(() => { /* retain undelivered message */ });
   });
   // Registration and process-restart reconciliation run without model turns.
   // Actual success is still an authenticated task report, never idle status.
-  const tick = () => { void dispatcher!.tick().catch(() => { /* status remains inspectable; no speculative relaunch */ }); };
+  const tick = () => {
+    void dispatcher!.tick().catch(() => { /* status remains inspectable; no speculative relaunch */ });
+    void communication!.tick().catch(() => { /* durable outbox retries after reconnect */ });
+  };
   const timer = setInterval(tick, 2_000);
   timer.unref?.();
-  fastify.addHook("onClose", async () => { clearInterval(timer); unsubscribeReceipts?.(); dispatcher!.dispose(); });
+  fastify.addHook("onClose", async () => { clearInterval(timer); unsubscribeReceipts?.(); dispatcher!.dispose(); communication!.dispose(); });
   tick();
+
+  fastify.post("/api/res-workflow/communication", { preHandler: deps.networkGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      return await communication!.handle({ body: request.body, principal: sessionPrincipalOf(request), expiresAt: (request as FastifyRequest & { principalExpiresAt?: number | null }).principalExpiresAt ?? null });
+    } catch (error) {
+      const known = error instanceof ResearchSessionError;
+      reply.code(known ? error.statusCode : 503);
+      const code = known ? error.code : 'research-communication-unavailable';
+      return { success: false, error: code, code };
+    }
+  });
 
   fastify.post("/api/res-workflow/dispatch", { preHandler: deps.networkGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {

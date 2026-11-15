@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { requireWorkbenchRecordContext } from './workbench-context.mjs';
-import { mergeDelegationRestrictions } from './delegation-policy.mjs';
+import { mergeDelegationEventRestrictions } from './delegation-policy.mjs';
 
 export const RESEARCH_SESSION_TOOL_NAME = 'research_session';
 export const RESEARCH_SESSION_STAGES = ['1-idea', '2-experiment', '3-review', '4-summary', '5-writing'];
@@ -132,6 +132,8 @@ export function buildResearchSessionPrompt(provenance, taskContext) {
   const ids = [...new Set((taskContext?.prerequisiteResults ?? []).map(row => row?.id).filter(id => typeof id === 'string' && ID.test(id)))].slice(0, 12);
   const dispatchId = taskContext?.dispatchId ?? provenance.dispatchId;
   const taskId = taskContext?.taskId ?? provenance.taskId;
+  const dispatcherAssigned = typeof dispatchId === 'string' && ID.test(dispatchId)
+    && typeof taskId === 'string' && ID.test(taskId);
   const prefix = [
     'You are a research collaborator in a fresh Pi session joined to the confirmed research workbench. No parent conversation is copied into this task.',
     `Role: ${provenance.role}`,
@@ -152,8 +154,15 @@ export function buildResearchSessionPrompt(provenance, taskContext) {
     typeof taskId === 'string' && ID.test(taskId) ? `Assignment task reference: ${taskId}` : '',
     ids.length ? `Direct dependency IDs: ${ids.join(', ')}` : '',
     'First call research_dispatch action="status". Retrieve dependency receipts with action="status", view="detail", taskId="<dependency-id>", offset=0; read further pages only as needed. Dependency summaries and evidence bodies are deliberately not copied into this prompt.',
-    'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.',
-    'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access and workspace limits remain unchanged.',
+    'Use research_communication pending for formal parent/child messages. Send kind=request to your parent for help and reply to exact child requests. contact_supervisor serves ordinary subagents, not this formal parent link.',
+    'Own subsequent decomposition of this approved branch. Schedule your own bounded children with research_dispatch plan; ordinary in-scope decomposition needs no repeated lead/user approval. Send cross-branch decisions and additional permission needs to the parent.',
+    dispatcherAssigned
+      ? 'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.'
+      : 'This is a direct research_session. If verified status has no dispatcher assignment, execute the original bounded task without inventing an assignment or an atomic reason. Declared child tasks, if present, are scheduled automatically; coordinate their receipts.',
+    dispatcherAssigned
+      ? 'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access and workspace limits remain unchanged.'
+      : 'Use research_loop to record actual evidence. With no dispatcher assignment, report your actual completed/partial/blocked/failed result using research_communication report with a stable requestId and evidence references. HANDOFF files may remain evidence artifacts; do not rely on project-specific watchers or retry research_dispatch report after assignment-not-found. Wait for your own children and checks. Delivery, scientific acceptance and native process exit are separate. Publication, provider access and workspace limits remain unchanged.',
+    'Prefer research_communication report for assigned results too; the host forwards terminal reports to the real dispatcher assignment. No result receipt proves scientific acceptance or process exit.',
   ].filter(Boolean).join('\n');
   const task = String(provenance.task ?? '');
   const complete = prefix + task + '\n' + suffix;
@@ -181,11 +190,10 @@ export function createResearchSessionTool(pi, options = {}) {
   const inFlight = new Map();
   const restrictions = new Map();
   const rememberRestrictions = (event, ctx, input = false) => {
-    if (input ? event?.source !== 'user' : event?.messageType === 'custom') return;
     const id = ctx?.sessionManager?.getSessionId?.(), text = input ? event?.text : event?.prompt;
     if (!id || typeof text !== 'string') return;
     if (!restrictions.has(id) && restrictions.size >= 128) restrictions.delete(restrictions.keys().next().value);
-    restrictions.set(id, mergeDelegationRestrictions(restrictions.get(id), text));
+    restrictions.set(id, mergeDelegationEventRestrictions(restrictions.get(id), event, input));
   };
   if (typeof pi?.on === 'function') {
     pi.on('before_agent_start', (event, ctx) => rememberRestrictions(event, ctx));
@@ -299,7 +307,7 @@ export function createResearchSessionTool(pi, options = {}) {
         task: { type: 'string', minLength: 1, maxLength: RESEARCH_SESSION_LIMITS.maxTaskChars, description: 'Concrete task stored unchanged in verified metadata. Startup uses a bounded brief; if truncated, the worker must retrieve the complete task with research_dispatch status detail/self before execution.' },
         readOnly: { type: 'boolean', const: true, description: 'Narrow this assignment to read-only work. Inherited user/parent read-only restrictions are always preserved and cannot be cleared by tool arguments.' },
         stage: { type: 'string', enum: RESEARCH_SESSION_STAGES, description: 'Current res-workflow stage for this collaborator.' },
-        tasks: { type: 'array', minItems: 2, maxItems: 12, items: RESEARCH_DISPATCH_TASK_SCHEMA, description: 'Optional declared jobs for this coordinator. Automatically dispatched after its real session registers; dependsOn declares prerequisite task ids.' },
+        tasks: { type: 'array', minItems: 1, maxItems: 64, items: RESEARCH_DISPATCH_TASK_SCHEMA, description: 'Optional declared jobs for this branch. Automatically dispatched after its real session registers; dependsOn declares prerequisite task ids.' },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },

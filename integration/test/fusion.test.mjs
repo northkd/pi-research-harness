@@ -86,3 +86,19 @@ test("Feynman database adapter uses its exact schema", async () => {
   await searchEvidence(ctx, { source: "feynman", databaseSource: "openalex", query: "topic", limit: 3, sort: "relevance" });
   assert.deepEqual(ctx.calls[0], { name: "feynman_science_database_search", request: { source: "openalex", query: "topic", limit: 3, sort: "relevance" } });
 });
+
+test("internal acceptance requires cross-family jury and a completed counterexample", () => {
+  const executor = { reviewerObservation: { modelId: "jury", family: "jury-family" }, authorObservation: { modelId: "author", family: "author-family" } };
+  const accepted = derivationGate({
+    executor,
+    claimId: "C1",
+    derivations: [{ context: "fresh", body: "A" }, { context: "fresh", body: "B" }],
+    counterexample: { status: "completed", output: "no counterexample found" },
+    unresolvedObligations: [],
+  });
+  assert.equal(accepted.verdict, "accepted");
+  assert.equal(accepted.scope, "internal");
+  assert.equal(accepted.publicationAuthorized, false);
+  assert.equal(accepted.publicationRequiresUser, true);
+  assert.equal(accepted.claimId, "C1");
+});

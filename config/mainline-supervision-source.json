@@ -2,7 +2,7 @@
   "schema": "pi-research-mainline-supervision-source.v1",
   "date": "2026-11-06",
   "license": "Apache-2.0",
-  "source": "Author-owned locally deployed policy-v2 / cadence-v1 implementation; not an upstream package",
+  "source": "Author-owned runtime control, exact local execution and asynchronous mainline supervision; portable publication adaptation",
   "localPriorAcceptance": {
     "regressions": 89,
     "sdkNoModelChecks": 5,
@@ -20,7 +20,8 @@
     "macOS capture reports OS total/free memory separately; Linux-only resource admission remains fail-closed",
     "Project-local auto-approval preference is persisted separately from scientific acceptance; explicit startup defaults and existing hard gates are preserved",
     "Confirmed time-limited workbench task grants suppress repeated soft confirmations; dispatch plans retain resource and branch gates, with live revocation and dormant-start guidance tests",
-    "Goal delegation uses the same live task grant, scoped branch and resource checks as declared dispatch plans; model-facing receipts are separately bounded by the research extension"
+    "Goal delegation uses the same live task grant, scoped branch and resource checks as declared dispatch plans; model-facing receipts are separately bounded by the research extension",
+    "Current hierarchy and event-driven communication retain the published caller isolation, exact local model choice and cross-platform resource snapshots"
   ],
   "liveNewModelRoundtrip": "NOT_RUN",
   "persistentWorkflowHumanAdjudication": "NOT_IMPLEMENTED",
@@ -77,22 +78,22 @@
     },
     {
       "path": "src/capture.mjs",
-      "sha256": "9bedb037eb46cf6d0e8dad774b19c7c514742a21dac3f6ba45fb23b9e7edc7bd",
+      "sha256": "a44bbb87ac7f1c18a2beec136da56843de57b009901a1418a8c5da7998d83bc1",
       "localSourceSha256": "02704f09bda900fa20c65b6c172cff4093a1f3d07f1783a726258e93be41fd01"
     },
     {
       "path": "src/core.mjs",
-      "sha256": "e982f66ffcdb054b21c342d8ac9ddc8a4db83c71135cabbd0b5f009c59394bf9",
+      "sha256": "4fb91e651ced5ba961f6a715fec38ef47f4257265682896961fd098bec207bf0",
       "localSourceSha256": "5d5cac5bced390491ae1c5d7bbbe2ccc502db18e96616760d120c2245814e0a2"
     },
     {
       "path": "src/index.ts",
-      "sha256": "baece39e40faeadeaa6bc17b2edc4f3cbf4cb35464e5a8ffa393a3fbfb3078b7",
+      "sha256": "c5c1a0bcdb6afa381dab18eecfd0a540ff3943bfd932e08aa69b8feac13a39db",
       "localSourceSha256": "9f234eb5f932d4d518de7b796a9a2db556dc2bf48ca53df6a8569fa915fc5d5a"
     },
     {
       "path": "src/policy.mjs",
-      "sha256": "d0c584eea0bbca2ba6c7ae577c724e1963b565d08d24514c1293ccb28f53e094",
+      "sha256": "609427ae74d3a7cdc71d31b04b53571b18c9f89cd64ec17f4ad60bbe3263a356",
       "localSourceSha256": "1d463b2f3f7c70054cada527b614d0795c855a8fbeae2e7dc1aebf12d1b6f93b"
     },
     {
@@ -112,7 +113,7 @@
     },
     {
       "path": "test/core.test.mjs",
-      "sha256": "cb5be26255536f6b3b523ea3bc9f52756a8ac4e0ff149a6a3cefa033f4fd7993",
+      "sha256": "face36db2c573f658bd7a9c7223054f2de417f24254899678bbfda8b36d1e330",
       "localSourceSha256": "cb5be26255536f6b3b523ea3bc9f52756a8ac4e0ff149a6a3cefa033f4fd7993"
     },
     {
@@ -137,13 +138,23 @@
     },
     {
       "path": "test/proportional-policy.test.mjs",
-      "sha256": "386b8e1da0a0bc2c7a7120cac9fa6848993aca013d7121771832aeaa1e57152c",
+      "sha256": "003c33e51880f2b8655b815576a548f67032ceb265526a93c90c6cf61ade635e",
       "localSourceSha256": "003c33e51880f2b8655b815576a548f67032ceb265526a93c90c6cf61ade635e"
     },
     {
       "path": "test/reviewer-counterexamples.test.mjs",
       "sha256": "f1b6b0521f1e74b86f53550d339de79a18a42e32b411e319d8a04411cd13c885",
       "localSourceSha256": "f1b6b0521f1e74b86f53550d339de79a18a42e32b411e319d8a04411cd13c885"
+    },
+    {
+      "path": "src/command-risk.mjs",
+      "localSourceSha256": null,
+      "sha256": "f47a7a0d842bff778286a5b5f78946667b081baaa4d7d92fd14aacf56b0cc6bf"
+    },
+    {
+      "path": "src/exact-input.mjs",
+      "localSourceSha256": null,
+      "sha256": "e1c0b686a689a2f52a77fc7bddc9c4d361215d46bac9126fa4ef5b517bc53cd3"
     }
   ]
 }

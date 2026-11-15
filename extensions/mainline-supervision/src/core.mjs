@@ -235,7 +235,13 @@ export class MainlineStore {
     if (typeof value !== 'string' || !value || value.includes('\\') || value.includes('\0') || secret.test(value) || path.isAbsolute(value)) throw new Error('Invalid approved path');
     const directory = value.endsWith('/');
     const parts = (directory ? value.slice(0, -1) : value).split('/');
-    if (parts.some((p) => !p || p === '.' || p === '..' || sensitive.test(p))) throw new Error('Sensitive or non-canonical path');
+    if (parts.some((p, i) => {
+      // Source suffixes distinguish program leaves from model artifacts; all other sensitive markers and ancestors stay protected.
+      const sourceHelper = !directory && i === parts.length - 1 &&
+        /\.(?:py|[cm]?js|jsx|tsx?|rs|c|cc|cpp|h|hpp|jl|r)$/i.test(p) && !/^models?\./i.test(p) &&
+        !sensitive.test(p.replace(/models?(?=[._-])/gi, 'source'));
+      return !p || p === '.' || p === '..' || sensitive.test(p) && !sourceHelper;
+    })) throw new Error('Sensitive or non-canonical path');
     this.contained(path.join(this.cwd, ...parts));
     return parts.join('/') + (directory ? '/' : '');
   }
@@ -329,6 +335,35 @@ export class MainlineStore {
       if (!s.enabled || !s.coreRevision || s.materialRevision <= Math.max(s.reviewedMaterialRevision, s.lastAttemptMaterialRevision))
         return { changed: false, reason: 'no-new-material-evidence' };
       return this.addCheckpoint(s, { stageId: `human-check-${s.materialRevision}`, kind: 'stage_complete', source: 'direct-human-command' });
+    });
+  }
+
+  /**
+   * Targeted re-review of an active branch restriction after a correction.
+   *
+   * Same-core stage checkpoints are deliberately de-duplicated, so a repair of
+   * an already-reviewed stage could never produce a review node and the
+   * restriction could never clear. This creates one checkpoint keyed by the
+   * restriction id and the current material revision. It only fires when
+   * (a) a restriction is active, (b) the restriction has at least one declared
+   * correction, and (c) there is unreviewed material after that correction.
+   * It does not bypass evidence: the model still decides the verdict.
+   */
+  requestRestrictionReview() {
+    return this.mutate(s => {
+      if (!s.enabled || !s.coreRevision) return { changed: false, reason: 'supervision-not-enabled' };
+      const active = activeRestrictions(s);
+      if (!active.length) return { changed: false, reason: 'no-active-restriction' };
+      if (!s.correctionRevision) return { changed: false, reason: 'no-declared-correction' };
+      if (s.materialRevision <= Math.max(s.reviewedMaterialRevision, s.lastAttemptMaterialRevision))
+        return { changed: false, reason: 'no-new-material-evidence-after-correction' };
+      if (s.reviewActivity?.state === 'reviewing') return { changed: false, reason: 'review-in-progress' };
+      const ids = active.map((r) => r.id).sort().join('+');
+      return this.addCheckpoint(s, {
+        stageId: `restriction-review-${hash({ ids, material: s.materialRevision, correction: s.correctionRevision }).slice(7, 19)}`,
+        kind: 'stage_complete',
+        source: 'restriction-correction-review',
+      });
     });
   }
 
@@ -811,7 +846,7 @@ export class MainlineStore {
       const match = /^MemAvailable:\s+(\d+)\s+kB$/m.exec(text);
       if (!match) return { ok: false, memAvailableMiB: null, reason: 'MemAvailable unavailable' };
       const memAvailableMiB = Number(match[1]) / 1024;
-      return { ok: memAvailableMiB >= 2048, memAvailableMiB, ...(memAvailableMiB < 2048 ? { reason: 'MemAvailable below 2048 MiB' } : {}) };
+      return { ok: memAvailableMiB >= 1024, memAvailableMiB, ...(memAvailableMiB < 1024 ? { reason: 'MemAvailable below 1024 MiB' } : {}) };
     } catch { return { ok: false, memAvailableMiB: null, reason: 'MemAvailable unavailable' }; }
   }
 }

@@ -2,7 +2,8 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { MainlineStore, CHECKPOINT_KINDS, MODEL } from './core.mjs';
 import { prepareCapture, capturePreview, publishCapture } from './capture.mjs';
 import { autoApproveDefault, autoApproveExplicitlyDisabled, readAutoApproveState, writeAutoApproveState } from './auto-approve.mjs';
-import { REVIEW_SCHEMA, validReview, operationDecision, humanChannel, validateLocalOperation, digest, operationLeaves, permissionSnapshot, needsResource, observationTool } from './policy.mjs';
+import { REVIEW_SCHEMA, validReview, operationDecision, humanChannel, validateLocalOperation, digest, operationLeaves, permissionSnapshot, needsResource, observationTool, coordinationTool } from './policy.mjs';
+import { prepareExactInput, consumeExactInput } from './exact-input.mjs';
 export { REVIEW_SCHEMA, validReview } from './policy.mjs';
 import { readResearchAccessModeContext, researchAccessModeGuidance } from '../../research-loop/src/access-mode.mjs';
 import * as fs from 'node:fs';
@@ -10,6 +11,14 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export { MODEL } from './core.mjs';
+// Fingerprint loaded functions, not current disk bytes: an old resident session
+// must not claim that it loaded a replacement merely because its files changed.
+const runtimePolicy = Object.freeze({
+  schema: 'mainline-runtime-policy.v1', revision: 'research-runtime-control-20261113',
+  adapterSha256: digest(createMainlineAdapter.toString()),
+  decisionSha256: digest(operationDecision.toString()),
+  pathGuardSha256: digest(MainlineStore.prototype.scopePath.toString()),
+});
 const REQUEST = 'subagents:rpc:v1:request';
 const READY = 'subagents:rpc:v1:ready';
 const REPLY = 'subagents:rpc:v1:reply:';
@@ -396,7 +405,7 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     }
     else if (params.action !== 'status') throw new Error('Unknown supervision action');
     update();
-    const st = { ...(state() ?? {}), autoApprove };
+    const st = { ...(state() ?? {}), autoApprove, runtimePolicy };
     return { content: [{ type: 'text' as const, text: JSON.stringify(st) }], details: st };
   };
   pi.registerTool({ name: OWN_TOOL, label: 'Mainline supervision', description: 'Proportional research mainline supervision. Direction is separate from scientific acceptance; risks, missing evidence and review failures do not freeze a project. Only grounded OFF_TRACK paths pause. capture has fixed-source UI consent; allow_operation records one human-authorized bounded local check; decision records a scoped human disposition without erasing history. Native task permissions, data/egress/resource safety and no unsupported publication remain independent. Evidence accumulates within a stage; only a genuine checkpoint (stable conceptual stageId + plan_change/scope_change/stage_complete/drift_signal) may trigger automatic review. Never checkpoint routine edits, tests, bookkeeping, capture or completion cleanup; identical stage/kind is deduplicated across sessions. Tool check only consumes existing review/checkpoints; human slash check may request one new-material review. Do not create per-turn/timestamp stage IDs.', parameters: parameters as any,
@@ -448,10 +457,56 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
       capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input, isError: true, gateDenied: true });
       return { block: true, reason };
     };
-    if (!store) return observationTool(event.toolName, event.input) ? undefined : deny('当前项目监督状态无法初始化；观察与人工通道仍可用，未默许新执行。');
+    if (!store) return observationTool(event.toolName, event.input) || coordinationTool(event.toolName, event.input) ? undefined : deny('当前项目监督状态无法初始化；观察、研究通信与人工通道仍可用，未默许新执行。');
     const decision = operationDecision(store, s, event);
     if (!decision.allow && decision.confirmable) {
       const targetUI = callCtx?.ui ?? ctx?.ui;
+      if (decision.directHumanRequired) {
+        // The operator's native full-access choice already covers ordinary local
+        // command execution; the opaque-inline UI must not repeat it. This reads
+        // the live mode each call: it creates no grant and records no consent.
+        if (decision.commandInputConfirmation) {
+          let liveAccess: any;
+          try { liveAccess = (options.readResearchAccessModeContext ?? readResearchAccessModeContext)(callCtx ?? ctx); }
+          catch { liveAccess = undefined; }
+          if (liveAccess?.unavailable !== true && liveAccess?.profile?.mode === 'full-access') {
+            if (!store.resourceGate().ok) return deny('当前资源门槛不满足，未启动新执行。');
+            capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+            return undefined;
+          }
+        }
+        if (!callCtx?.hasUI || typeof targetUI?.confirm !== 'function') return deny('精确输入操作必须有真实人工UI；无UI不默许。');
+        const initialSessionId = sessionId(), inputDigest = digest(event.input ?? {}), callGeneration = generation;
+        let snapshot: any, preview: string;
+        try {
+          snapshot = permissionSnapshot(store, s, event);
+          preview = `${decision.reason}\n工具：${event.toolName}\n完整精确输入：${JSON.stringify(event.input)}\n${decision.commandInputConfirmation ? '可识别文件与核心版本' : '精确文件与输出'}：${JSON.stringify(decision.commandInputConfirmation ? snapshot : decision.exactInput)}\n这不是OS沙箱；内联代码、脚本或依赖可能有其他行为，未识别的依赖未获版本认证。原数据、外发、OS权限仍独立。仅本次调用，拒绝后不自动重试。是否允许？`;
+          if (preview.length > 65536) return deny('完整授权预览过大，拒绝而非截断。');
+        } catch { return deny('无法固定精确许可预览，未请求执行。'); }
+        return Promise.resolve().then(() => targetUI.confirm('人工确认精确本地执行（一次）', preview)).then((confirmed: boolean) => {
+          if (confirmed !== true || callGeneration !== generation || disposed || sessionId() !== initialSessionId ||
+              digest(event.input ?? {}) !== inputDigest) return deny('精确操作未获本次人工确认或会话/输入已变化。');
+          try {
+            const latest = state();
+            if (JSON.stringify(snapshot) !== JSON.stringify(permissionSnapshot(store, latest, event))) return deny('确认期间核心/范围/开发文件变化，旧精确确认失效。');
+            const rechecked = operationDecision(store, latest, event);
+            if (decision.commandInputConfirmation) {
+              if (!rechecked.directHumanRequired || !rechecked.commandInputConfirmation || rechecked.allow)
+                return deny('确认期间命令分类或分支权限变化，旧确认失效。');
+            } else if (!rechecked.directHumanRequired || JSON.stringify(rechecked.exactInput) !== JSON.stringify(decision.exactInput) ||
+                JSON.stringify(prepareExactInput(store, latest, event)) !== JSON.stringify(decision.exactInput)) {
+              return deny('确认期间精确许可、文件或输出变化，拒绝执行。');
+            }
+            if (!store.resourceGate().ok) return deny('确认后资源不足，未执行精确操作。');
+            // Inline confirmation authorizes this call only; it never creates a reusable/file-input permit.
+            if (!decision.commandInputConfirmation) consumeExactInput(store, latest, event, decision.exactInput, initialSessionId);
+          } catch { return deny('精确许可重核或一次消费失败，未执行。'); }
+          capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input,
+            ...(decision.commandInputConfirmation ? { executionConsent: { source: 'direct-human-ui', singleInvocation: true,
+              inputDigest, coreRevision: snapshot.coreRevision, files: snapshot.files, executionProof: false } } : {}) });
+          return undefined;
+        }).catch(() => deny('精确人工UI失败或取消，未执行。'));
+      }
       // The operator's live workspace choice replaces the retired task/expiry
       // form. Hard policy decisions and the host memory floor still apply.
       const accessContext = (options.readResearchAccessModeContext ?? readResearchAccessModeContext)(callCtx ?? ctx);

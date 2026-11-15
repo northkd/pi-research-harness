@@ -99,7 +99,23 @@ export function derivationGate(input = {}) {
   if (juryRoute.status !== "ready") diagnostics.push(juryRoute.reason ?? juryRoute.code);
   if (juryRoute.acceptance === "blocked-until-observation") diagnostics.push(juryRoute.independence?.reason ?? "jury independence is not observed");
   if (obligations.length) diagnostics.push("unresolved proof obligations remain");
-  return { verdict: diagnostics.length ? "blocked" : "provisional", juryRoute, derivations, counterexample: input.counterexample, unresolvedObligations: obligations, diagnostics, majorityIsNotProof: true, ...(input.testOnly === true ? { testOnly: true } : {}) };
+  // Internal acceptance: two cross-family fresh derivations, a completed
+  // counterexample check and an independent jury are sufficient. This is NOT
+  // publication authorization; external publication always requires the user.
+  const verdict = diagnostics.length
+    ? (juryRoute.status === "provisional" ? "provisional" : "blocked")
+    : (input.testOnly === true ? "provisional" : "accepted");
+  return {
+    verdict,
+    scope: "internal",
+    publicationAuthorized: false,
+    publicationRequiresUser: true,
+    claimId: typeof input.claimId === "string" ? input.claimId : undefined,
+    juryRoute, derivations, counterexample: input.counterexample,
+    unresolvedObligations: obligations, diagnostics,
+    majorityIsNotProof: true,
+    ...(input.testOnly === true ? { testOnly: true } : {}),
+  };
 }
 
 export function manifestFor(root, topic, stages) { return buildManifest(root, topic, stages); }

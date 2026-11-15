@@ -129,7 +129,7 @@ test('neutral follow-ups keep restrictions; only explicit resumption clears them
   assert.equal(restrictions.noDelegate, true);
   restrictions = mergeDelegationRestrictions(restrictions, '继续');
   assert.equal(restrictions.noDelegate, true);
-  restrictions = mergeDelegationRestrictions(restrictions, '可以委派子代理继续分析');
+  restrictions = mergeDelegationRestrictions(restrictions, '可以委派子代理继续分析', { allowResume: true });
   assert.equal(restrictions.noDelegate, false);
   assert.equal(mergeDelegationRestrictions(undefined, 'do not continue delegation').noDelegate, true);
   assert.equal(mergeDelegationRestrictions(undefined, '不要继续委派').noDelegate, true);
@@ -138,7 +138,7 @@ test('neutral follow-ups keep restrictions; only explicit resumption clears them
   assert.equal(readOnly.readOnly, true);
   readOnly = mergeDelegationRestrictions(readOnly, '继续');
   assert.equal(readOnly.readOnly, true);
-  readOnly = mergeDelegationRestrictions(readOnly, '现在可以修改文件了');
+  readOnly = mergeDelegationRestrictions(readOnly, '允许修改文件', { allowResume: true });
   assert.equal(readOnly.readOnly, false);
 
   let exported = mergeDelegationRestrictions(undefined, '不要外发数据到外部模型');
@@ -147,7 +147,7 @@ test('neutral follow-ups keep restrictions; only explicit resumption clears them
   assert.equal(exported.exportLimited, true);
   exported = mergeDelegationRestrictions(exported, '外部模型调用');
   assert.equal(exported.exportLimited, true);
-  exported = mergeDelegationRestrictions(exported, '允许调用外部模型');
+  exported = mergeDelegationRestrictions(exported, '允许调用外部模型', { allowResume: true });
   assert.equal(exported.exportLimited, false);
 });
 
@@ -270,6 +270,7 @@ test('no-delegate survives a neutral 继续 turn and clears on explicit resumpti
   pi.emit('tool_execution_end', readEnd());
   assert.equal(pi.emit('context', { messages: [] }), undefined);
 
+  pi.emit('input', { source: 'interactive', text: '可以委派子代理继续分析' });
   pi.emit('before_agent_start', startEvent('可以委派子代理继续分析', ['read', 'subagent']));
   pi.emit('tool_execution_end', readEnd());
   pi.emit('tool_execution_end', readEnd());

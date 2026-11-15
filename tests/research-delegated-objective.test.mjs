@@ -132,9 +132,13 @@ test('a delegated objective has one real coordinator, then workers, then one roo
   assert.equal(f.notices.filter(notice => notice.sessionId === 'root').length, 1);
 });
 
-test('delegate is an internal one-task mode, while ordinary plans still require real multiple tasks', async t => {
+test('delegated objectives and explicit single-task plans are bounded supported modes', async t => {
   const f = fixture(t);
-  await assert.rejects(f.plan('root', 'fake-single', jobs().slice(0, 1)), error => error.code === 'research-dispatch-task-count-invalid');
+  await assert.rejects(f.plan('root', 'empty-plan', []), error => error.code === 'research-dispatch-task-count-invalid');
+  const single = fixture(t);
+  const planned = await single.plan('root', 'single-task', jobs().slice(0, 1));
+  assert.equal(planned.plans[0].tasks.length, 1);
+  assert.equal(single.spawns.length, 1);
   for (const fields of [{ task: ' ' }, { task: 'x'.repeat(4001) }, { stage: 'unknown' }, { tasks: jobs() }, { concurrency: 2 }, { mode: 'tasks' }, { role: 'custom-worker' }]) {
     await assert.rejects(f.delegate('invalid', fields));
   }

@@ -16,6 +16,7 @@ import { observeStageTurn } from './stage-observer.mjs';
 import { registerDelegationPolicy } from './delegation-policy.mjs';
 import { registerWorkbenchSessionTool } from './workbench-session-tool.mjs';
 import { registerWorkbenchDispatchTool } from './workbench-dispatch-tool.mjs';
+import { registerWorkbenchCommunicationTool } from './workbench-communication-tool.mjs';
 import { recordStageTaskSummary } from './stage-task-summary.mjs';
 import {
   buildRoundPrompt, gateReview, readMemory, readTrace, recordRound, reviewDir,
@@ -202,6 +203,8 @@ function admitExplorers(requested: number) {
  * agent does not have to call Stage 1/2/3 manually.
  */
 async function launchAuto(pi: any, ctx: any, cwd: string, state: any, params: any, observe: (cwd: string, receipt: any, sessionId?: string) => void) {
+  const joined = readWorkbenchRecordContext(ctx);
+  if (joined && !joined.researchSession) return { status: 'blocked', reason: 'The workbench lead must confirm an initial research_dispatch plan with the user. Branch owners may choose subsequent in-scope workflows; the lead does not launch a competing fixed auto-research pipeline.' };
   const requested = Math.min(Math.max(Number(params.maxExplorers) || 3, 1), 8);
   const admitted = admitExplorers(requested);
   if (!admitted) {
@@ -276,6 +279,7 @@ export default function registerResearchLoop(pi: ExtensionAPI) {
   registerWorkbenchContext(pi);
   registerWorkbenchSessionTool(pi);
   registerWorkbenchDispatchTool(pi);
+  registerWorkbenchCommunicationTool(pi);
   registerDelegationPolicy(pi, { isJoined: (ctx: any) => {
     try { return Boolean(readWorkbenchRecordContext(ctx)); } catch { return false; }
   } });

@@ -30,7 +30,7 @@ export interface CreateResearchSessionServiceDeps {
   unregisteredReservations?(): UnregisteredResearchSession[];
 }
 export class ResearchSessionError extends Error { constructor(statusCode: number, code: string); statusCode: number; code: string }
-export const RESEARCH_SESSION_LIMITS: Readonly<{ maxPerParent: number; maxTotal: number; maxTaskChars: number; maxRoleChars: number; maxDepth: number; maxDescendants: number; maxResident: number; minAvailableMemory: number }>;
+export const RESEARCH_SESSION_LIMITS: Readonly<{ maxPerParent: number; maxTotal: number; maxTaskChars: number; maxRoleChars: number; maxDepth: number; maxResident: number; minAvailableMemory: number }>;
 export function validateResearchTasks(tasks: unknown): ResearchDispatchTask[];
 export function researchProvenanceOf(row: any): ResearchSessionProvenance | undefined;
 export function validateResearchSessionRequest(body: unknown): ResearchSessionRequest;
@@ -40,4 +40,5 @@ export function createResearchSessionService(deps: CreateResearchSessionServiceD
   create(input: { body: unknown; principal?: { iss: string; sub: string } | null; expiresAt?: number | null; taskContext?: { dispatchId: string; taskId: string; prerequisiteResults: any[] } }): Promise<Record<string, any>>;
   authorize(input: { sessionId: string; principal?: { iss: string; sub: string } | null; expiresAt?: number | null }): Promise<{ parent: any; cwd: string; charterHash: string; adoptionId: string; ownerKey?: string }>;
   release(spawnToken: string): void;
+  activate(spawnToken: string): void;
 };

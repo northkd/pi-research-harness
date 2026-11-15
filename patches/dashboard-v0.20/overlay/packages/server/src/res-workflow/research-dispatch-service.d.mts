@@ -38,6 +38,7 @@ export interface ResearchDispatchPlan {
   rootSessionId: string;
   status: 'running' | ResearchDispatchTerminalStatus;
   concurrency: number;
+  schedulingPaused?: boolean;
   readOnly?: true;
   error?: string;
   tasks: ResearchDispatchTaskState[];
@@ -57,7 +58,7 @@ export interface ResearchDispatchSnapshot {
   decisionRequired: boolean;
   childrenPending: boolean;
 }
-export const RESEARCH_DISPATCH_LIMITS: Readonly<{ maxTasks: number; maxConcurrency: number; maxRootTasks: number; maxPlans: number; maxPlanBytes: number; registrationGraceMs: number; receiptRetryMs: number }>;
+export const RESEARCH_DISPATCH_LIMITS: Readonly<{ maxTasks: number; maxConcurrency: number; maxPlans: number; maxPlanBytes: number; registrationGraceMs: number; receiptRetryMs: number }>;
 export function createResearchDispatchStore(directory: string): { readAll(): any[]; write(row: any): void };
 export function createResearchDispatchService(deps: {
   store?: { readAll(): any[]; write(row: any): void };
@@ -71,6 +72,7 @@ export function createResearchDispatchService(deps: {
   notifyParent?(sessionId: string, text: string, promptId: string): boolean | Promise<boolean>;
   now?(): Date;
   registrationGraceMs?: number;
+  maxRootTasks?: number;
 }): {
   handle(input: { body: unknown; principal?: { iss: string; sub: string } | null; expiresAt?: number | null }): Promise<ResearchDispatchSnapshot>;
   tick(): Promise<void>;

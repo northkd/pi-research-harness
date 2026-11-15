@@ -11,7 +11,7 @@ import { freemem } from "node:os";
 
 export const RESEARCH_SESSION_SCHEMA = "pi-research-session.v1";
 export const RESEARCH_SESSION_STAGES = ["1-idea", "2-experiment", "3-review", "4-summary", "5-writing"];
-export const RESEARCH_SESSION_LIMITS = Object.freeze({ maxPerParent: 4, maxTotal: 8, maxTaskChars: 4000, maxRoleChars: 40, maxDepth: 3, maxDescendants: 24, maxResident: 32, minAvailableMemory: 1024 * 1024 * 1024 });
+export const RESEARCH_SESSION_LIMITS = Object.freeze({ maxPerParent: 4, maxTotal: 8, maxTaskChars: 4000, maxRoleChars: 40, maxDepth: 3, maxResident: 32, minAvailableMemory: 1024 * 1024 * 1024 });
 const ROLE = /^[a-z][a-z0-9-]{1,39}$/;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const HASH = /^sha256:[a-f0-9]{64}$/;
@@ -35,7 +35,7 @@ const fail = (statusCode, code) => { throw new ResearchSessionError(statusCode, 
 
 /** Bounded DAG, whose items are executed by the server, not merely prompt advice. */
 export function validateResearchTasks(tasks) {
-  if (!Array.isArray(tasks) || tasks.length < 2 || tasks.length > 12) fail(400, "research-dispatch-task-count-invalid");
+  if (!Array.isArray(tasks) || tasks.length < 1 || tasks.length > 64) fail(400, "research-dispatch-task-count-invalid");
   const ids = new Set();
   const result = tasks.map(row => {
     if (!object(row) || Object.keys(row).some(key => !["id", "role", "task", "stage", "dependsOn"].includes(key))) fail(400, "research-dispatch-task-invalid");
@@ -99,6 +99,7 @@ export function buildResearchSessionInitialPrompt(provenance, taskContext) {
   const ids = [...new Set((taskContext?.prerequisiteResults ?? []).map(row => row?.id).filter(id => typeof id === 'string' && ID.test(id)))].slice(0, 12);
   const dispatchId = taskContext?.dispatchId ?? provenance.dispatchId;
   const taskId = taskContext?.taskId ?? provenance.taskId;
+  const dispatcherAssigned = typeof dispatchId === 'string' && ID.test(dispatchId) && typeof taskId === 'string' && ID.test(taskId);
   const prefix = [
     'You are a research collaborator in a fresh Pi session joined to the confirmed research workbench. No parent conversation is copied into this task.',
     `Role: ${provenance.role}`,
@@ -119,8 +120,15 @@ export function buildResearchSessionInitialPrompt(provenance, taskContext) {
     typeof taskId === 'string' && ID.test(taskId) ? `Assignment task reference: ${taskId}` : '',
     ids.length ? `Direct dependency IDs: ${ids.join(', ')}` : '',
     'First call research_dispatch action="status". Retrieve dependency receipts with action="status", view="detail", taskId="<dependency-id>", offset=0; read further pages only as needed. Dependency summaries and evidence bodies are deliberately not copied into this prompt.',
-    'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.',
-    'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access and workspace limits remain unchanged.',
+    'Use research_communication pending for formal parent/child messages. Send kind=request to your parent for help and reply to exact child requests. contact_supervisor serves ordinary subagents, not this formal parent link.',
+    'Own subsequent decomposition of this approved branch. Schedule your own bounded children with research_dispatch plan; ordinary in-scope decomposition needs no repeated lead/user approval. Send cross-branch decisions and additional permission needs to the parent.',
+    dispatcherAssigned
+      ? 'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.'
+      : 'This is a direct research_session. If verified status has no dispatcher assignment, execute the original bounded task without inventing an assignment or an atomic reason. Declared child tasks, if present, are scheduled automatically; coordinate their receipts.',
+    dispatcherAssigned
+      ? 'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access and workspace limits remain unchanged.'
+      : 'Use research_loop to record actual evidence. With no dispatcher assignment, report your actual completed/partial/blocked/failed result using research_communication report with a stable requestId and evidence references. HANDOFF files may remain evidence artifacts; do not rely on project-specific watchers or retry research_dispatch report after assignment-not-found. Wait for your own children and checks. Delivery, scientific acceptance and native process exit are separate. Publication, provider access and workspace limits remain unchanged.',
+    'Prefer research_communication report for assigned results too; the host forwards terminal reports to the real dispatcher assignment. No result receipt proves scientific acceptance or process exit.',
   ].filter(Boolean).join('\n');
   const task = String(provenance.task ?? '');
   const complete = prefix + task + '\n' + suffix;
@@ -283,8 +291,10 @@ export function createResearchSessionService(deps) {
     // current request's ledger reservation: it is not a second process.
     const pending = new Map([...inFlight].map(([token, row]) => [row.requestId ?? token, row]));
     for (const row of deps.unregisteredReservations?.() ?? []) if (row.requestId !== body.requestId) pending.set(row.requestId, row);
-    const family = rows.filter(row => provenanceOf(row)?.rootSessionId === rootSessionId && provenanceOf(row)?.adoptionId === verified.adoptionId);
-    if (family.length + [...pending.values()].filter(row => row.rootSessionId === rootSessionId).length >= (deps.maxDescendants ?? RESEARCH_SESSION_LIMITS.maxDescendants)) fail(409, "research-session-budget-limit");
+    if (deps.maxDescendants !== undefined) {
+      const family = rows.filter(row => provenanceOf(row)?.rootSessionId === rootSessionId && provenanceOf(row)?.adoptionId === verified.adoptionId);
+      if (family.length + [...pending.values()].filter(row => row.rootSessionId === rootSessionId).length >= deps.maxDescendants) fail(409, "research-session-budget-limit");
+    }
     const resident = rows.filter(row => provenanceOf(row) && (! ["ended", "closed", "archived"].includes(row.status) || deps.isRecoveringSession?.(row)));
     const active = resident.filter(row => !released.has(provenanceOf(row).spawnToken) && !deps.isCompleted?.(provenanceOf(row).spawnToken));
     const runnable = active.filter(row => !deps.isWaitingCoordinator?.(row.id));
@@ -371,5 +381,5 @@ export function createResearchSessionService(deps) {
     }
   }
 
-  return { create, authorize, release: spawnToken => { released.add(spawnToken); inFlight.delete(spawnToken); } };
+  return { create, authorize, release: spawnToken => { released.add(spawnToken); inFlight.delete(spawnToken); }, activate: spawnToken => { released.delete(spawnToken); } };
 }

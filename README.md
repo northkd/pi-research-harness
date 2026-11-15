@@ -10,7 +10,7 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![Node](https://img.shields.io/badge/Node-22.19%2B-green)
 
-> **当前为 0.20.0 开发源码。** 本分支恢复主 Agent 指定和五阶段独立启动，使用“默认权限 / 完全访问”替代长任务授权，移除常规研究启动的预算前置。试用请检出 `feat/autonomous-collaboration-20261106`；[当前控制与验证说明](docs/workflow-controls/implementation.md)记录实际范围。递归分发执行器、协作层级画布和计费性能面板继续保留。完整自动研究、Science 和部分后端集成仍需本机配置，见[可用范围](#可用范围与已知问题)。
+> **当前 `main` 为 0.20.0 开发源码。** 主 Agent 确认首次分工后，各分支在同一目标内自主推进；完成与异常通过持久回执通知，普通进度静默保存。当前版本保留主 Agent 指定、五阶段独立启动、“默认权限 / 完全访问”、递归分发、协作画布及计费性能面板。常规研究启动无预算前置。变更见 [Changelog](CHANGELOG.md)，[控制与验证说明](docs/workflow-controls/implementation.md)记录既有范围。完整自动研究、Science 和部分后端集成仍需本机配置，见[可用范围](#可用范围与已知问题)。
 
 当前修复区分主 Agent 选择、工作流接入与目标版本绑定。
 旧确认回执通过平台追加版本衔接，保留原 workflow 和研究记录。

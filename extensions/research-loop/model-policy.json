@@ -2,39 +2,107 @@
   "schema": "pi-research-loop.model-policy.v1",
   "updatedAt": "2026-10-20",
   "provider": "cliproxy",
-  "principle": "Strong models plan and judge; light models execute. Model choice is explicit per role and verified at dispatch time.",
+  "principle": "三档模型分发原则：智力模型负责顶层理论突破，指挥模型负责宏观规划、监督与对抗审查，工人模型负责高并发工具执行与数值闭环。同档位内额度耗尽时自动找同类型其他模型平替。",
   "tiers": {
-    "heavy": {
-      "description": "Core theory derivation, novelty judgment, adversarial review. Use only for reasoning that changes the research direction.",
+    "intelligence": {
+      "name": "智力模型",
+      "description": "最高阶理论首解、开创性科学假设、突破性数学推导。仅用于能够根本改变研究方向的顶级思考。额度用尽时优先同档位互换。",
       "models": [
         "cliproxy/gpt-6-astra(high)[1m]",
         "cliproxy/gpt-6-astra(xhigh)[1m]",
-        "cliproxy/gpt-6.1-sol(max)[1m]",
-        "cliproxy/gpt-6.1-sol(high)[1m]"
-      ],
-      "fallback": "cliproxy/glm-5.3[1m]",
-      "fallbackNote": "GLM-5.3 has limited quota; use only when both Astra and Sol are unavailable."
-    },
-    "light": {
-      "description": "Literature retrieval, numerics execution, file and tool work, summarization.",
-      "models": [
-        "cliproxy/deepseek-v4.1-flash[1m]",
-        "cliproxy/glm-5.3-flash[1m]"
+        "cliproxy/gpt-6-astra(max)[1m]",
+        "cliproxy/gpt-6-astra-fast(high)[1m]"
       ],
       "fallbackChain": [
-        "cliproxy/deepseek-flash-1017[1m]"
+        "cliproxy/bailian-kimi-k3.1-pro[1m]",
+        "cliproxy/gpt-6.1-sol(max)[1m]"
       ],
-      "fallbackNote": "Volcano Ark first (deepseek-v4.1-flash / glm-5.3-flash); when quota is exhausted use SquareAPI deepseek-flash-1017. DeepSeek official flash is not registered as a Pi provider here, so it is not in the chain."
+      "fallbackNote": "智力模型额度不足时，优先在 Astra (high / xhigh / max / fast) 同档内互换；全组耗尽时才由指挥模型顶档平替并计入降级日志。"
+    },
+    "commander": {
+      "name": "指挥模型",
+      "description": "任务拆解规划、多步方案把控、双盲对抗审查、独立复核与主线监督。额度不足时自动在同档内其余模型平替。",
+      "models": [
+        "cliproxy/bailian-kimi-k3[1m]",
+        "cliproxy/bailian-kimi-k3.1-pro[1m]",
+        "cliproxy/bailian-qwen3.8-max-0902[1m]",
+        "cliproxy/bailian-glm-5.3[1m]",
+        "cliproxy/gpt-6.1-sol(max)[1m]",
+        "cliproxy/gpt-6.1-sol(high)[1m]",
+        "cliproxy/gpt-6.1-sol(xhigh)[1m]",
+        "cliproxy/gpt-6.1-sol-fast(max)[1m]",
+        "cliproxy/ark-glm-5.3[1m]"
+      ],
+      "fallbackNote": "指挥模型互为平替（如 gpt-6.1-sol-xhigh/max 配额耗尽时，无缝平替为 bailian-kimi-k3、bailian-qwen3.8-max-0902 或 bailian-glm-5.3）。"
+    },
+    "worker": {
+      "name": "工人模型",
+      "description": "日常工具执行、批量检索、数值调试、脚本编写、日志清洗与长文档扩写。额度不足时自动在同档内其余模型平替。",
+      "models": [
+        "cliproxy/bailian-qwen3.8-flash[1m]",
+        "cliproxy/bailian-deepseek-flash-1017[1m]",
+        "cliproxy/sqface-deepseek-flash-1017[1m]",
+        "cliproxy/ark-deepseek-v4.1-flash[1m]",
+        "cliproxy/ark-glm-5.3-flash[1m]",
+        "cliproxy/gpt-6.1-terra(max)[1m]",
+        "cliproxy/bailian-deepseek-pro-0813[1m]",
+        "cliproxy/deepseek-v4-pro[1m]"
+      ],
+      "fallbackChain": [
+        "cliproxy/deepseek-v4-flash-vision-exp[1m]"
+      ],
+      "fallbackNote": "工人模型组内互为平替（qwen3.8-flash、deepseek-flash、glm-5.3-flash、gpt-6.1-terra-max、deepseek-pro）。额度耗尽时自动找同类型下其余模型，主池告罄转入 deepseek-v4-flash-vision-exp[1m]。"
+    },
+    "heavy": {
+      "description": "兼容历史 heavy 定义（包含 智力模型 与 指挥模型）",
+      "models": [
+        "cliproxy/gpt-6-astra(high)[1m]",
+        "cliproxy/gpt-6-astra(xhigh)[1m]",
+        "cliproxy/gpt-6-astra(max)[1m]",
+        "cliproxy/gpt-6-astra-fast(high)[1m]",
+        "cliproxy/gpt-6.1-sol(max)[1m]",
+        "cliproxy/gpt-6.1-sol(high)[1m]",
+        "cliproxy/gpt-6.1-sol(xhigh)[1m]",
+        "cliproxy/gpt-6.1-sol-fast(max)[1m]",
+        "cliproxy/bailian-kimi-k3[1m]",
+        "cliproxy/bailian-kimi-k3.1-pro[1m]",
+        "cliproxy/bailian-qwen3.8-max-0902[1m]",
+        "cliproxy/bailian-glm-5.3[1m]"
+      ],
+      "fallback": "cliproxy/bailian-glm-5.3[1m]"
+    },
+    "light": {
+      "description": "兼容历史 light 定义（对齐 工人模型）",
+      "models": [
+        "cliproxy/ark-deepseek-v4.1-flash[1m]",
+        "cliproxy/ark-glm-5.3-flash[1m]",
+        "cliproxy/bailian-deepseek-flash-1017[1m]",
+        "cliproxy/sqface-deepseek-flash-1017[1m]",
+        "cliproxy/bailian-qwen3.8-flash[1m]",
+        "cliproxy/gpt-6.1-terra(max)[1m]",
+        "cliproxy/bailian-deepseek-pro-0813[1m]",
+        "cliproxy/deepseek-v4-pro[1m]"
+      ],
+      "fallbackChain": [
+        "cliproxy/deepseek-v4-flash-vision-exp[1m]"
+      ]
     },
     "vision": {
       "description": "Visual and aesthetic work: figure layout, poster, presentation.",
       "models": [
-        "cliproxy/kimi-k2.8-preview[1m]"
+        "cliproxy/ark-kimi-k2.8-preview[1m]",
+        "cliproxy/bailian-kimi-k3[1m]",
+        "cliproxy/bailian-kimi-k3.1-pro[1m]",
+        "cliproxy/bailian-qwen3.8-flash[1m]",
+        "cliproxy/bailian-qwen3.8-max-0902[1m]"
       ],
       "imageModels": [
-        "cliproxy/gpt-image-2.5[1m]",
-        "cliproxy/gpt-image-2.5-flare[1m]",
-        "cliproxy/gpt-image-2.5-sunburst[1m]"
+        "cliproxy/gpt-image-2.6",
+        "cliproxy/gpt-image-2.6-flare",
+        "cliproxy/gpt-image-2.6-sunburst",
+        "cliproxy/gpt-image-2.6[1m]",
+        "cliproxy/gpt-image-2.6-flare[1m]",
+        "cliproxy/gpt-image-2.6-sunburst[1m]"
       ],
       "imageNote": "Prefer the logged-in web GPT-Pro for publication figures; gpt-image models are for illustration, not precise diagrams."
     },
@@ -45,19 +113,68 @@
     }
   },
   "roles": {
-    "research-theory": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(xhigh)[1m]", "mustBeDistinct": "theory-derivation-pair" },
-    "research-critic": { "tier": "heavy", "model": "cliproxy/gpt-6.1-sol(max)[1m]", "mustBeDistinct": "from-theory" },
-    "research-mainline-supervisor": { "tier": "heavy", "model": "cliproxy/gpt-6.1-sol(max)[1m]", "fixed": true },
-    "research-strategist": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(high)[1m]", "note": "Proposes directions; must not also judge them." },
-    "research-reframer": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(xhigh)[1m]", "note": "Only invoked when stuck; output needs critic review." },
-    "research-explorer": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(high)[1m]", "note": "Two parallel explorers must use different model families when possible." },
-    "research-literature": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]", "externalTool": "agy/gemini-3.8-flash-high" },
-    "research-numerics": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]" },
-    "research-ssh": { "tier": "light", "model": "cliproxy/glm-5.3-flash[1m]" },
-    "research-web-oracle": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]", "note": "Operates the browser; the scientific answer comes from the web model the user selects." },
-    "research-agy": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]" },
-    "research-agy-sci": { "tier": "light", "model": "cliproxy/deepseek-v4.1-flash[1m]" },
-    "research-model-assessor": { "tier": "heavy", "model": "cliproxy/gpt-6-astra(high)[1m]" }
+    "research-theory": {
+      "tier": "heavy",
+      "model": "cliproxy/gpt-6-astra(xhigh)[1m]",
+      "mustBeDistinct": "theory-derivation-pair"
+    },
+    "research-critic": {
+      "tier": "heavy",
+      "model": "cliproxy/gpt-6.1-sol(max)[1m]",
+      "mustBeDistinct": "from-theory"
+    },
+    "research-mainline-supervisor": {
+      "tier": "heavy",
+      "model": "cliproxy/gpt-6.1-sol(max)[1m]",
+      "fixed": true
+    },
+    "research-strategist": {
+      "tier": "heavy",
+      "model": "cliproxy/gpt-6-astra(high)[1m]",
+      "note": "Proposes directions; must not also judge them."
+    },
+    "research-reframer": {
+      "tier": "heavy",
+      "model": "cliproxy/gpt-6-astra(xhigh)[1m]",
+      "note": "Only invoked when stuck; output needs critic review."
+    },
+    "research-explorer": {
+      "tier": "heavy",
+      "model": "cliproxy/gpt-6-astra(high)[1m]",
+      "note": "Two parallel explorers must use different model families when possible."
+    },
+    "research-literature": {
+      "tier": "light",
+      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
+      "externalTool": "agy/gemini-3.8-flash-high"
+    },
+    "research-numerics": {
+      "tier": "light",
+      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]"
+    },
+    "research-ssh": {
+      "tier": "light",
+      "model": "cliproxy/ark-glm-5.3-flash[1m]"
+    },
+    "research-web-oracle": {
+      "tier": "light",
+      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
+      "note": "Operates the browser; the scientific answer comes from the web model the user selects."
+    },
+    "research-agy": {
+      "tier": "light",
+      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
+      "externalTool": "agy/gemini-3.8-flash-high"
+    },
+    "research-agy-sci": {
+      "tier": "light",
+      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
+      "externalTool": "agy/gemini-4-argon-high"
+    },
+    "research-model-assessor": {
+      "tier": "heavy",
+      "model": "cliproxy/gpt-6-astra(high)[1m]"
+    }
   },
   "constraints": {
     "heavyModelPolicy": "ChatGPT Pro quota is spent only on Astra high/xhigh and Sol max/high. Never bind 5.6-luna, gpt-6-luna or unlisted models for heavy roles.",

@@ -5,10 +5,11 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ResearchSessionError, RESEARCH_SESSION_LIMITS, RESEARCH_SESSION_STAGES, researchProvenanceOf, validateResearchTasks } from './research-session-service.mjs';
 
-export const RESEARCH_DISPATCH_LIMITS = Object.freeze({ maxTasks: 12, maxConcurrency: 3, maxRootTasks: 24, maxPlans: 512, maxPlanBytes: 2 * 1024 * 1024, registrationGraceMs: 120_000, receiptRetryMs: 30_000 });
+export const RESEARCH_DISPATCH_LIMITS = Object.freeze({ maxTasks: 64, maxConcurrency: 4, maxPlans: 512, maxPlanBytes: 2 * 1024 * 1024, registrationGraceMs: 120_000, receiptRetryMs: 30_000 });
 const TERMINAL = new Set(['completed', 'failed', 'blocked']);
 const ACTIVE = new Set(['launching', 'running', 'recovery-required']);
 const ENDED = new Set(['ended', 'closed', 'archived']);
+const RETRY_ADMISSION = new Set(['research-session-resource-budget-unavailable', 'research-session-memory-limit', 'research-session-concurrency-limit', 'research-session-capacity-limit', 'research-session-resident-limit']);
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -68,19 +69,32 @@ export function createResearchDispatchService(deps) {
   const graceMs = deps.registrationGraceMs ?? RESEARCH_DISPATCH_LIMITS.registrationGraceMs;
   const isRecoveringSession = session => session?.dataUnavailable === true && ENDED.has(session.status) && now().getTime() - startedAt < graceMs;
   let tail = Promise.resolve(), disposed = false;
+  const assertOpen = () => { if (disposed) fail(503, 'research-dispatch-service-closed'); };
   const serial = fn => { const result = tail.then(fn); tail = result.catch(() => {}); return result; };
   const sessions = () => deps.listSessions();
   // Copy-on-write: a failed disk write must not mutate in-memory truth or free a slot.
-  const persist = plan => { const saved = clone({ ...plan, updatedAt: now().toISOString() }); deps.store?.write(saved); plans.set(saved.id, saved); return saved; };
+  const persist = plan => { assertOpen(); const saved = clone({ ...plan, updatedAt: now().toISOString() }); deps.store?.write(saved); plans.set(saved.id, saved); return saved; };
   const ownerPrincipal = session => deps.principalForSession ? deps.principalForSession(session) : session?.principalOwner ?? null;
   const activeFor = (sessionId, verified) => [...plans.values()].filter(row => row.parentSessionId === sessionId && row.kind === 'plan' && !TERMINAL.has(row.status) && (!verified || scopeMatches(row, verified)));
-  const publicPlan = plan => ({ id: plan.id, clientPlanId: plan.clientPlanId, mode: plan.mode ?? 'tasks', parentSessionId: plan.parentSessionId, rootSessionId: plan.rootSessionId, status: plan.status, concurrency: plan.concurrency, ...(plan.readOnly === true ? { readOnly: true } : {}), error: plan.error, tasks: plan.tasks.map(row => ({ ...row })), createdAt: plan.createdAt, updatedAt: plan.updatedAt });
+  const publicPlan = plan => ({ id: plan.id, clientPlanId: plan.clientPlanId, mode: plan.mode ?? 'tasks', parentSessionId: plan.parentSessionId, rootSessionId: plan.rootSessionId, status: plan.status, concurrency: plan.concurrency, schedulingPaused: plan.schedulingPaused === true, ...(plan.readOnly === true ? { readOnly: true } : {}), error: plan.error, tasks: plan.tasks.map(row => ({ ...row })), createdAt: plan.createdAt, updatedAt: plan.updatedAt });
   const matchesTask = (plan, task, child) => {
     const p = researchProvenanceOf(child);
     return p && (p.spawnToken === task.spawnToken || p.requestId === task.requestId) && p.parentSessionId === plan.parentSessionId && p.adoptionId === plan.adoptionId && p.charterHash === plan.charterHash && p.workflowCwd === plan.cwd;
   };
   const childFor = (plan, task) => sessions().find(child => matchesTask(plan, task, child));
   const terminalize = (task, status, error) => { task.status = status; task.error = error; task.finishedAt = now().toISOString(); };
+  function acknowledge(plan, promptId) {
+    const copy = clone(plan), at = now().toISOString();
+    let changed = false;
+    if (TERMINAL.has(copy.status) && !copy.notifiedAt && copy.notificationId === promptId) {
+      copy.notifiedAt = at; changed = true;
+    }
+    for (const task of copy.tasks) if (task.notificationId && !task.notifiedAt && TERMINAL.has(task.status)
+        && (task.notificationId === promptId || copy.notificationId === promptId)) {
+      task.notifiedAt = at; changed = true;
+    }
+    if (changed) persist(copy);
+  }
 
   function upstreamStopped(session) {
     const seen = new Set();
@@ -106,8 +120,10 @@ export function createResearchDispatchService(deps) {
   }
 
   async function authorize(input) {
+    assertOpen();
     if (!object(input.body) || !ID.test(input.body.sessionId ?? '')) fail(400, 'research-dispatch-session-invalid');
-    return deps.authorize({ sessionId: input.body.sessionId, principal: input.principal, expiresAt: input.expiresAt });
+    const verified = await deps.authorize({ sessionId: input.body.sessionId, principal: input.principal, expiresAt: input.expiresAt });
+    assertOpen(); return verified;
   }
   // Both entry points use the same ledger and scheduler. Only this internal
   // objective builder may construct a one-task plan: the caller cannot choose
@@ -142,7 +158,7 @@ export function createResearchDispatchService(deps) {
     if ((provenance?.depth ?? 0) >= 3) fail(409, 'research-session-depth-limit');
     const rootSessionId = provenance?.rootSessionId ?? verified.parent.id;
     const reserved = [...plans.values()].filter(row => row.kind === 'plan' && row.rootSessionId === rootSessionId && scopeMatches(row, verified)).reduce((sum, row) => sum + row.tasks.length, 0);
-    if (reserved + normalized.length > RESEARCH_DISPATCH_LIMITS.maxRootTasks) fail(409, 'research-dispatch-budget-limit');
+    if (deps.maxRootTasks !== undefined && reserved + normalized.length > deps.maxRootTasks) fail(409, 'research-dispatch-budget-limit');
     if (plans.size >= RESEARCH_DISPATCH_LIMITS.maxPlans) fail(409, 'research-dispatch-store-capacity');
     const plan = {
       schema: 'pi-research-dispatch.v1', kind: 'plan', id, clientPlanId: planId, parentSessionId: verified.parent.id, rootSessionId,
@@ -179,16 +195,19 @@ export function createResearchDispatchService(deps) {
   async function advance() {
     if (disposed) return;
     await discoverAssignments();
+    if (disposed) return;
     // Drain deeper work first; waiting coordinators use resident capacity, not
     // runnable-worker slots. This prevents a tree of coordinators starving leaves.
     const ordered = [...plans.values()].filter(row => row.kind === 'plan').sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0));
     for (const saved of ordered) {
+      if (disposed) return;
       let plan = clone(plans.get(saved.id));
       const parent = deps.getSession(plan.parentSessionId);
       if ((!parent || isRecoveringSession(parent)) && now().getTime() - startedAt < graceMs) continue;
       let verified;
       try {
         verified = await deps.authorize({ sessionId: plan.parentSessionId, principal: ownerPrincipal(parent), expiresAt: null });
+        if (disposed) return;
         if (!scopeMatches(plan, verified)) fail(409, 'research-dispatch-scope-changed');
         if (ENDED.has(parent?.status)) fail(409, 'research-dispatch-coordinator-ended');
         if (upstreamStopped(parent) && !TERMINAL.has(plan.status)) fail(409, 'research-dispatch-upstream-terminal');
@@ -226,6 +245,7 @@ export function createResearchDispatchService(deps) {
         persist(plan);
         for (const token of release) deps.releaseSession?.(token);
         for (const task of plan.tasks) {
+          if (plan.schedulingPaused) break;
           if (task.status !== 'queued') continue;
           const dependencies = task.dependsOn.map(id => plan.tasks.find(row => row.id === id));
           if (dependencies.some(row => row.status === 'failed' || row.status === 'blocked')) { terminalize(task, 'blocked', 'research-dispatch-dependency-failed'); continue; }
@@ -236,12 +256,16 @@ export function createResearchDispatchService(deps) {
           // typed permission errors from the host adapter.
           try { await deps.beforeLaunch?.({ parent, verified, planId: plan.id }); }
           catch (error) {
+            if (disposed) return;
             const code = typeof error?.code === 'string' && /^[a-z0-9-]{1,100}$/.test(error.code) ? error.code : 'research-dispatch-preflight-blocked';
+            if (RETRY_ADMISSION.has(code)) { task.error = code; persist(plan); break; }
             terminalize(task, 'blocked', code); persist(plan); continue;
           }
+          if (disposed) return;
           task.status = 'launching'; task.launchedAt = now().toISOString();
           persist(plan); // Reserve durably before crossing the process boundary.
           try {
+            assertOpen();
             const result = await deps.createSession({
               body: { parentSessionId: plan.parentSessionId, role: task.role, task: task.task, stage: task.stage, requestId: task.requestId, ...(plan.readOnly === true ? { readOnly: true } : {}) },
               principal: ownerPrincipal(parent), expiresAt: null,
@@ -252,7 +276,7 @@ export function createResearchDispatchService(deps) {
             delete task.error;
           } catch (error) {
             const code = error?.code ?? 'research-dispatch-launch-outcome-unknown';
-            if (['research-session-concurrency-limit', 'research-session-capacity-limit'].includes(code)) task.status = 'queued';
+            if (RETRY_ADMISSION.has(code)) task.status = 'queued';
             else if (code === 'research-session-spawn-failed') terminalize(task, 'failed', code);
             else if (code.includes('unknown') || code === 'research-session-spawn-in-progress' || !(error instanceof ResearchSessionError)) task.status = 'recovery-required';
             else terminalize(task, 'blocked', code);
@@ -266,6 +290,19 @@ export function createResearchDispatchService(deps) {
         }
         persist(plan);
       }
+      if (!TERMINAL.has(plan.status) && deps.notifyParent) {
+        for (const task of plan.tasks) {
+          if (!TERMINAL.has(task.status) || task.notifiedAt) continue;
+          if (task.notificationSentAt && now().getTime() - Date.parse(task.notificationSentAt) < RESEARCH_DISPATCH_LIMITS.receiptRetryMs) continue;
+          const promptId = task.notificationId ?? 'research-dispatch-receipt-dispatch-' + hash(JSON.stringify([plan.id, task.id, task.reportedAt ?? task.finishedAt])).slice(0, 40);
+          task.notificationId = promptId;
+          persist(plan);
+          // Child text stays in tool results, outside the user-input permission lane.
+          const message = `[research_dispatch receipt ${promptId}] Plan ${plan.id} has a ${task.status} task delivery. Read research_dispatch status for the saved task summary and evidence, then verify that evidence before acceptance. Other tasks continue autonomously. Do not repeat completed work.`;
+          if (await deps.notifyParent(plan.parentSessionId, message, promptId)) { task.notificationSentAt = now().toISOString(); persist(plan); }
+        }
+      }
+      // The final plan signal also covers its last task, avoiding two wakeups.
       if (TERMINAL.has(plan.status) && !plan.notifiedAt && deps.notifyParent) {
         if (!plan.notificationSentAt || now().getTime() - Date.parse(plan.notificationSentAt) >= RESEARCH_DISPATCH_LIMITS.receiptRetryMs) {
           const promptId = 'research-dispatch-receipt-' + plan.id;
@@ -281,14 +318,21 @@ export function createResearchDispatchService(deps) {
   }
 
   async function handleInternal(input) {
+    assertOpen();
     const verified = await authorize(input), body = input.body;
-    if (!['delegate', 'plan', 'status', 'atomic', 'report', 'cancel'].includes(body.action)) fail(400, 'research-dispatch-action-invalid');
+    if (!['delegate', 'plan', 'status', 'atomic', 'report', 'cancel', 'pause', 'resume'].includes(body.action)) fail(400, 'research-dispatch-action-invalid');
     const allowed = new Set(['sessionId', 'action', 'planId', 'task', 'stage', 'tasks', 'concurrency', 'readOnly', 'reason', 'status', 'summary', 'evidence']);
     if (Object.keys(body).some(key => !allowed.has(key))) fail(400, 'research-dispatch-unknown-field');
     if (body.readOnly !== undefined && body.readOnly !== true) fail(400, 'research-dispatch-read-only-invalid');
     await discoverAssignments();
     if (body.action === 'delegate') createDelegatedObjective(verified, body);
     if (body.action === 'plan') createPlan(verified, body.tasks, body.planId, body.concurrency ?? 2, 'tool', body.readOnly);
+    if (body.action === 'pause' || body.action === 'resume') {
+      for (const saved of activeFor(verified.parent.id, verified)) {
+        if (body.planId && saved.id !== body.planId && saved.clientPlanId !== body.planId) continue;
+        persist({ ...saved, schedulingPaused: body.action === 'pause' });
+      }
+    }
     if (body.action === 'atomic') {
       if (!string(body.reason, 1000)) fail(400, 'research-dispatch-atomic-reason-required');
       if (activeFor(verified.parent.id, verified).length || researchProvenanceOf(verified.parent)?.tasks) fail(409, 'research-dispatch-declared-tasks-require-execution');
@@ -329,9 +373,8 @@ export function createResearchDispatchService(deps) {
     }
     await advance();
     const own = [...plans.values()].filter(plan => plan.parentSessionId === verified.parent.id && scopeMatches(plan, verified));
-    // An authenticated status read is also a receipt acknowledgement; this
-    // handles lost transport acks without emitting a duplicate model turn.
-    if (body.action === 'status') for (const saved of own) if (saved.kind === 'plan' && TERMINAL.has(saved.status) && !saved.notifiedAt) persist({ ...saved, notifiedAt: now().toISOString() });
+    // Internal gates also read status. Only native prompt_received proves delivery;
+    // a silent host read must not discard a result that never reached the model.
     const visible = own.filter(plan => plan.kind === 'plan').map(publicPlan), atomic = own.find(plan => plan.kind === 'atomic');
     const collaborator = researchProvenanceOf(verified.parent);
     // A child's exact task can be fetched on demand after its initial prompt
@@ -348,8 +391,7 @@ export function createResearchDispatchService(deps) {
   return {
     handle: input => serial(() => handleInternal(input)), tick: () => serial(advance),
     acknowledgeReceipt: (sessionId, promptId) => serial(async () => {
-      const saved = [...plans.values()].find(plan => plan.parentSessionId === sessionId && plan.notificationId === promptId && TERMINAL.has(plan.status));
-      if (saved && !saved.notifiedAt) persist({ ...saved, notifiedAt: now().toISOString() });
+      for (const plan of plans.values()) if (plan.parentSessionId === sessionId && plan.kind === 'plan') acknowledge(plan, promptId);
     }),
     isCompleted: token => [...plans.values()].some(plan => plan.kind === 'plan' && plan.tasks.some(task => task.spawnToken === token && (task.reportedAt || task.error === 'research-dispatch-worker-ended-without-report'))),
     isWaitingCoordinator: sessionId => activeFor(sessionId).length > 0,

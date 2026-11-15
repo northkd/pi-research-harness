@@ -347,6 +347,7 @@ test('workbench opt-out survives a neutral 继续 turn and clears on explicit re
   assert.match(first, /Synthetic joined objective/);
   assert.doesNotMatch(first, /subagent\(\{ agent:/);
   assert.doesNotMatch(run('继续'), /subagent\(\{ agent:/);
+  handlers.get('input')({ source: 'interactive', text: '可以委派子代理继续分析' }, ctx);
   assert.match(run('可以委派子代理继续分析'), /subagent\(\{ agent:/);
 });
 
@@ -368,7 +369,8 @@ test('workbench read-only mode survives a neutral turn and keeps no-write constr
   assert.match(first, /subagent\(\{ agent:/);
   const continued = run('继续');
   assert.match(continued, /READ-ONLY MODE/);
-  const resumed = run('现在可以修改文件了');
+  handlers.get('input')({ source: 'interactive', text: '允许修改文件' }, ctx);
+  const resumed = run('允许修改文件');
   assert.doesNotMatch(resumed, /READ-ONLY MODE/);
   assert.match(resumed, /subagent\(\{ agent:/);
 });
