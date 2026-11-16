@@ -1117,6 +1117,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   // scan restored, before any plugin writes. See session/plugin-refs.ts.
   pendingPluginRefRegistry.claimPersisted([...sessionManager.listAll(), ...sessionArchive.rows()]);
   let resWorkflowParticipants: ReturnType<typeof createResWorkflowParticipants> | undefined;
+  let resWorkflowCollaboration: ReturnType<typeof registerResWorkflowResearchSessionRoutes> | undefined;
   // §6.2 / D11: token-keyed correlation of a human owner to a spawn, filed by
   // a trusted spawn road before the await, consumed on session_register.
   const pendingPrincipalOwnerRegistry = createPendingPrincipalOwnerRegistry();
@@ -2664,10 +2665,15 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     accessFor: (cwd, identity) => resWorkflowAccess(resWorkflowAccessDeps, identity, cwd),
     connection: access => resWorkflowService.connection(access),
     broadcast: (id, update) => browserGateway.broadcastSessionUpdated(id, update),
+    assertParticipationAllowed: input => resWorkflowCollaboration?.assertParticipationAllowed(input),
   });
   browserGateway.setResWorkflowSpawnSupport({ prepare: resWorkflowParticipants.prepareSpawn, registry: pendingPluginRefRegistry });
-  registerResWorkflowResearchSessionRoutes(fastify, {
+  resWorkflowCollaboration = registerResWorkflowResearchSessionRoutes(fastify, {
     networkGuard, sessionManager,
+    history: () => [...sessionManager.listAll(), ...sessionArchive.rows()],
+    connection: access => resWorkflowService.connection(access),
+    joinParticipant: (access, id) => resWorkflowParticipants!.join(access, id, "manual"),
+    detachParticipant: (access, id) => resWorkflowParticipants!.detach(access, id),
     notifyParent: (sessionId, text, promptId) => piGateway.sendToSession(sessionId, { type: "send_prompt", sessionId, text, promptId, delivery: "steer" }),
     subscribeReceiptAcks: handler => { dispatchReceiptAcks.add(handler); return () => { dispatchReceiptAcks.delete(handler); }; },
     accessFor: (cwd, identity) => resWorkflowAccess(resWorkflowAccessDeps, identity, cwd),

@@ -42,6 +42,7 @@ export function registerWorkbenchCommunicationTool(pi, options = {}) {
       'Routine progress and partial checkpoints are saved silently; status includes them. Use request for help or a decision requiring action, and report completed/blocked/failed for a result. These actionable messages notify the recipient automatically.',
       'pending lists actionable unprocessed messages and unanswered requests. Read and act, then reply to requests or ack other messages. An ack alone does not resolve a request. Wait for native notifications instead of repeatedly polling inboxes, dispatch status or resources.',
       'Direct formal collaborators report completed/partial/blocked/failed here, with actual findings. Assigned dispatcher results are forwarded to their real dispatcher assignment.',
+      'A settled dispatcher assignment cannot be reopened by request, reply or decision. On research-communication-assignment-settled, no work was started: create a new supplementary dispatcher task with new planId/taskId within the approved scope; do not retry resuming the old assignment. Unassigned direct collaborators may resume only after current shared-capacity admission.',
       'Each branch decides its own later decomposition within the approved scope. The lead coordinates cross-branch questions and user decisions; later child tasks do not require repeated user approval.',
       'Preserve user stop/no-delegate, read-only, egress, resource and publication boundaries. Do not treat a reply as a grant or a reason to bypass a denied operation.',
     ],
@@ -62,7 +63,15 @@ export function registerWorkbenchCommunicationTool(pi, options = {}) {
         if (params.action === 'report' && value.reportReceipt && params.status !== 'partial') retirements.set(ctx.sessionManager.getSessionId(), value.reportReceipt);
         return result(value);
       }
-      catch (error) { return result({ status: 'blocked', tool: 'research_communication', error: /^[a-z0-9-]+$/.test(error?.message ?? '') ? error.message : 'research-communication-unavailable' }, true); }
+      catch (error) {
+        const code = /^[a-z0-9-]+$/.test(error?.message ?? '') ? error.message : 'research-communication-unavailable';
+        return result({ status: 'blocked', tool: 'research_communication', error: code,
+          ...(code === 'research-communication-assignment-settled' ? {
+            started: false, retryable: false, nextAction: 'create-new-dispatch-task',
+            message: '未启动：该子会话的派发任务已结算。请在原有授权范围内使用新的 planId / taskId 建立补充任务，不要重试恢复旧 assignment。',
+          } : {}),
+        }, true);
+      }
     },
   };
   pi.registerTool(tool);

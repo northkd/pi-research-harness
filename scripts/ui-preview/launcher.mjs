@@ -9,41 +9,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { registerDashboardExtras } from '../register-dashboard-extras.mjs';
 import { charterBindingFixture } from '../../tests/fixtures/charter-binding.mjs';
 import { configureResearch } from '../../extensions/research-loop/src/adoption.mjs';
+import { seedCollaborationFixture } from './collaboration-fixture.mjs';
+import { parsePreviewOptions, PREVIEW_USAGE } from './options.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(directory, '../..');
 const guard = path.join(directory, 'isolation.mjs');
-const usage = 'Usage: node scripts/ui-preview/launcher.mjs run [--runtime DASHBOARD_CHECKOUT] [--output QA_OUTPUT] [--browser-script SCRIPT.mjs]';
-
-function options() {
-  const args = process.argv.slice(2);
-  if (args[0] === '--help' || args[0] === '-h') return null;
-  if (args.shift() !== 'run') throw new Error(usage);
-  const value = {
-    runtime: process.env.PI_UI_PREVIEW_RUNTIME,
-    output: process.env.PI_UI_QA_OUTPUT,
-    browserScript: path.join(directory, 'browser-qa.mjs'),
-  };
-  let positionalScript = false;
-  for (let index = 0; index < args.length; index++) {
-    const name = args[index];
-    const property = { '--runtime': 'runtime', '--output': 'output', '--browser-script': 'browserScript' }[name];
-    if (property) {
-      const argument = args[++index];
-      if (!argument || argument.startsWith('--')) throw new Error(`Missing value for ${name}. ${usage}`);
-      value[property] = argument;
-    } else if (!name.startsWith('-') && !positionalScript) {
-      value.browserScript = name;
-      positionalScript = true;
-    } else throw new Error(`Unknown argument: ${name}. ${usage}`);
-  }
-  if (!value.runtime || !value.output) throw new Error('Specify --runtime / --output or PI_UI_PREVIEW_RUNTIME / PI_UI_QA_OUTPUT.');
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, path.resolve(item)]));
-}
-
-const config = options();
+const config = parsePreviewOptions(process.argv.slice(2), { env: process.env, scriptDirectory: directory });
 if (!config) {
-  console.log(`${usage}\nRequires Node >= 22.19. Both runtime and output paths must be supplied, via options or environment.`);
+  console.log(`${PREVIEW_USAGE}\nDefault: real collaboration fixture with seven ended synthetic sessions. Requires Node >= 22.19. Both runtime and output paths must be supplied, via options or environment.`);
   process.exit(0);
 }
 const [major, minor] = process.versions.node.split('.').map(Number);
@@ -263,6 +237,8 @@ async function verifySyntheticReadApis(state) {
   const listing = await get('/api/sessions');
   const rows = Array.isArray(listing) ? listing : Array.isArray(listing.data) ? listing.data : listing.sessions;
   if (!Array.isArray(rows)) throw new Error('Unexpected native sessions response.');
+  const expectedIds = new Set(state.syntheticSessions.map(row => row.id));
+  if (rows.length !== expectedIds.size || rows.some(row => !expectedIds.has(row.id))) throw new Error('Native session catalog does not match this isolated fixture exactly.');
   for (const fixture of state.syntheticSessions) {
     const row = rows.find(value => value.id === fixture.id);
     if (!row || row.status !== 'ended' || !row.name?.startsWith('【演示】')) throw new Error('Synthetic transcript was not discovered as an ended demo session.');
@@ -273,7 +249,68 @@ async function verifySyntheticReadApis(state) {
     throw new Error('Synthetic statistics must remain unpriced, with no invented money amount.');
   }
   if (!report.sessions?.length || report.billing?.sessionTotalCost !== 0) throw new Error('Synthetic month report is missing or invents a fee.');
-  return { syntheticReadSmoke: 'passed', endedSessions: state.syntheticSessions.length, speedApi: 200, billingApi: 200, fixturePricing: 'unpriced', recordedMoney: 'none' };
+  return { syntheticReadSmoke: 'passed', endedSessions: rows.length, speedApi: 200, billingApi: 200, fixturePricing: 'unpriced', recordedMoney: 'none' };
+}
+
+async function verifyCollaborationApis(state, fixture, mutations = false) {
+  const { httpProofHeaders } = await import(pathToFileURL(path.join(runtime, 'packages/shared/src/local-credential-proof.ts')).href);
+  const token = fs.readFileSync(path.join(state.previewHome, '.pi/dashboard/local/token'), 'utf8').trim();
+  const checks = [];
+  async function request(method, route, body) {
+    const url = state.url + route;
+    const response = await fetch(url, { method,
+      headers: { ...httpProofHeaders(token, url, method), ...(body ? { 'content-type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(8000) });
+    const data = await response.json();
+    return { status: response.status, data };
+  }
+  const endpoint = '/api/res-workflow/collaboration';
+  const snapshot = async () => {
+    const result = await request('GET', `${endpoint}?cwd=${encodeURIComponent(project)}`);
+    if (result.status !== 200) throw new Error(`Real collaboration GET returned ${result.status}: ${result.data.error ?? ''}`);
+    return result.data;
+  };
+  let current = await snapshot();
+  if (current.currentMainSessionId !== fixture.currentMainSessionId || current.tenures.length !== 2 || current.limits.maxMultiAgents !== 4 || current.limits.maxSubagents !== 3) throw new Error('Native collaboration route did not load the seeded persistent current/history/caps.');
+  const tenure = current.tenures.find(row => row.id === fixture.currentTenureId);
+  if (!tenure || fixture.childSessionIds.some(id => !tenure.sessionIds.includes(id))) throw new Error('Four sibling sessions were not retained in the current tenure.');
+  if (!current.plans.some(plan => plan.id === fixture.planId && plan.tasks.length === 4)) throw new Error('Native collaboration route did not load its real dispatch ledger.');
+  if (!current.nativeQueue.some(row => row.status === 'queued')) throw new Error('Native subagent queue was not loaded.');
+  const initialQueueStatuses = current.plans.find(plan => plan.id === fixture.planId).tasks.map(task => ({ id: task.id, status: task.status, reason: task.waitingReason ?? task.queueReason ?? task.error ?? null }));
+  checks.push({ name: 'real authenticated snapshot: current/history, 4 siblings, durable DAG and native queue', passed: true });
+  const observed = await request('GET', `/api/res-workflow/workbench-sync?cwd=${encodeURIComponent(project)}`);
+  const { isResearchWorkbenchObservation } = await import(pathToFileURL(path.join(runtime, 'packages/shared/src/research-workbench.ts')).href);
+  if (observed.status !== 200 || !isResearchWorkbenchObservation(observed.data)
+    || observed.data.executions.filter(row => row.kind === 'pi-session').length !== state.syntheticSessions.length
+    || fixture.nativeExecutionIds.some(id => !observed.data.executions.some(row => row.id === id && row.kind === 'native-subagent'))) throw new Error('Native workbench route did not expose valid seven-session/four-native-child observations.');
+  checks.push({ name: 'native workbench observation schema and all four child-parent records', passed: true });
+  const research = await request('GET', `/api/res-workflow?cwd=${encodeURIComponent(project)}`);
+  const charter = research.status === 200 && JSON.parse(research.data.research?.['state.json'] || 'null')?.charter;
+  if (!charter?.objective?.includes('【演示】修订后的合成研究目标') || !charter.constraints?.some(item => item.includes('源数据只读')) || !charter.nonGoals?.some(item => item.includes('不发布真实结论'))) throw new Error('Native workbench lost its current objective, constraints or non-goals.');
+  checks.push({ name: 'native research route preserves the complete objective/constraints/non-goals', passed: true });
+  if (mutations) {
+    const change = body => request('POST', endpoint, { cwd: project, ...body });
+    const stale = current.revision;
+    let result = await change({ action: 'limits', expectedRevision: stale, maxMultiAgents: 5, maxSubagents: 4 });
+    if (result.status !== 200 || result.data.limits.maxMultiAgents !== 5 || result.data.limits.maxSubagents !== 4) throw new Error('Native live limits mutation failed.');
+    result = await change({ action: 'limits', expectedRevision: stale, maxMultiAgents: 3, maxSubagents: 2 });
+    if (result.status !== 409) throw new Error('Native limits route accepted stale revision.');
+    current = await snapshot();
+    result = await change({ action: 'limits', expectedRevision: current.revision, maxMultiAgents: 4, maxSubagents: 3 });
+    if (result.status !== 200) throw new Error('Could not restore isolated caps.');
+    checks.push({ name: 'live limits update, CAS conflict and restore through real HTTP', passed: true });
+    current = await snapshot();
+    result = await change({ action: 'detach', expectedRevision: current.revision, sessionId: fixture.formerMainSessionId, tenureId: fixture.historicalTenureId });
+    if (result.status !== 200 || result.data.currentMainSessionId !== fixture.currentMainSessionId
+      || !result.data.detachedSessionIds.includes(fixture.formerChildSessionId)) throw new Error('Native old-main cascade failed or changed current tenure.');
+    checks.push({ name: 'historical main cascade does not detach current main', passed: true });
+    current = await snapshot();
+    result = await change({ action: 'detach', expectedRevision: current.revision, sessionId: fixture.currentMainSessionId, tenureId: fixture.currentTenureId });
+    if (result.status !== 200 || result.data.currentMainSessionId !== null || fixture.childSessionIds.some(id => !result.data.detachedSessionIds.includes(id))) throw new Error('Native current-main cascade did not remove its full subtree.');
+    for (const session of state.syntheticSessions) if (!fs.existsSync(session.sessionFile)) throw new Error('Detach must preserve the synthetic transcript files.');
+    checks.push({ name: 'current main cascade clears binding and preserves transcripts', passed: true });
+  }
+  return { syntheticData: true, realModelCalls: 0, routeMode: 'native-server-no-interception', visualVerification: 'not-performed', initialQueueStatuses, checks };
 }
 
 async function assertFallbackPortFree() {
@@ -384,6 +421,9 @@ try {
   const syntheticSessions = seedEndedTranscripts(previewHome);
   const bindingFixture = seedStaleCharterBinding(previewHome, syntheticSessions[0]);
   seedSessionOrigins(previewHome, syntheticSessions, bindingFixture);
+  const collaborationFixture = config.collaborationFixture
+    ? await seedCollaborationFixture({ previewHome, project, sessions: syntheticSessions, binding: bindingFixture }) : null;
+  if (collaborationFixture) fs.writeFileSync(path.join(output, 'collaboration-fixture.json'), JSON.stringify(collaborationFixture, null, 2) + '\n', { mode: 0o600 });
   const port = await availablePort();
   const configDir = path.join(previewHome, '.pi/dashboard');
   fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
@@ -408,9 +448,16 @@ try {
   if (interrupted) throw new Error('UI validation interrupted.');
   if (!health) throw new Error(`Native server readiness timed out; inspect ${path.join(output, 'server.log')}`);
   console.log(JSON.stringify({ ready: true, url: state.url, version: health.version, clientBuild: health.clientBuild }));
+  if (!config.apiOnly && health.clientBuild?.status !== 'matched') throw new Error('Browser validation requires a completed, matched client build. Finish the build before starting this isolated server.');
   const smoke = await verifySyntheticReadApis(state);
   fs.writeFileSync(path.join(output, 'synthetic-read-smoke.json'), JSON.stringify(smoke, null, 2) + '\n', { mode: 0o600 });
   console.log(JSON.stringify(smoke));
+  if (collaborationFixture) {
+    const collaborationSmoke = await verifyCollaborationApis(state, collaborationFixture, config.apiOnly);
+    fs.writeFileSync(path.join(output, 'collaboration-api-smoke.json'), JSON.stringify(collaborationSmoke, null, 2) + '\n', { mode: 0o600 });
+    console.log(JSON.stringify(collaborationSmoke));
+  }
+  if (!config.apiOnly) {
   const handoff = mintBrowserHandoff(state, env);
   const browserEnv = { ...env };
   for (const key of ['PLAYWRIGHT_BROWSERS_PATH', 'PI_UI_BROWSER_EXECUTABLE', 'CI']) {
@@ -421,6 +468,7 @@ try {
     PI_UI_DEMO_CWD: project,
     PI_UI_DEMO_SESSIONS: JSON.stringify(syntheticSessions),
     PI_UI_BINDING_FIXTURE: JSON.stringify(bindingFixture),
+    ...(collaborationFixture ? { PI_UI_COLLABORATION_FIXTURE: JSON.stringify(collaborationFixture) } : {}),
     PI_UI_QA_OUTPUT: output,
     PI_UI_LOGIN_URL: handoff,
   });
@@ -430,7 +478,8 @@ try {
   if (browser.error) throw browser.error;
   if (interrupted) throw new Error('UI validation interrupted.');
   if (result.code !== 0) throw new Error(`Browser validation exited with code ${result.code}.`);
-  Object.assign(report, { status: 'passed', version: health.version, clientBuild: health.clientBuild, syntheticSessions });
+  }
+  Object.assign(report, { status: 'passed', mode: config.apiOnly ? 'api-only' : 'browser-script', fixtureMode: config.collaborationFixture ? 'collaboration' : 'legacy-workspace', visualVerification: config.apiOnly ? 'not-performed' : 'see-browser-report', version: health.version, clientBuild: health.clientBuild, syntheticSessions });
   process.exitCode = 0;
 } catch (error) {
   report.error = redact(error.message ?? error);

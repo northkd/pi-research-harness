@@ -21,6 +21,26 @@ function fixture(initial = {}, requestOverride, readContext = joined) {
   return { calls, continuations, tool, set: value => { snapshot = { ...snapshot, ...value }; }, emit: (name, event = {}) => handlers.get(name)?.(event, context) };
 }
 
+test('main-sized plans retain live queue limits and pause/resume controls after integration', async () => {
+  const f = fixture({ decisionRequired: false });
+  const properties = f.tool.parameters.properties;
+  assert.equal(properties.tasks.minItems, 1);
+  assert.equal(properties.tasks.maxItems, 64);
+  assert.equal(properties.concurrency.maximum, 64);
+  assert.match(properties.concurrency.description, /cannot override/);
+  for (const action of ['pause', 'resume']) assert.ok(properties.action.enum.includes(action));
+  assert.match(f.tool.promptGuidelines.join('\n'), /full queue first/);
+  assert.match(f.tool.promptGuidelines.join('\n'), /refused direct calls are not queued/);
+  for (const count of [1, 64]) {
+    const tasks = Array.from({ length: count }, (_, i) => ({ id: `job-${i}`, role: 'research-worker',
+      task: `Approved fixture branch ${i}`, stage: '2-experiment', dependsOn: [] }));
+    const body = { action: 'plan', planId: `scope-${count}`, concurrency: 32, tasks };
+    await f.tool.execute('submit', body, undefined, undefined, context);
+    assert.deepEqual(f.calls.at(-1), body, 'a worker forwards the complete prepared queue, not just current execution slots');
+  }
+  assert.equal(await f.emit('tool_call', { toolName: 'research_communication', input: { action: 'pending' } }), undefined);
+});
+
 test('native dispatch fixes routing to its joined session and local authenticated endpoint', async () => {
   let observed;
   const request = createResearchDispatchClient({ readContext: joined, resolveAuth: () => ({ baseUrl: 'http://127.0.0.1:4131', token: 'test-local-token' }), fetchImpl: async (url, options) => { observed = { url, options }; return new Response(JSON.stringify(baseSnapshot())); } });

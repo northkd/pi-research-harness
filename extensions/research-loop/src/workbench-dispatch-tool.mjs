@@ -7,7 +7,7 @@ import { projectDispatchContext } from './dispatch-context.mjs';
 const SAFE_READS = new Set(['read', 'grep', 'find', 'ls', 'web_search', 'fetch_content']);
 const COORDINATION = new Set(['ask_user', 'ask_user_question', 'research_communication']);
 const LOOP_COORDINATION = new Set(['status', 'log', 'report']);
-// Status contains up to 24 scoped tasks plus one prerequisite receipt set.
+// Status contains bounded per-plan tasks plus one prerequisite receipt set.
 // Keep a finite cap that includes worst-case JSON escaping as well as UTF-8.
 export const RESEARCH_DISPATCH_RESPONSE_BYTES = 8 * 1024 * 1024;
 const TERMINAL = new Set(['completed', 'failed', 'blocked']);
@@ -113,6 +113,7 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
       'Branch owners choose subsequent decomposition and roles within their inherited task and permissions; do not send each ordinary child launch back to the user or lead for approval.',
       'The initial decomposition names branch responsibilities and outputs. Leave later in-scope decomposition to each branch; reserve no-nesting instructions for genuinely indivisible leaves instead of applying them to every branch.',
       'For a collaborator with several separable jobs, call plan before bulk implementation. Use stable planId for retries.',
+      'Prepare every task and dependency before submitting the plan, including work beyond current concurrency. The server persists the full queue first, launches only eligible tasks within live Main/Multi limits, and advances it without another model turn. Do not issue a burst of direct research_session calls: refused direct calls are not queued.',
       'For one indivisible assignment, call atomic with a concrete reason; do not create artificial empty subtasks.',
       'Call status before work. Detailed task/receipt data is paged: use view:detail with planId and taskId, a direct dependency taskId, or taskId:self for the original assignment; continue at nextOffset with the same recordHash until complete when the full brief is required.',
       'Dispatch runs autonomously. Wait for task/plan completion or actionable exception notifications instead of repeated status/resource polling or duplicate exploration. Verify the referenced evidence before scientific acceptance. The lead decides scope and unresolved questions; branch owners handle their detailed execution and evidence review.',
@@ -128,7 +129,7 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
         task: { type: 'string', minLength: 1, maxLength: 4000, description: 'For delegate: the goal, mandatory constraints, acceptance criteria and relevant file references. Do not copy the whole conversation.' },
         stage: { type: 'string', enum: RESEARCH_SESSION_STAGES },
         tasks: { type: 'array', minItems: 1, maxItems: 64, items: RESEARCH_DISPATCH_TASK_SCHEMA },
-        concurrency: { type: 'integer', minimum: 1, maximum: 4, description: 'Maximum runnable children in this plan; default 2. Host memory and resident caps still apply.' },
+        concurrency: { type: 'integer', minimum: 1, maximum: 64, description: 'Legacy fallback concurrency (default 2). A managed workbench uses its current live Main/Multi concurrency settings; this field cannot override them.' },
         reason: { type: 'string', minLength: 1, maxLength: 1000, description: 'For atomic: why the assignment is indivisible. For cancel: why to stop scheduling the named plan; running processes are not killed.' },
         status: { type: 'string', enum: ['completed', 'failed', 'blocked'] },
         summary: { type: 'string', minLength: 1, maxLength: 4000 },

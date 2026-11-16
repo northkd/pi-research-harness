@@ -241,3 +241,136 @@ test('archived sender receipts remain deliverable to the verified current parent
   await f.service().tick();
   assert.equal(f.notifications.length, 1);
 });
+
+test('direct terminal capacity remains occupied until asynchronous durable release succeeds', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, { releaseSession: () => gate });
+  const report = f.call('leaf', { action: 'report', requestId: 'async-release', status: 'completed', summary: 'Evidence saved' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.service().isCompleted('token-leaf'), false);
+  assert.equal(f.notifications.length, 0);
+  assert.equal(f.disk.readAll()[0].capacityReleasePending, true);
+  release(); await report;
+  assert.equal(f.service().isCompleted('token-leaf'), true);
+  assert.equal(f.notifications.length, 1);
+});
+
+test('failed durable release retries after restart without claiming a freed slot or waking prematurely', async t => {
+  let refused = true, attempts = 0;
+  const f = fixture(t, { releaseSession: async () => { attempts++; if (refused) throw new Error('synthetic lease write failure'); } });
+  await assert.rejects(f.call('leaf', { action: 'report', requestId: 'retry-release', status: 'completed', summary: 'Evidence saved' }), /lease write/);
+  assert.equal(f.service().isCompleted('token-leaf'), false);
+  assert.equal(f.notifications.length, 0);
+  f.restart(); refused = false;
+  await f.service().tick();
+  assert.equal(attempts, 2);
+  assert.equal(f.service().isCompleted('token-leaf'), true);
+  assert.equal(f.notifications.length, 1);
+});
+
+test('resume intent survives rejected admission and is invisible until its lease is actually reacquired', async t => {
+  let refused = true, attempts = 0;
+  const f = fixture(t, { activateSession: async () => { attempts++; if (refused) throw new ResearchSessionError(409, 'research-session-concurrency-limit'); } });
+  await f.call('leaf', { action: 'report', requestId: 'initial-report', status: 'completed', summary: 'Evidence saved' });
+  const body = { action: 'send', to: 'leaf', kind: 'request', requestId: 'resume-request', summary: 'Continue the scoped supplement' };
+  await assert.rejects(f.call('branch', body), /concurrency-limit/);
+  assert.equal(f.service().isCompleted('token-leaf'), true);
+  assert.equal((await f.call('leaf', { action: 'pending' })).messages.length, 0);
+  assert.equal(f.notifications.filter(row => row[0] === 'leaf').length, 0);
+  f.restart(); await f.service().tick();
+  assert.equal(f.notifications.filter(row => row[0] === 'leaf').length, 0);
+  refused = false;
+  await f.call('branch', body);
+  assert.equal(attempts, 2);
+  assert.equal(f.service().isCompleted('token-leaf'), false);
+  assert.equal(f.notifications.filter(row => row[0] === 'leaf').length, 1);
+  await f.call('branch', body);
+  assert.equal(attempts, 2, 'same accepted request does not reacquire twice');
+});
+
+test('retained identity can archive a detached child result but cannot authorize old commands', async t => {
+  let detached = false, retainedChecks = 0, f;
+  const checked = ({ sessionId }) => {
+    const parent = f.rows.find(row => row.id === sessionId);
+    if (!parent) throw new Error('unavailable');
+    return { parent, ...parent.scope };
+  };
+  f = fixture(t, {
+    authorize: async input => { if (detached) throw new ResearchSessionError(404, 'research-session-parent-not-joined'); return checked(input); },
+    authorizeRetainedReport: async input => { retainedChecks++; return checked(input); },
+    beforeResume: async () => { if (detached) throw new ResearchSessionError(409, 'research-collaboration-detached'); },
+  });
+  detached = true;
+  await f.call('leaf', { action: 'report', requestId: 'old-result', status: 'completed', summary: 'Original in-flight evidence' });
+  assert.equal(f.service().isCompleted('token-leaf'), true);
+  assert.ok(retainedChecks >= 2);
+  const reportChecks = retainedChecks;
+  await assert.rejects(f.call('branch', { action: 'send', requestId: 'old-command', to: 'leaf', kind: 'decision', summary: 'Start more work' }), /not-joined/);
+  await assert.rejects(f.call('leaf', { ...request, requestId: 'old-request' }), /not-joined/);
+  assert.equal(retainedChecks, reportChecks);
+  assert.equal(f.disk.readAll().length, 1);
+});
+
+test('a removed parent retains child evidence without being awakened, including outbox and request retries', async t => {
+  let f, releaseDenied = true;
+  const checked = ({ sessionId }) => {
+    const parent = f.rows.find(row => row.id === sessionId);
+    if (!parent) throw new Error('unavailable');
+    return { parent, ...parent.scope };
+  };
+  f = fixture(t, {
+    authorize: async input => {
+      if (input.sessionId === 'branch') throw new ResearchSessionError(404, 'research-session-parent-not-joined');
+      return checked(input);
+    },
+    authorizeRetainedReport: async input => checked(input),
+    releaseSession: async () => { if (releaseDenied) throw new Error('synthetic lease unavailable'); },
+  });
+  const report = { action: 'report', requestId: 'detached-parent-result', status: 'completed', summary: 'Original evidence remains archived' };
+  await assert.rejects(f.call('leaf', report), /lease unavailable/);
+  assert.equal(f.disk.readAll().length, 1);
+  assert.equal(f.service().isCompleted('token-leaf'), false);
+  assert.equal(f.notifications.length, 0);
+  releaseDenied = false; f.restart();
+  await f.service().tick();
+  assert.equal(f.service().isCompleted('token-leaf'), true, 'exact-token release repairs independently of removed parent membership');
+  assert.equal(f.notifications.length, 0);
+  await f.call('leaf', report);
+  f.advance(); await f.service().tick();
+  assert.equal(f.disk.readAll().length, 1);
+  assert.equal(f.notifications.length, 0, 'neither replay nor outbox retry wakes the removed parent');
+});
+
+test('settled assignments reject new parent commands before intent persistence, notification, or reactivation', async t => {
+  let settled = false, activations = 0;
+  const f = fixture(t, { isAssignmentCompleted: token => settled && token === 'token-leaf', activateSession: async () => { activations++; } });
+  const question = await f.call('leaf', { ...request, requestId: 'before-settlement' });
+  await f.call('leaf', { action: 'report', requestId: 'settled-result', status: 'completed', summary: 'Immutable assignment evidence' });
+  settled = true;
+  const saved = f.disk.readAll(), notifications = f.notifications.length;
+  for (const kind of ['request', 'decision']) await assert.rejects(f.call('branch', {
+    action: 'send', to: 'leaf', kind, requestId: `settled-${kind}`, summary: 'Attempted supplementary work',
+  }), /research-communication-assignment-settled/);
+  await assert.rejects(f.call('branch', { action: 'reply', requestId: 'settled-reply', messageId: question.message.id, summary: 'Attempted supplementary work' }), /research-communication-assignment-settled/);
+  assert.deepEqual(f.disk.readAll(), saved);
+  assert.equal(f.notifications.length, notifications);
+  assert.equal(activations, 0);
+  assert.equal(f.service().isCompleted('token-leaf'), true);
+});
+
+test('persisted legacy assignment resume commands are retained but cannot wake or enter an actionable inbox', async t => {
+  let settled = false;
+  const f = fixture(t, { isAssignmentCompleted: token => settled && token === 'token-leaf' });
+  await f.call('leaf', { action: 'report', requestId: 'original-result', status: 'completed', summary: 'Original assignment evidence' });
+  f.rows[2].status = 'ended';
+  const command = await f.call('branch', { action: 'send', requestId: 'legacy-resume', to: 'leaf', kind: 'request', summary: 'Legacy accepted supplementary work' });
+  assert.ok(f.disk.readAll().find(row => row.id === command.message.id)?.resumeAppliedAt);
+  settled = true; f.rows[2].status = 'idle';
+  f.restart(); f.advance(); await f.service().tick();
+  assert.equal(f.notifications.filter(row => row[0] === 'leaf').length, 0);
+  const pending = await f.call('leaf', { action: 'pending' });
+  assert.equal(pending.messages.length, 0, 'the recovery hook cannot turn an obsolete outbox command into a new model turn');
+  assert.equal(pending.retirement.supervisorRequests.length, 0);
+  assert.ok(f.disk.readAll().some(row => row.id === command.message.id), 'historical command is retained, not rewritten as executed');
+});

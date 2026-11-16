@@ -49,6 +49,8 @@ export interface ResearchSessionProvenance {
   spawnToken: string;
   requestId?: string;
   rootSessionId?: string;
+  /** Immutable dispatch tenure; a later main change never reparents this child. */
+  tenureId?: string;
   depth?: number;
   tasks?: ResearchDispatchTask[];
   /** Narrowing inherited by every descendant; absence never clears a parent constraint. */
@@ -80,9 +82,10 @@ export function isResearchSessionProvenance(value: unknown): value is ResearchSe
     (row.readOnly === undefined || row.readOnly === true) &&
     (row.requestId === undefined || TOKEN.test(row.requestId)) &&
     (row.rootSessionId === undefined || ID.test(row.rootSessionId)) &&
+    (row.tenureId === undefined || ID.test(row.tenureId)) &&
     (row.depth === undefined || (Number.isSafeInteger(row.depth) && row.depth >= 1 && row.depth <= 3)) &&
     (row.dispatchId === undefined || ID.test(row.dispatchId)) && (row.taskId === undefined || ID.test(row.taskId)) &&
-    (row.tasks === undefined || (Array.isArray(row.tasks) && row.tasks.length >= 2 && row.tasks.length <= 12 && row.tasks.every(task =>
+    (row.tasks === undefined || (Array.isArray(row.tasks) && row.tasks.length >= 1 && row.tasks.length <= 64 && row.tasks.every(task =>
       object(task) && ID.test(task.id ?? "") && ROLE.test(task.role ?? "") && text(task.task, 4000) && RESEARCH_SESSION_STAGES.includes(task.stage) &&
       (task.dependsOn === undefined || (Array.isArray(task.dependsOn) && task.dependsOn.length <= 12 && task.dependsOn.every(id => typeof id === "string" && ID.test(id)))))));
 }
@@ -97,6 +100,7 @@ export function normalizeResearchSessionProvenance(value: unknown): ResearchSess
     ...(value.readOnly === true ? { readOnly: true as const } : {}),
     ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
     ...(value.rootSessionId === undefined ? {} : { rootSessionId: value.rootSessionId }),
+    ...(value.tenureId === undefined ? {} : { tenureId: value.tenureId }),
     ...(value.depth === undefined ? {} : { depth: value.depth }),
     ...(value.dispatchId === undefined ? {} : { dispatchId: value.dispatchId }),
     ...(value.taskId === undefined ? {} : { taskId: value.taskId }),
@@ -223,6 +227,6 @@ export function buildResearchSessionInitialPrompt(provenance: ResearchSessionPro
   if (promptBytes(complete) < RESEARCH_SESSION_INITIAL_PROMPT_BYTES) return complete;
   const notice = '\n[Task brief truncated to fit the startup budget. The complete original task is preserved in the verified session record. Before ANY execution, call research_dispatch action="status", view="detail", taskId="self", offset=0 and read every task page. Apply all original goals and constraints; do not infer that omitted text grants permission.]';
   const available = RESEARCH_SESSION_INITIAL_PROMPT_BYTES - 1 - promptBytes(prefix + notice + '\n' + suffix);
-  if (available < 0) fail(400, 'research-session-prompt-metadata-too-large');
+  if (available < 0) throw new Error('research-session-prompt-metadata-too-large');
   return prefix + promptPrefix(task, available) + notice + '\n' + suffix;
 }

@@ -158,6 +158,32 @@ describe('native research_session tool', () => {
     assert.equal((await first).details.status, 'spawned');
   });
 
+  it('explains that refused direct capacity is not queued and preserves a stable retry reference', async () => {
+    const calls = [];
+    const tool = captureTool({
+      readContext: async () => ({ sessionId: 'parent-1', charterHash: CHARTER }),
+      resolveAuth: async () => ({ baseUrl: 'http://127.0.0.1:8000', token: 'secret-token' }),
+      requestId: () => 'generated-capacity-reference',
+      fetchImpl: async (_url, input) => { calls.push(JSON.parse(input.body)); return response({ code: 'research-session-concurrency-limit' }, false, 409); },
+    });
+    const result = await tool.execute('call', { role: 'literature', task: 'Preserve this task', stage: '1-idea' }, undefined, undefined, context());
+    assert.equal(result.details.queued, false);
+    assert.equal(result.details.requestId, 'generated-capacity-reference');
+    assert.deepEqual(result.details.retryWith, { tool: 'research_dispatch', action: 'plan' });
+    assert.match(result.details.hint, /NOT queued/);
+    assert.match(result.details.hint, /1-64 tasks/);
+    assert.match(result.details.hint, /real single task may use a one-task plan/);
+    assert.equal(tool.parameters.properties.tasks.minItems, 1);
+    assert.equal(tool.parameters.properties.tasks.maxItems, 64);
+    assert.equal(calls[0].task, 'Preserve this task');
+    assert.match(tool.description, /NOT queued/);
+    await tool.execute('retry', { role: 'literature', task: 'Preserve this task', stage: '1-idea', requestId: result.details.requestId }, undefined, undefined, context());
+    assert.equal(calls[1].requestId, calls[0].requestId);
+    const invalid = await tool.execute('invalid', { role: 'literature', task: 'Task', stage: '1-idea', requestId: 'bad/path' }, undefined, undefined, context());
+    assert.equal(invalid.details.error, 'research-session-request-id-invalid');
+    assert.equal(calls.length, 2);
+  });
+
   it('honors caller cancellation and bounds the response body', async () => {
     const cancelled = captureTool({
       readContext: async () => ({ sessionId: 'parent-1', charterHash: CHARTER }),
@@ -369,6 +395,23 @@ describe('research-session backend', () => {
     assert.equal((await f.service.create(request({ body: { requestId: 'registered-two' } }))).status, 'spawned');
     await assert.rejects(f.service.create(request({ body: { requestId: 'registered-three' } })), error => error.code === 'research-session-concurrency-limit');
     assert.equal(rows.length, 2);
+  });
+
+  it('counts legacy live children without tokens before any spawn preparation', async () => {
+    const mixed = serviceFixture({ sessions: [
+      { id: 'legacy-child', status: 'active', researchSession: { parentSessionId: 'parent-1' } },
+      { id: 'known-child', status: 'active', researchSession: { parentSessionId: 'parent-1', spawnToken: 'known-token' } },
+    ], deps: { maxPerParent: 2 } });
+    await assert.rejects(mixed.service.create(request()), error => error.code === 'research-session-concurrency-limit');
+    assert.deepEqual(mixed.calls.prepare, []);
+    assert.deepEqual(mixed.calls.spawn, []);
+
+    const global = serviceFixture({ sessions: [
+      { id: 'other-legacy', status: 'active', researchSession: { parentSessionId: 'other-parent' } },
+    ], deps: { maxTotal: 1 } });
+    await assert.rejects(global.service.create(request()), error => error.code === 'research-session-capacity-limit');
+    assert.deepEqual(global.calls.prepare, []);
+    assert.deepEqual(global.calls.spawn, []);
   });
 
   it('replays a stable request without launching a duplicate and rejects a changed payload', async () => {

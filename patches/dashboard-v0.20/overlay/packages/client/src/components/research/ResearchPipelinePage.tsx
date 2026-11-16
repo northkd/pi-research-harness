@@ -26,6 +26,7 @@ import { ScienceInstances } from "./ScienceInstances.js";
 import { ResearchStartGuide } from "./ResearchStartGuide.js";
 import { executionRoleName, ResearchExecutionPanels, type ResearchExecutionPanelsHandle } from "./ResearchExecutionPanels.js";
 import { ResearchMainAgentControls, useResearchMainAgent } from "./ResearchMainAgentControls.js";
+import { useResearchCollaboration } from "./use-research-collaboration.js";
 import { ResearchAccessControls } from "./ResearchAccessControls.js";
 import { ResearchClaimPanels } from "./ResearchClaimPanels.js";
 import { ResearchOverviewAndBudget, STAGES } from "./ResearchOverviewAndBudget.js";
@@ -84,9 +85,10 @@ export function ResearchPipelinePage({
 }) {
   const { t } = useI18n(), apiBase = useApiBase();
   const splitWorkspace = useOptionalSplitWorkspace();
-  const mainAgent = useResearchMainAgent({ cwd, activeSessionId, visible, connectionGeneration, refreshSignal });
   const stageLauncher = useRef<ResearchExecutionPanelsHandle>(null);
   const { snapshot, adoption, adopted, loading, refreshing, error, checkedAt, refresh, workbench, observationStatus, observationError } = useResearchLoopLive({ cwd, refreshSignal, connectionGeneration, resyncWatch });
+  const collaboration = useResearchCollaboration({ cwd, visible, connectionGeneration, refreshSignal, onChanged: refresh });
+  const mainAgent = useResearchMainAgent({ cwd, activeSessionId, visible, connectionGeneration, refreshSignal, collaboration });
   const projection = useMemo(() => projectResearch(snapshot ?? EMPTY, workbench), [snapshot, workbench]);
   const state = snapshot?.state, attempts = snapshot?.attempts ?? [], claims = state?.claims ?? [];
   const objective = state?.charter?.objective?.trim() || null;
@@ -422,7 +424,7 @@ export function ResearchPipelinePage({
       <div className={surface === "legacy" ? "contents" : "research-workspace-layout"}>
       <div className={surface === "legacy" ? "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-5" : "research-workspace-main"}>
         <div className="research-execution-controls">
-          <ResearchMainAgentControls key={mainAgent.scope} controller={mainAgent} cwd={cwd} visible={visible} connectionGeneration={connectionGeneration} refreshSignal={refreshSignal} onRebound={refresh} />
+          <ResearchMainAgentControls key={mainAgent.scope} controller={mainAgent} cwd={cwd} visible={visible} connectionGeneration={connectionGeneration} refreshSignal={refreshSignal} onRebound={refresh} expandCharter={surface === "workbench"} />
           <ResearchAccessControls cwd={cwd} connectionGeneration={connectionGeneration} />
         </div>
         {surface === "workbench" && !adopted && <div className="research-intake-hint"><div><strong>接入已有研究资料</strong><p>选择目录资料与历史会话，核对来源后确认接入。</p></div><button type="button" className="research-workspace-action" onClick={openIntake}>开始接入</button></div>}
@@ -440,6 +442,7 @@ export function ResearchPipelinePage({
               stale={observationStale}
               activeSessionId={activeSessionId}
               mainAgentId={mainAgent.selectedId}
+              collaboration={collaboration}
               onAgent={(role, execution) => setSelection({ scope, role, execution, stage: surface === "agents" ? null : selectedStage })}
             />
           </div>
@@ -460,6 +463,7 @@ export function ResearchPipelinePage({
               stale={observationStale}
               activeSessionId={activeSessionId}
               mainAgentId={mainAgent.selectedId}
+              collaboration={collaboration}
               onAgent={(role, execution) => setSelection({ scope, role, execution, stage: selectedStage })}
             />
           </div>

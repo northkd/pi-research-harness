@@ -75,17 +75,24 @@ export function createResearchCommunicationService(deps) {
     delivered: !!row.deliveredAt, processed: !!row.processedAt, resolved: !!row.resolvedBy,
     notificationId: row.notificationId, processExitVerified: false });
 
+  async function authorize(input, retainedReport = false) {
+    try { return await deps.authorize(input); }
+    catch (error) {
+      if (!retainedReport || !deps.authorizeRetainedReport) throw error;
+      return deps.authorizeRetainedReport(input);
+    }
+  }
   async function actor(input) {
     assertOpen();
     if (!input.body || !ID.test(input.body.sessionId ?? '')) fail(400, 'session-invalid');
-    const checked = await deps.authorize({ sessionId: input.body.sessionId, principal: input.principal, expiresAt: input.expiresAt });
+    const checked = await authorize({ sessionId: input.body.sessionId, principal: input.principal, expiresAt: input.expiresAt }, input.body.action === 'report');
     assertOpen(); return checked;
   }
-  async function receiver(input, verified, target) {
+  async function receiver(input, verified, target, retainedReport = false) {
     const other = deps.getSession(target);
     if (!other) fail(404, 'recipient-not-found');
     let checked;
-    try { checked = await deps.authorize({ sessionId: target, principal: input.principal, expiresAt: input.expiresAt }); }
+    try { checked = await authorize({ sessionId: target, principal: input.principal, expiresAt: input.expiresAt }, retainedReport); }
     catch { fail(404, 'recipient-not-found'); }
     assertOpen();
     if (!sameScope(checked, verified)) fail(409, 'scope-mismatch');
@@ -114,12 +121,41 @@ export function createResearchCommunicationService(deps) {
         && ![...messages.values()].some(row => row.spawnToken === p.spawnToken && TERMINAL.has(row.status) && !row.resumedBy);
     }) || deps.childrenPending?.(verified.parent.id) === true;
   }
+  async function settleResultRelease(saved) {
+    if (saved.kind !== 'result' || saved.capacityReleased !== true || saved.resumedBy || saved.capacityReleaseAppliedAt) return saved;
+    await deps.releaseSession?.(saved.spawnToken);
+    assertOpen();
+    return persist({ ...saved, capacityReleasePending: false, capacityReleaseAppliedAt: now().toISOString() });
+  }
+  const settledAssignmentCommand = (message, recipient) => {
+    const p = researchProvenanceOf(recipient);
+    return ['request', 'reply', 'decision'].includes(message.kind) && p?.parentSessionId === message.from
+      && !!p.spawnToken && deps.isAssignmentCompleted?.(p.spawnToken) === true;
+  };
+  async function allowDownwardMessage(verified, checked, kind) {
+    if (['request', 'reply', 'decision'].includes(kind) && researchProvenanceOf(checked.parent)?.parentSessionId === verified.parent.id) {
+      // A dispatcher receipt settles one immutable assignment, not a reusable
+      // worker lease. There is no task-reopening protocol: supplementary work
+      // needs a new task/plan identity. Direct, unassigned sessions may resume.
+      if (settledAssignmentCommand({ kind, from: verified.parent.id }, checked.parent)) fail(409, 'assignment-settled');
+      await deps.beforeResume?.({ parent: verified.parent, verified, child: checked.parent, childVerified: checked });
+      assertOpen();
+    }
+  }
   async function deliver() {
-    if (disposed || !deps.notifyParent) return;
-    for (const saved of messages.values()) {
+    if (disposed) return;
+    for (let saved of messages.values()) {
       if (disposed) return;
+      // Releasing an already authenticated exact-token result is cleanup, not
+      // renewed participation. Repair it even if the former parent was removed
+      // or no notification transport is available.
+      try { saved = await settleResultRelease(saved); } catch { continue; }
+      if (!deps.notifyParent) continue;
       // Checkpoints stay durable for status views without starting a model turn.
       if (saved.kind === 'progress' || saved.kind === 'result' && saved.status === 'partial' || saved.assignmentReported === true) continue;
+      // A durable resume intent is not permission to deliver before capacity
+      // admission succeeds. A retry with the same requestId repairs this intent.
+      if (saved.resumes?.length && !saved.resumeAppliedAt) continue;
       if (saved.deliveredAt || saved.processedAt || saved.resolvedBy) continue;
       if (saved.lastSentAt && now().getTime() - Date.parse(saved.lastSentAt) < 30_000) continue;
       const source = deps.getSession(saved.from), target = deps.getSession(saved.to);
@@ -127,9 +163,12 @@ export function createResearchCommunicationService(deps) {
       try {
         if (source) {
           const principal = deps.principalForSession?.(source) ?? source.principalOwner ?? null;
-          const verified = await deps.authorize({ sessionId: source.id, principal, expiresAt: null });
+          const verified = await authorize({ sessionId: source.id, principal, expiresAt: null }, saved.kind === 'result');
           if (!sameScope(saved, verified)) continue;
-          await receiver({ principal }, verified, target.id);
+          // Retained identity authorizes result archival only. Never wake a
+          // removed recipient that can no longer read its normal inbox.
+          const checked = await receiver({ principal }, verified, target.id);
+          await allowDownwardMessage(verified, checked, saved.kind);
         } else {
           // A private persisted child-to-parent receipt retains its verified
           // author edge after archival; it cannot revive a parent-to-child command.
@@ -149,7 +188,7 @@ export function createResearchCommunicationService(deps) {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
     const start = cursor ? all.findIndex(row => row.id === cursor) : -1;
     if (cursor && start < 0) fail(400, 'cursor-invalid');
-    const rows = all.slice(start + 1).filter(row => !row.resolvedBy && (row.kind === 'request' || !row.processedAt)
+    const rows = all.slice(start + 1).filter(row => !settledAssignmentCommand(row, verified.parent) && !(row.resumes?.length && !row.resumeAppliedAt) && !row.resolvedBy && (row.kind === 'request' || !row.processedAt)
       && (includeUpdates || row.kind !== 'progress' && !(row.kind === 'result' && row.status === 'partial') && row.assignmentReported !== true));
     const result = { status: 'ok', tool: 'research_communication', sessionId: verified.parent.id, messages: [], more: false,
       retirement: { complete: true, sessionId: verified.parent.id, pid: verified.parent.pid,
@@ -159,7 +198,7 @@ export function createResearchCommunicationService(deps) {
           const p = researchProvenanceOf(child);
           return p?.parentSessionId === verified.parent.id && p.charterHash === verified.charterHash && p.adoptionId === verified.adoptionId && (!ENDED.has(child.status) || child.dataUnavailable);
         }).map(child => ({ id: child.id, status: child.status })),
-        supervisorRequests: [...messages.values()].filter(row => sameScope(row, verified) && row.kind === 'request' && !row.resolvedBy
+        supervisorRequests: [...messages.values()].filter(row => sameScope(row, verified) && row.kind === 'request' && !row.resolvedBy && !settledAssignmentCommand(row, deps.getSession(row.to))
           && (row.from === verified.parent.id || row.to === verified.parent.id)).map(row => row.id) } };
     if (result.retirement.formalChildren.length > 16 || result.retirement.supervisorRequests.length > 16) {
       result.retirement.complete = false;
@@ -201,11 +240,12 @@ export function createResearchCommunicationService(deps) {
     if (body.action === 'report' && body.to !== undefined && body.to !== 'parent' && body.to !== p.parentSessionId) fail(403, 'report-parent-required');
     const target = original?.from ?? (body.to && body.to !== 'parent' ? body.to : p?.parentSessionId);
     if (!target) fail(400, 'parent-required');
-    await receiver(input, verified, target);
+    const checked = await receiver(input, verified, target, body.action === 'report');
     const kind = body.action === 'report' ? 'result' : body.action === 'reply' ? 'reply' : body.kind ?? 'progress';
     if (!['progress', 'request', 'decision', 'reply', 'result'].includes(kind)
         || body.action === 'send' && ['reply', 'result'].includes(kind)) fail(400, 'kind-invalid');
     if (body.action === 'report' && !['completed', 'partial', 'blocked', 'failed'].includes(body.status)) fail(400, 'report-invalid');
+    await allowDownwardMessage(verified, checked, kind);
     const fingerprint = hash(JSON.stringify([scopeOf(verified), verified.parent.id, target, kind, body.summary, evidence, body.status ?? null, original?.id ?? null]));
     const id = 'message-' + hash(JSON.stringify([scopeOf(verified), verified.parent.id, body.requestId])).slice(0, 48);
     let existing = messages.get(id);
@@ -223,26 +263,28 @@ export function createResearchCommunicationService(deps) {
       await deps.reportAssignment({ ...input, body: { sessionId: verified.parent.id, action: 'report', status: body.status, summary: body.summary, evidence } });
       assertOpen();
     }
-    const resumes = (kind === 'reply' || kind === 'decision') && researchProvenanceOf(deps.getSession(target))?.parentSessionId === verified.parent.id
+    const resumes = ['request', 'reply', 'decision'].includes(kind) && researchProvenanceOf(checked.parent)?.parentSessionId === verified.parent.id
       ? [...messages.values()].filter(row => row.from === target && row.kind === 'result' && !row.resumedBy).map(row => row.id) : [];
+    const releasesCapacity = kind === 'result' && TERMINAL.has(body.status) && !childrenRunning(verified);
     let saved = existing ?? persist({ schema: SCHEMA, id, ...scopeOf(verified), from: verified.parent.id, to: target, senderParentId: p?.parentSessionId,
       kind, summary: body.summary, evidence, ...(body.status ? { status: body.status } : {}),
       ...(assignmentReported ? { assignmentReported: true } : {}),
-      ...(original ? { replyTo: original.id } : {}), ...(kind === 'result' ? { spawnToken: p.spawnToken, capacityReleased: TERMINAL.has(body.status) && !childrenRunning(verified) } : {}),
+      ...(original ? { replyTo: original.id } : {}), ...(kind === 'result' ? { spawnToken: p.spawnToken, capacityReleased: releasesCapacity, ...(releasesCapacity ? { capacityReleasePending: true } : {}) } : {}),
       ...(resumes.length ? { resumes } : {}),
       fingerprint, notificationId: 'research-message-' + id, createdAt: now().toISOString() });
     if (assignmentReported && saved.assignmentReported !== true) saved = persist({ ...saved, assignmentReported: true });
-    if (original && !original.resolvedBy) persist({ ...original, resolvedBy: id, processedAt: now().toISOString() });
     if (saved.resumes?.length && !saved.resumeAppliedAt) {
+      const token = researchProvenanceOf(checked.parent)?.spawnToken;
+      if (token && saved.resumes.some(reportId => messages.get(reportId)?.capacityReleased === true)) await deps.activateSession?.(token);
+      assertOpen();
       for (const reportId of saved.resumes) {
         const record = messages.get(reportId);
         if (record && !record.resumedBy) persist({ ...record, resumedBy: saved.id });
       }
-      const token = researchProvenanceOf(deps.getSession(target))?.spawnToken;
-      if (token && ![...messages.values()].some(row => row.spawnToken === token && TERMINAL.has(row.status) && !row.resumedBy)) deps.activateSession?.(token);
-      persist({ ...messages.get(saved.id), resumeAppliedAt: now().toISOString() });
+      saved = persist({ ...messages.get(saved.id), resumeAppliedAt: now().toISOString() });
     }
-    if (kind === 'result' && saved.capacityReleased === true && !saved.resumedBy) deps.releaseSession?.(p.spawnToken);
+    if (original && !original.resolvedBy) persist({ ...original, resolvedBy: id, processedAt: now().toISOString() });
+    saved = await settleResultRelease(saved);
     await deliver();
     return { status: 'ok', tool: 'research_communication', message: projection(messages.get(saved.id)), persisted: true,
       ...(kind === 'result' ? { reportReceipt: { id: saved.id, sessionId: saved.from, parentSessionId: saved.to,
@@ -254,7 +296,7 @@ export function createResearchCommunicationService(deps) {
       const saved = [...messages.values()].find(row => row.to === sessionId && row.notificationId === promptId);
       if (saved && !saved.deliveredAt) persist({ ...saved, deliveredAt: now().toISOString() });
     }),
-    isCompleted: token => [...messages.values()].some(row => row.kind === 'result' && row.spawnToken === token && row.capacityReleased === true && !row.resumedBy),
+    isCompleted: token => [...messages.values()].some(row => row.kind === 'result' && row.spawnToken === token && row.capacityReleased === true && row.capacityReleasePending !== true && !row.resumedBy),
     dispose: () => { disposed = true; },
   };
 }

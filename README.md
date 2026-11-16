@@ -167,6 +167,11 @@ Pi 负责实际会话与工具执行；本仓库负责科研集成、配置、�
 有可靠父记录的会话显示“Agent 派生”；缺少历史证据的会话显示“来源未记录”。
 总览默认 `100%`，手动缩放与显式“适应画布”继续保留。
 
+当前主 Agent 与历史任期现在由服务端分别保存；历史卡片保留当时的模型和派发来源，不随新主切换重画父子关系。
+“协作网络”计数旁可实时调整 Multi / Sub 并发数；当前画布下的持久候补队列支持拖动排序及“立即开始”。
+主 Agent 与 Multi 卡片可在“会话与下属角色”中移出 res-workflow，按真实任期子树级联，保留对话、文件及已运行任务。
+规则、首次升级和验收边界见 [实时协作说明](docs/live-collaboration.md)。
+
 ### 已附带的角色模板
 
 | 角色 | 职责 |
@@ -509,6 +514,7 @@ TypeScript 仍有 61 条既有诊断，新增 0 条。
 
 - [0.20 开发、安装与服务器部署](docs/RELEASE-0.20.md)
 - [主 Agent、五阶段启动、访问权限与当前验证](docs/workflow-controls/implementation.md)
+- [当前／历史任期、拖动队列、实时并发与级联移出](docs/live-collaboration.md)
 - [目标版本绑定、旧工作流衔接与子代理模型保持](docs/charter-binding-models/README.md)
 - [会话总览 100%、创建来源与父 Agent](docs/session-origins/README.md)
 - [递归执行器、协作画布与旧授权模式历史记录](docs/autonomous-collaboration/implementation.md)

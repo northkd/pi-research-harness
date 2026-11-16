@@ -32,13 +32,29 @@ test('large valid multilingual receipts stay bounded without hiding failure coun
 
 test('mutation acknowledgements do not echo task specifications or accumulated receipts', () => {
   const snapshot = largeSnapshot();
-  for (const action of ['delegate', 'plan', 'report', 'atomic', 'cancel']) {
+  for (const action of ['delegate', 'plan', 'report', 'atomic', 'cancel', 'pause', 'resume']) {
     const projected = projectDispatchContext(snapshot, { action });
     assert.ok(dispatchContextBytes(projected) <= DISPATCH_CONTEXT_BYTES);
     assert.equal(projected.plans.flatMap(plan => plan.tasks).length, 0);
     assert.equal(projected.counts.failed, 1);
     assert.ok(!JSON.stringify(projected).includes(snapshot.plans[0].tasks[0].summary));
   }
+});
+
+test('compact live-queue history preserves main pause state and omitted historical outcomes together', () => {
+  const snapshot = { status: 'ok', childrenPending: true, planHistory: {
+    total: 9, shown: 1, counts: { total: 36, completed: 28, failed: 3, blocked: 1, active: 1, queued: 3 },
+  }, plans: [{ id: 'current-plan', status: 'running', schedulingPaused: true, tasks: [
+    { id: 'active', status: 'running' },
+    { id: 'next', status: 'queued' },
+  ] }] };
+  const projected = projectDispatchContext(snapshot);
+  assert.equal(projected.childrenPending, true);
+  assert.equal(projected.plans[0].schedulingPaused, true);
+  assert.equal(projected.counts.queued, 1);
+  assert.deepEqual(projected.planHistory, snapshot.planHistory);
+  assert.match(projected.hint, /Old plan bodies are omitted/);
+  assert.ok(dispatchContextBytes(projected) <= DISPATCH_CONTEXT_BYTES);
 });
 
 test('detail pages reconstruct complete evidence with Unicode and escaped code units', () => {

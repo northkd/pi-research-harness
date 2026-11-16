@@ -1,4 +1,4 @@
-import type { createResearchSessionService, UnregisteredResearchSession } from './research-session-service.mjs';
+import type { createResearchSessionService, UnregisteredResearchSession, ResearchSchedulingContext, ResearchSchedulingPolicy } from './research-session-service.mjs';
 import type { ResearchDispatchTask, ResearchSessionStage } from '@blackbelt-technology/pi-dashboard-shared/research-session.js';
 type Sessions = ReturnType<typeof createResearchSessionService>;
 export type ResearchDispatchPlanMode = 'tasks' | 'delegate';
@@ -29,6 +29,9 @@ export interface ResearchDispatchTaskState extends ResearchDispatchTask {
   finishedAt?: string;
   reportedAt?: string;
   processUnconfirmed?: boolean;
+  waitingReason?: string;
+  queueRank?: number;
+  taskTruncated?: boolean;
 }
 export interface ResearchDispatchPlan {
   id: string;
@@ -36,9 +39,13 @@ export interface ResearchDispatchPlan {
   mode: ResearchDispatchPlanMode;
   parentSessionId: string;
   rootSessionId: string;
+  tenureId?: string;
+  revision: number;
   status: 'running' | ResearchDispatchTerminalStatus;
   concurrency: number;
   schedulingPaused?: boolean;
+  requestedConcurrency?: number;
+  suspendedReason?: string;
   readOnly?: true;
   error?: string;
   tasks: ResearchDispatchTaskState[];
@@ -50,6 +57,7 @@ export interface ResearchDispatchSnapshot {
   tool: 'research_dispatch';
   sessionId: string;
   plans: ResearchDispatchPlan[];
+  planHistory?: { total: number; shown: number; counts: { total: number; completed: number; failed: number; blocked: number; active: number; queued: number } };
   atomicReason: string | null;
   collaborator: boolean;
   brief: ResearchDispatchBrief | null;
@@ -57,7 +65,9 @@ export interface ResearchDispatchSnapshot {
   declaredTasks: number;
   decisionRequired: boolean;
   childrenPending: boolean;
+  startResult?: { planId: string; taskId: string; status: ResearchDispatchTaskState['status']; waitingReason?: string; error?: string };
 }
+export interface ResearchQueueRequest { sessionId: string; action: 'snapshot' | 'reorder' | 'start'; planId?: string; taskId?: string; taskIds?: string[]; expectedRevision?: number }
 export const RESEARCH_DISPATCH_LIMITS: Readonly<{ maxTasks: number; maxConcurrency: number; maxPlans: number; maxPlanBytes: number; registrationGraceMs: number; receiptRetryMs: number }>;
 export function createResearchDispatchStore(directory: string): { readAll(): any[]; write(row: any): void };
 export function createResearchDispatchService(deps: {
@@ -69,12 +79,17 @@ export function createResearchDispatchService(deps: {
   releaseSession?: Sessions['release'];
   principalForSession?(session: any): { iss: string; sub: string } | null;
   beforeLaunch?(input: { parent: any; verified: { cwd: string; charterHash: string; adoptionId: string; ownerKey?: string }; planId: string }): void | Promise<void>;
+  getSchedulingPolicy?(input: ResearchSchedulingContext): ResearchSchedulingPolicy | Promise<ResearchSchedulingPolicy>;
+  assertDispatchAllowed?(input: ResearchSchedulingContext): void | Promise<void>;
   notifyParent?(sessionId: string, text: string, promptId: string): boolean | Promise<boolean>;
   now?(): Date;
   registrationGraceMs?: number;
   maxRootTasks?: number;
 }): {
   handle(input: { body: unknown; principal?: { iss: string; sub: string } | null; expiresAt?: number | null }): Promise<ResearchDispatchSnapshot>;
+  manageQueue(input: { body: ResearchQueueRequest; principal?: { iss: string; sub: string } | null; expiresAt?: number | null }): Promise<ResearchDispatchSnapshot>;
+  listForScope(input: { cwd: string; ownerKey?: string }): ResearchDispatchPlan[];
+  suspendSessions(sessionIds: string[], reason?: string, tenureId?: string): Promise<void>;
   tick(): Promise<void>;
   acknowledgeReceipt(sessionId: string, promptId: string): Promise<void>;
   isCompleted(spawnToken: string): boolean;

@@ -63,6 +63,28 @@ test('native communication derives caller identity; tool parameters cannot imper
   await assert.rejects(client(ctx, { action: 'pending', sessionId: 'victim' }), /unknown-field/);
   await client(ctx, { action: 'pending' }); assert.equal(sent.sessionId, 'actual');
 });
+
+test('a settled assignment refusal clearly reports no start and directs a new supplementary task rather than a retry', async () => {
+  let requests = 0;
+  const client = createResearchCommunicationClient({ readContext: async () => ({ sessionId: 'actual' }),
+    resolveAuth: () => ({ baseUrl: 'http://127.0.0.1:8000', token: 'synthetic' }),
+    fetchImpl: async () => { requests++; return Response.json({ code: 'research-communication-assignment-settled' }, { status: 409 }); },
+  });
+  const f = toolFixture(client), tool = f.tools.get('research_communication');
+  const reply = await tool.execute('supplement', { action: 'send', to: 'child', kind: 'decision', requestId: 'refused-resume', summary: 'Supplement' }, undefined, undefined,
+    { sessionManager: { getSessionId: () => 'actual' } });
+  assert.equal(requests, 1);
+  assert.equal(reply.isError, true);
+  assert.equal(reply.details.error, 'research-communication-assignment-settled');
+  assert.equal(reply.details.started, false);
+  assert.equal(reply.details.retryable, false);
+  assert.equal(reply.details.nextAction, 'create-new-dispatch-task');
+  assert.match(reply.details.message, /未启动/);
+  assert.match(reply.details.message, /新的 planId \/ taskId/);
+  assert.match(reply.details.message, /不要重试恢复旧 assignment/);
+  assert.match(tool.promptGuidelines.join('\n'), /no work was started.*new supplementary dispatcher task.*do not retry resuming the old assignment/);
+  assert.equal(f.wakes.length, 0);
+});
 test('lead confirms initial plan once; authorized branch decomposition needs no repeated user confirmation', async () => {
   const tools = new Map(), calls = []; let confirmed = 0;
   const context = { sessionId: 'lead', charterHash: 'hash', adoptionId: 'adoption' };

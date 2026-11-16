@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { inferPlatform, pathKey } from "@blackbelt-technology/pi-dashboard-shared/session-group-path.js";
 import { useApiBase } from "../../lib/api/api-context.js";
 import { ResearchCharterBindingControls } from "./ResearchCharterBindingControls.js";
+import type { ResearchCollaborationController } from "./use-research-collaboration.js";
+import { randomUuid } from "@blackbelt-technology/dashboard-plugin-runtime";
 
 interface MainAgentSession {
   id: string;
@@ -11,22 +13,14 @@ interface MainAgentSession {
   status: "active" | "idle" | "streaming" | "ended";
 }
 
-type Preference = { key: string; id: string | null | undefined };
-const selectionEvent = "res-workflow-main-agent-change";
-function readPreference(key: string): Preference {
-  try {
-    const saved = window.localStorage.getItem(key);
-    return { key, id: saved === null ? undefined : saved || null };
-  } catch { return { key, id: undefined }; }
-}
-
 /** A workspace's chosen conversation is also the exact target of task submissions. */
-export function useResearchMainAgent({ cwd, activeSessionId, visible, connectionGeneration, refreshSignal }: {
+export function useResearchMainAgent({ cwd, visible, connectionGeneration, refreshSignal, collaboration }: {
   cwd: string;
   activeSessionId?: string;
   visible: boolean;
   connectionGeneration?: number;
   refreshSignal?: string;
+  collaboration: ResearchCollaborationController;
 }) {
   const apiBase = useApiBase();
   const platform = inferPlatform([cwd]);
@@ -34,26 +28,13 @@ export function useResearchMainAgent({ cwd, activeSessionId, visible, connection
   const scope = JSON.stringify([apiBase, requestedPath]);
   const [catalogue, setCatalogue] = useState<{ scope: string; canonicalCwd?: string; sessions: MainAgentSession[]; loaded: boolean; error: string | null }>({ scope, sessions: [], loaded: false, error: null });
   const current = catalogue.scope === scope ? catalogue : { canonicalCwd: undefined, sessions: [], loaded: false, error: null };
-  const key = `res_workflow_main_agent:${JSON.stringify([apiBase, current.canonicalCwd ?? requestedPath])}`;
-  const [preference, setPreference] = useState(() => readPreference(key));
-  const choice = preference.key === key ? preference : readPreference(key);
-  const select = (id: string | null) => {
-    setPreference({ key, id });
-    try { window.localStorage.setItem(key, id ?? ""); } catch { /* The mounted workspace still keeps the explicit choice. */ }
-    window.dispatchEvent(new CustomEvent(selectionEvent, { detail: { key, id } }));
+  const [selectionFailure, setSelectionFailure] = useState<{ scope: string; message: string } | null>(null);
+  const select = async (id: string | null) => {
+    if (!id || id === collaboration.snapshot?.currentMainSessionId) return;
+    setSelectionFailure(null);
+    try { await collaboration.mutate("select-main", { sessionId: id }); }
+    catch (error) { setSelectionFailure({ scope, message: error instanceof Error ? error.message : "主 Agent 切换未确认。" }); }
   };
-
-  useEffect(() => {
-    setPreference(readPreference(key));
-    const onStorage = (event: StorageEvent) => { if (event.key === key || event.key === null) setPreference(readPreference(key)); };
-    const onSelection = (event: Event) => {
-      const detail = (event as CustomEvent<Preference>).detail;
-      if (detail?.key === key && (typeof detail.id === "string" || detail.id === null)) setPreference(detail);
-    };
-    window.addEventListener("storage", onStorage);
-    window.addEventListener(selectionEvent, onSelection);
-    return () => { window.removeEventListener("storage", onStorage); window.removeEventListener(selectionEvent, onSelection); };
-  }, [key]);
 
   useEffect(() => {
     if (!visible) return;
@@ -95,39 +76,37 @@ export function useResearchMainAgent({ cwd, activeSessionId, visible, connection
     return () => { disposed = true; controller.abort(); window.clearInterval(interval); };
   }, [apiBase, cwd, scope, requestedPath, platform, visible, connectionGeneration, refreshSignal]);
 
-  const defaultSession = current.sessions.find(session => session.id === activeSessionId && session.status !== "ended");
-  const selectedId = choice.id === undefined ? defaultSession?.id ?? null : choice.id;
-  useEffect(() => {
-    // Capture the initial active conversation once, so opening a collaborator later cannot silently retarget a task.
-    if (choice.id === undefined && defaultSession && !current.error) {
-      const latest = readPreference(key);
-      if (latest.id !== undefined) setPreference(latest);
-      else select(defaultSession.id);
-    }
-  }, [key, choice.id, defaultSession?.id, current.error]);
-
-  return { scope, selectedId, session: current.sessions.find(session => session.id === selectedId), sessions: current.sessions, loading: !current.loaded, error: current.error, select };
+  // Never infer authority from the open tab or a browser preference. Changing
+  // leads creates a durable server tenure; navigation alone cannot rebind it.
+  const selectedId = collaboration.snapshot?.currentMainSessionId ?? null;
+  return { scope, selectedId, session: current.sessions.find(session => session.id === selectedId), sessions: current.sessions,
+    loading: !current.loaded || collaboration.loading, selecting: collaboration.busy,
+    error: current.error ?? (selectionFailure?.scope === scope ? selectionFailure.message : null) ?? collaboration.error,
+    select, collaboration };
 }
 
-export function ResearchMainAgentControls({ controller, cwd, visible, connectionGeneration, refreshSignal, onRebound }: {
+export function ResearchMainAgentControls({ controller, cwd, visible, connectionGeneration, refreshSignal, onRebound, expandCharter = false }: {
   controller: ReturnType<typeof useResearchMainAgent>;
   cwd: string;
   visible?: boolean;
   connectionGeneration?: number;
   refreshSignal?: string;
   onRebound?: () => void;
+  expandCharter?: boolean;
 }) {
-  const apiBase = useApiBase();
-  const { selectedId, session, sessions, loading, error, select } = controller;
+  const { selectedId, session, sessions, loading, selecting, error, select, collaboration } = controller;
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [feedback, setFeedback] = useState<{ error: boolean; message: string } | null>(null);
   const inFlight = useRef(false);
+  // Keep the idempotency key across a lost response. Retrying an unchanged
+  // draft must not send a second model turn to the same lead.
+  const delivery = useRef<{ sessionId: string; text: string; requestId: string } | null>(null);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { setFeedback(null); }, [selectedId]);
-  const canSend = Boolean(session && session.status !== "ended" && !error && !loading);
+  const canSend = Boolean(session && session.status !== "ended" && !error && !loading && !selecting && !collaboration.stale);
   const send = async () => {
     if (!canSend || !session || !draft.trim() || inFlight.current) return;
     const target = session;
@@ -135,20 +114,23 @@ export function ResearchMainAgentControls({ controller, cwd, visible, connection
     setSending(true);
     setFeedback(null);
     try {
-      const response = await fetch(`${apiBase}/api/session/${encodeURIComponent(target.id)}/prompt`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: `【研究主 Agent 任务】\n请负责拆解任务、分派适合独立执行的工作、核对交付结果并汇总结论。\n\n${draft.trim()}` }),
+      const text = `【研究主 Agent 任务】\n请负责拆解任务、分派适合独立执行的工作、核对交付结果并汇总结论。\n\n${draft.trim()}`;
+      if (delivery.current?.sessionId !== target.id || delivery.current.text !== text) {
+        delivery.current = { sessionId: target.id, text, requestId: randomUuid() };
+      }
+      const result = await collaboration.mutate("send-main-task", {
+        ...delivery.current,
       });
-      const receipt = await response.json().catch(() => ({}));
-      if (!response.ok || receipt.success !== true || receipt.transmitted !== true) {
-        throw new Error(receipt.error || `投递未确认${response.ok ? "，服务未返回传输回执" : `（HTTP ${response.status}）`}`);
+      const receipt = result?.promptReceipt;
+      if (!receipt || receipt.success !== true || receipt.transmitted !== true) {
+        throw new Error("投递未确认，服务未返回传输回执");
       }
       if (!mounted.current) return;
       setFeedback({ error: false, message: receipt.simulated === true
         ? `已完成向主 Agent「${target.name || target.id}」的模拟投递；未调用模型。`
-        : `已提交给主 Agent「${target.name || target.id}」，等待会话执行。${receipt.warning ? ` ${receipt.warning}` : ""}` });
+        : `已提交给主 Agent「${target.name || target.id}」，等待会话执行。` });
       setDraft("");
+      delivery.current = null;
     } catch (error) {
       if (mounted.current) setFeedback({ error: true, message: `提交失败：${error instanceof Error ? error.message : "请求异常"}。草稿已保留。` });
     } finally {
@@ -160,17 +142,17 @@ export function ResearchMainAgentControls({ controller, cwd, visible, connection
   return <section className="research-main-agent-controls" data-testid="research-main-agent-controls" aria-label="主 Agent">
     <div className="research-main-agent-row">
       <label className="research-main-agent-selector"><span>主 Agent</span>
-        <select data-testid="research-main-agent-select" aria-label="选择主 Agent" value={selectedId ?? ""} disabled={loading || sending} onChange={event => select(event.target.value || null)}>
-          <option value="">{loading ? "正在读取会话…" : "选择本项目的 Pi 会话"}</option>
+        <select data-testid="research-main-agent-select" aria-label="选择主 Agent" value={selectedId ?? ""} disabled={loading || sending || selecting || collaboration.stale} onChange={event => { void select(event.target.value || null); }}>
+          <option value="" disabled={Boolean(selectedId)}>{loading ? "正在读取会话…" : "选择本项目的 Pi 会话"}</option>
           {selectedId && !session && <option value={selectedId}>已选会话不可用 · {selectedId}</option>}
-          {sessions.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name || candidate.id}{candidate.status === "ended" ? " · 已结束" : candidate.status === "streaming" ? " · 执行中" : ""}</option>)}
+          {sessions.map(candidate => <option key={candidate.id} value={candidate.id} disabled={candidate.status === "ended" && candidate.id !== selectedId}>{candidate.name || candidate.id}{candidate.status === "ended" ? " · 已结束" : candidate.status === "streaming" ? " · 执行中" : ""}</option>)}
         </select>
       </label>
       {selectedId && <a data-testid="research-main-agent-open" className="research-workspace-action" href={`/session/${encodeURIComponent(selectedId)}`}>打开主对话</a>}
       <button type="button" data-testid="research-main-agent-compose" className="research-workspace-action" aria-expanded={composing} onClick={() => setComposing(open => !open)}>发送任务</button>
     </div>
     <p className="research-main-agent-caption">{error ? `会话状态未同步：${error}` : session?.status === "ended" ? "该会话已结束；请打开主对话恢复会话后再发送。" : selectedId && !session ? "所选会话不在当前可用列表中，请重新选择。" : session ? `任务发送到此会话${session.model ? ` · ${session.model}` : ""}` : "选择后，打开主对话和发送任务均使用该会话。"}</p>
-    <ResearchCharterBindingControls cwd={cwd} sessionId={selectedId} visible={visible} connectionGeneration={connectionGeneration} refreshSignal={refreshSignal} onRebound={onRebound} />
+    <ResearchCharterBindingControls cwd={cwd} sessionId={selectedId} visible={visible} connectionGeneration={connectionGeneration} refreshSignal={refreshSignal} onRebound={onRebound} defaultExpanded={expandCharter} />
     {composing && <form className="research-main-agent-composer" onSubmit={event => { event.preventDefault(); void send(); }}>
       <textarea data-testid="research-main-agent-prompt" aria-label="给主 Agent 的任务" rows={3} value={draft} disabled={sending} onChange={event => setDraft(event.target.value)} placeholder="描述目标、已有资料和需要交付的结果…" />
       <button data-testid="research-main-agent-send" type="submit" className="research-workspace-action primary" disabled={!canSend || sending || !draft.trim()}>{sending ? "正在提交…" : "提交给主 Agent"}</button>

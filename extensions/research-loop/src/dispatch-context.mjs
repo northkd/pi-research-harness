@@ -100,6 +100,14 @@ export function projectDispatchContext(snapshot, params = {}) {
     counts: countsOf(allTasks), planCount: plans.length, plans: [], omittedPlans: 0,
     hint: 'Execution details remain in child sessions and evidence files. Do not poll or repeat delegated work. For evidence use status with view:detail, planId/taskId and nextOffset; use taskId:self for the original assignment.'
   };
+  if (Number.isSafeInteger(snapshot.planHistory?.total) && Number.isSafeInteger(snapshot.planHistory?.shown)) {
+    projection.planHistory = { total: snapshot.planHistory.total, shown: snapshot.planHistory.shown, counts: {} };
+    for (const key of ['total', 'completed', 'failed', 'blocked', 'active', 'queued']) {
+      const value = snapshot.planHistory.counts?.[key];
+      if (Number.isSafeInteger(value) && value >= 0) projection.planHistory.counts[key] = value;
+    }
+    if (snapshot.planHistory.total > snapshot.planHistory.shown) projection.hint += ' Old plan bodies are omitted from this snapshot; planHistory counts still include their outcomes. Fetch an older plan explicitly by planId.';
+  }
   if (snapshot.atomicReason) projection.atomicReason = clip(snapshot.atomicReason, 360).text;
   if (snapshot.assignment) {
     const assignment = snapshot.assignment;

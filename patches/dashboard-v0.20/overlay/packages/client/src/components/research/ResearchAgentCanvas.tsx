@@ -1,10 +1,11 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Icon } from "@mdi/react";
-import { mdiAccountGroup, mdiArrowLeft, mdiArrowExpandAll, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew } from "@mdi/js";
+import { mdiAccountGroup, mdiArrowLeft, mdiArrowExpandAll, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew, mdiLayersTripleOutline, mdiRobotOutline, mdiFileDocumentOutline, mdiDotsVertical, mdiLinkOff, mdiClose, mdiHistory, mdiMagnify } from "@mdi/js";
 import type { ConfiguredRole, ResearchExecution, ResearchExecutionOriginKind } from "./research-projection.js";
 import type { ResearchWorkbenchRelation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
 import { getMemberArt, leadArt } from "./agent-teams-artwork.js";
-import { fitGraph, layoutFocusedSession, layoutSessionHierarchy, resolveSessionParents, zoomGraphAt, type CanvasNode, type CanvasView } from "./research-agent-canvas-layout.js";
+import { fitGraph, layoutFocusedSession, layoutSessionHierarchy, layoutTenureHierarchy, resolveSessionParents, zoomGraphAt, type CanvasNode, type CanvasNetworkNode, type CanvasView } from "./research-agent-canvas-layout.js";
+import "./research-agent-network.css";
 
 export interface CanvasRoleGroup {
   roleName: string;
@@ -27,6 +28,26 @@ export interface CanvasSessionCluster {
   assignedRole?: string;
   workflowDuty?: string;
 }
+export interface CanvasTenure {
+  id: string;
+  ordinal?: number;
+  mainSessionId: string;
+  status: "current" | "historical" | "removed" | string;
+  sessionIds: string[];
+  startedAt?: string;
+  endedAt?: string;
+  detachedSessionIds?: string[];
+  snapshots?: Record<string, {
+    title?: string; model?: string; role?: string; status?: string;
+    parentSessionId?: string;
+    origin?: "user-selected" | "agent-dispatch" | "manual-join" | string;
+  }>;
+}
+export interface CanvasCollaborationState {
+  currentTenureId: string | null;
+  tenures: CanvasTenure[];
+  detachedSessionIds?: string[];
+}
 interface Props {
   clusters: CanvasSessionCluster[];
   stale: boolean;
@@ -36,6 +57,10 @@ interface Props {
   statusLabel: (status: string) => string;
   roleLabel: (role: string) => string;
   visible?: boolean;
+  collaboration?: CanvasCollaborationState | null;
+  onDetach?: (sessionId: string, tenureId?: string) => void;
+  /** The real queue belongs between the current and historical families. */
+  afterCurrent?: ReactNode;
 }
 
 const originTint = (origin?: ResearchExecutionOriginKind) =>
@@ -59,8 +84,16 @@ const verticalBranch = (parent: CanvasNode, child: CanvasNode) =>
   `M ${parent.x} ${parent.y + parent.height / 2} H 12 V ${child.y + child.height / 2} H ${child.x}`;
 const isLive = (status: string) => ["streaming", "started", "running"].includes(status);
 
+/** Recorded tenure identity is authoritative; the legacy overview remains usable
+ * while a server without the new collaboration capability is being upgraded. */
+export function ResearchAgentCanvas(props: Props) {
+  return props.collaboration
+    ? <ResearchTenureCanvas {...props} collaboration={props.collaboration} />
+    : <LegacyResearchAgentCanvas {...props} />;
+}
+
 /** A read-only map of recorded sessions and their observed child roles. */
-export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, statusLabel, roleLabel, visible = true }: Props) {
+function LegacyResearchAgentCanvas({ clusters, stale, relations = [], onAgent, onDetach, statusLabel, roleLabel, visible = true }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const roleButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const canvasId = useId().replaceAll(":", "");
@@ -257,6 +290,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
             </div>
           </span>
         </span>
+        <span data-testid="canvas-agent-model" className="block truncate font-mono text-[10px] text-[var(--text-secondary)]" title={row.observedModel ?? "模型未记录"}>{row.observedModel ?? "模型未记录"}</span>
         <span data-testid="canvas-session-caption" className="block shrink-0 truncate text-[10px] text-[var(--text-secondary)]" title={[creatorLabel && `创建者：${creatorLabel}`, cluster.workflowDuty].filter(Boolean).join(" · ") || cluster.title}>
           {creatorLabel && isAgentCreated ? <span data-testid="canvas-session-creator">创建者：{creatorLabel} · </span> : null}
           {cluster.workflowDuty ?? "暂无已记录的任务职责"}
@@ -435,11 +469,8 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                     )}
                   </span>
 
-                  {summary && (
-                    <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={summary}>
-                      {summary}
-                    </span>
-                  )}
+                  <span data-testid="canvas-agent-model" className="block truncate font-mono text-[10px] text-[var(--text-secondary)]" title={current.observedModel ?? "模型未记录"}>{current.observedModel ?? "模型未记录"}</span>
+                  <span className="block truncate text-[10px] text-[var(--text-secondary)]" title={summary || focused.title}>来源：{focused.title}</span>
 
                   <span className="flex items-center justify-between gap-1 text-[10px] text-[var(--text-secondary)]">
                     {roleLive ? (
@@ -480,7 +511,8 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
                     <span className="text-[11px] font-bold text-[var(--text-primary)]">第 {round} 轮{roundIndex === 0 ? " · 最新" : ""}</span>
                     <span className={`truncate text-[10px] ${live ? "font-semibold text-[var(--accent-green-text)]" : "text-[var(--text-secondary)]"}`}>{stale && execution.source === "observation" ? "观测已过期" : statusLabel(execution.status)}</span>
                   </span>
-                  {execution.observedModel && <span className="truncate font-mono text-[9px] text-[var(--text-tertiary)]" title={execution.observedModel}>{execution.observedModel}</span>}
+                  <span className="truncate font-mono text-[9px] text-[var(--text-tertiary)]" title={execution.observedModel ?? "模型未记录"}>{execution.observedModel ?? "模型未记录"}</span>
+                  <span className="truncate text-[9px] text-[var(--text-tertiary)]" title={focused.title}>来源：{focused.title}</span>
                   <span className="line-clamp-3 text-[11px] leading-relaxed text-[var(--text-secondary)]" title={task}>{task || "暂无任务描述，查看详情可访问执行日志与结果"}</span>
                   <span className="flex items-center justify-between gap-2 border-t border-[var(--border-secondary)] pt-1.5 text-[10px]">
                     <span className="text-[var(--text-tertiary)]">{execution.startedAt ? new Date(execution.startedAt).toLocaleTimeString() : "未记录时间"}</span>
@@ -505,6 +537,7 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
           </div>
         )}
         {focused && <button type="button" onClick={() => onAgent(focused.roleObj, focused.sessionExec)} className="inline-flex items-center gap-1 font-medium text-[var(--accent-text)] hover:underline"><Icon path={mdiOpenInNew} size={0.5} />会话详情与纠偏</button>}
+        {focused && onDetach && <button type="button" onClick={() => onDetach(rawSessionId(focused))} className="inline-flex items-center gap-1 font-medium text-[var(--text-secondary)] hover:underline"><Icon path={mdiLinkOff} size={0.5} />移出 res-workflow</button>}
       </div>
 
       {focused && delegatedSessions.length > 0 && <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border-primary)] px-3 py-2 text-[10px] text-[var(--text-secondary)]">
@@ -515,4 +548,305 @@ export function ResearchAgentCanvas({ clusters, stale, relations = [], onAgent, 
       <span className="sr-only" aria-live="polite">{expandedRoleGroup ? `${roleLabel(expandedRoleGroup.roleName)} 的 ${expandedRoleGroup.executions.length} 轮执行已在画布展开。按 Escape 收起。` : ""}</span>
     </section>
   );
+}
+
+const rawSessionId = (cluster: CanvasSessionCluster) => cluster.sessionExec.sessionId
+  ?? (cluster.sessionExec.id.startsWith("session-") ? cluster.sessionExec.id.slice(8) : cluster.sessionExec.id);
+const timeOf = (value?: string) => value ? Date.parse(value) : Number.NaN;
+const finished = (status: string) => ["completed", "complete"].includes(status);
+const networkState = (execution: ResearchExecution | undefined, stale: boolean, status?: string) => {
+  const value = status ?? execution?.status ?? "unknown";
+  if (stale && execution?.source === "observation") return "stale";
+  return isLive(value) ? "running" : finished(value) ? "completed"
+    : ["failed", "blocked", "rejected"].includes(value) ? "blocked" : "waiting";
+};
+interface NetworkCard {
+  id: string;
+  rawId?: string;
+  title: string;
+  kind: "session" | "subagent";
+  parentId?: string;
+  model?: string;
+  role?: string;
+  status?: string;
+  origin: ResearchExecutionOriginKind;
+  source: string;
+  sourceDetail?: string;
+  execution?: ResearchExecution;
+  roleObj?: ConfiguredRole;
+  main?: boolean;
+}
+
+/** A session reused by another lead tenure does not donate its later executions
+ * or later model to history. Unknown timestamps remain explicitly unclassified. */
+function executionBelongsToTenure(execution: ResearchExecution, tenure: CanvasTenure, appearances: number) {
+  if (appearances <= 1) return true;
+  const start = timeOf(execution.startedAt), from = timeOf(tenure.startedAt), until = timeOf(tenure.endedAt);
+  return Number.isFinite(start) && Number.isFinite(from) && start >= from && (!Number.isFinite(until) || start < until);
+}
+
+function recordedParentsFor(clusters: CanvasSessionCluster[], relations: ResearchWorkbenchRelation[]) {
+  const conflicts = new Set(clusters.filter(cluster => cluster.creatorLabel === "父关系冲突").map(cluster => cluster.sessionExec.id));
+  return resolveSessionParents(clusters.map(cluster => cluster.sessionExec.id), [
+    ...relations,
+    ...clusters.flatMap(cluster => cluster.sessionExec.parentExecutionId
+      ? [{ fromExecutionId: cluster.sessionExec.parentExecutionId, toExecutionId: cluster.sessionExec.id, kind: "dispatch" }] : []),
+  ].filter(relation => !conflicts.has(relation.toExecutionId)));
+}
+
+function ResearchTenureCanvas({ collaboration, clusters, relations = [], afterCurrent, ...props }: Props & { collaboration: CanvasCollaborationState }) {
+  const [query, setQuery] = useState("");
+  const detached = new Set(collaboration.detachedSessionIds ?? []);
+  const current = collaboration.tenures.find(tenure => tenure.id === collaboration.currentTenureId && tenure.status !== "removed");
+  const history = collaboration.tenures.filter(tenure => tenure.id !== collaboration.currentTenureId && tenure.status !== "removed").slice().reverse();
+  const known = new Set(collaboration.tenures.flatMap(tenure => [tenure.mainSessionId, ...tenure.sessionIds]));
+  const unclassified = clusters.filter(cluster => !known.has(rawSessionId(cluster)) && !known.has(cluster.sessionExec.id) && !detached.has(rawSessionId(cluster)));
+  const search = <label className="research-network-search"><Icon path={mdiMagnify} size={0.62} />
+    <input type="search" aria-label="搜索会话" placeholder="名称、模型或来源" value={query} onChange={event => setQuery(event.target.value)} />
+  </label>;
+  const ordinal = (tenure: CanvasTenure) => tenure.ordinal ?? collaboration.tenures.findIndex(item => item.id === tenure.id) + 1;
+  return <section className="research-tenure-canvas" aria-label="会话与下属角色" data-testid="research-tenure-canvas">
+    {current ? <TenureNetwork key={current.id} {...props} clusters={clusters} relations={relations} tenure={current} tenures={collaboration.tenures}
+      detached={detached} ordinal={ordinal(current)} query={query} search={search} />
+      : <div className="research-network-empty"><Icon path={mdiLayersTripleOutline} size={0.95} /><div><strong>尚未绑定当前主 Agent</strong><p>在上方选择主 Agent。历史协作记录会独立保留。</p></div>{search}</div>}
+    {afterCurrent}
+    {history.length > 0 && <section className="research-network-history" aria-label="历史主 Agent">
+      <div className="research-network-history-title"><Icon path={mdiHistory} size={0.72} /><h3>历史主 Agent</h3><span>独立留存 · 不参与当前派发</span></div>
+      {history.map((tenure, index) => {
+        const lead = clusters.find(cluster => rawSessionId(cluster) === tenure.mainSessionId || cluster.sessionExec.id === tenure.mainSessionId);
+        const title = tenure.snapshots?.[tenure.mainSessionId]?.title ?? lead?.title ?? "会话记录未载入";
+        return <details key={tenure.id} className="research-network-history-group" open={index === 0 ? true : undefined} data-tenure-id={tenure.id}>
+          <summary><span>第 {ordinal(tenure)} 任期 · {title}</span><span className="research-network-history-tag">已交接</span></summary>
+          <TenureNetwork {...props} clusters={clusters} relations={relations} tenure={tenure} tenures={collaboration.tenures}
+            detached={detached} ordinal={ordinal(tenure)} query={query} historical />
+        </details>;
+      })}
+    </section>}
+    {unclassified.length > 0 && <details className="research-network-unclassified">
+      <summary>其他已接入会话 · {unclassified.length}<span>任期归属未记录，不自动归入当前主 Agent</span></summary>
+      <LegacyResearchAgentCanvas {...props} clusters={unclassified} relations={relations.filter(relation =>
+        unclassified.some(cluster => cluster.sessionExec.id === relation.fromExecutionId) && unclassified.some(cluster => cluster.sessionExec.id === relation.toExecutionId))} />
+    </details>}
+  </section>;
+}
+
+function TenureNetwork({ clusters, relations, tenure, tenures, detached, ordinal, query, search, historical = false,
+  onAgent, onDetach, stale, statusLabel, roleLabel, visible = true }: Props & {
+    relations: ResearchWorkbenchRelation[]; tenure: CanvasTenure; tenures: CanvasTenure[]; detached: Set<string>;
+    ordinal: number; query: string; search?: ReactNode; historical?: boolean;
+  }) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(() => new Set());
+  const [menuId, setMenuId] = useState<string | null>(null);
+  const [maximized, setMaximized] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [view, setView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 });
+  const [width, setWidth] = useState(1200);
+  const drag = useRef<{ pointer: number; x: number; y: number; originX: number; originY: number } | null>(null);
+  const cardById = new Map<string, NetworkCard>();
+  const members = new Set([tenure.mainSessionId, ...tenure.sessionIds]);
+  const detachedInTenure = new Set(tenure.detachedSessionIds ?? []);
+  const included = clusters.filter(cluster => (members.has(rawSessionId(cluster)) || members.has(cluster.sessionExec.id))
+    && !detachedInTenure.has(rawSessionId(cluster)) && (!detached.has(rawSessionId(cluster)) || historical));
+  const lead = included.find(cluster => rawSessionId(cluster) === tenure.mainSessionId || cluster.sessionExec.id === tenure.mainSessionId);
+  const mainId = lead?.sessionExec.id ?? `session-${tenure.mainSessionId}`;
+  const frozenRelations = included.flatMap(cluster => {
+    const parentRawId = tenure.snapshots?.[rawSessionId(cluster)]?.parentSessionId;
+    const parent = parentRawId ? included.find(candidate => rawSessionId(candidate) === parentRawId) : undefined;
+    return parent ? [{ fromExecutionId: parent.sessionExec.id, toExecutionId: cluster.sessionExec.id, kind: "dispatch" }] : [];
+  });
+  // A later reuse may have different observed relationships. History is frozen
+  // by its own receipt and must never borrow the latest session's parentage.
+  const parents = historical
+    ? resolveSessionParents(included.map(cluster => cluster.sessionExec.id), frozenRelations)
+    : recordedParentsFor(included, relations);
+  parents.delete(mainId); // A promoted former child is now the root of THIS tenure.
+  const hidden: Array<{ id: string; title: string; count: number }> = [];
+  let unassignedRuns = 0;
+  for (const cluster of included) {
+    const row = cluster.sessionExec, rawId = rawSessionId(cluster), main = row.id === mainId;
+    const appearanceCount = tenures.filter(item => item.mainSessionId === rawId || item.sessionIds.includes(rawId)).length;
+    const snapshot = historical ? tenure.snapshots?.[rawId] : undefined;
+    const parentId = main ? undefined : parents.get(row.id);
+    const parent = included.find(candidate => candidate.sessionExec.id === parentId);
+    const parentTitle = parent ? (historical ? tenure.snapshots?.[rawSessionId(parent)]?.title ?? "历史协作会话" : parent.title) : undefined;
+    const source = main ? historical ? snapshot?.origin === "user-selected" ? "用户指定" : "历史主 Agent" : "用户指定"
+      : parentId === mainId ? "主 Agent 派发" : parent ? `Multi-agent · ${parentTitle}`
+        : historical ? snapshot?.origin === "manual-join" ? "用户接入" : snapshot?.origin === "agent-dispatch" ? "Agent 派发（父记录未载入）" : "来源未记录"
+        : cluster.origin === "user-created" ? "用户创建"
+          : cluster.creatorLabel === "父关系冲突" ? "父关系冲突"
+            : cluster.origin === "workflow-created" ? "工作流创建"
+              : cluster.origin === "lead-agent-created" ? "父会话未载入" : "来源未记录";
+    cardById.set(row.id, { id: row.id, rawId, main, kind: "session", parentId,
+      title: snapshot?.title ?? cluster.title, model: historical ? snapshot?.model : row.observedModel,
+      role: snapshot?.role ?? cluster.assignedRole ?? row.role, status: historical ? snapshot?.status ?? (appearanceCount > 1 ? "unknown" : row.status) : row.status,
+      origin: main ? cluster.origin ?? "unknown" : parent ? "lead-agent-created" : historical ? snapshot?.origin === "agent-dispatch" ? "lead-agent-created" : "unknown" : cluster.origin ?? "unknown",
+      source, sourceDetail: parent ? `创建者：${parentTitle}` : undefined, execution: row, roleObj: cluster.roleObj });
+    const ownSubs = cluster.childSubs.filter(sub => executionBelongsToTenure(sub, tenure, appearanceCount));
+    if (appearanceCount > 1) unassignedRuns += cluster.childSubs.filter(sub => !Number.isFinite(timeOf(sub.startedAt))).length;
+    const shownSubs = expandedSessions.has(rawId) ? ownSubs : ownSubs.slice(0, 3);
+    if (ownSubs.length > 3) hidden.push({ id: rawId, title: cluster.title, count: ownSubs.length });
+    for (const sub of shownSubs) {
+      const group = cluster.childRoleGroups.find(candidate => candidate.executions.some(execution => execution.id === sub.id));
+      const actualParent = sub.parentExecutionId;
+      cardById.set(sub.id, { id: sub.id, title: roleLabel(sub.role ?? group?.roleName ?? "Subagent"), kind: "subagent",
+        parentId: actualParent && (actualParent === row.id || included.some(candidate => candidate.sessionExec.id === actualParent)) ? actualParent : undefined,
+        model: sub.observedModel, role: sub.role ?? group?.roleName, status: sub.status, origin: actualParent ? "lead-agent-created" : "unknown",
+        source: actualParent === row.id ? main ? "主 Agent" : `Multi-agent · ${snapshot?.title ?? cluster.title}` : "来源未记录",
+        execution: sub, roleObj: group?.roleObj ?? { name: sub.role ?? "subagent", skills: [] } });
+    }
+  }
+  if (!cardById.has(mainId)) cardById.set(mainId, { id: mainId, rawId: tenure.mainSessionId, title: tenure.snapshots?.[tenure.mainSessionId]?.title ?? "会话记录未载入",
+    model: historical ? tenure.snapshots?.[tenure.mainSessionId]?.model : undefined,
+    kind: "session", main: true, source: historical ? "历史主 Agent" : "用户指定", origin: "unknown" });
+  const scene = layoutTenureHierarchy(mainId, [...cardById.values()].map(card => ({ id: card.id, kind: card.kind, parentId: card.parentId })));
+  const nodeById = new Map(scene.nodes.map(node => [node.id, node]));
+  const term = query.trim().toLocaleLowerCase();
+  const matches = (card: NetworkCard) => !term || [card.title, card.model, card.role, card.source, card.execution?.prompt].some(value => value?.toLocaleLowerCase().includes(term));
+  const matchCount = [...cardById.values()].filter(matches).length;
+  const height = maximized ? Math.max(420, window.innerHeight - 140) : Math.min(560, Math.max(historical ? 200 : 254, scene.height + 10));
+  const zoom = (factor: number) => setView(previous => zoomGraphAt(previous, { x: width / 2, y: height / 2 }, factor));
+  const fit = () => setView(fitGraph(scene, { width, height }, 16));
+  const reset = () => setView({ x: 0, y: 0, scale: 1 });
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const measure = () => { if (visible && element.clientWidth) setWidth(element.clientWidth); };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(element); window.addEventListener("resize", measure);
+    const wheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const bounds = element.getBoundingClientRect();
+      setView(previous => zoomGraphAt(previous, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, Math.exp(-event.deltaY * 0.0015)));
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); element.removeEventListener("wheel", wheel); };
+  }, [visible, maximized]);
+  useEffect(() => {
+    if (!menuId) return;
+    const close = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenuId(null); };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [menuId]);
+  useEffect(() => {
+    if (!maximized) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setMaximized(false); };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [maximized]);
+  const reveal = (node: CanvasNode) => setView(previous => {
+    const left = previous.x + node.x * previous.scale, right = left + node.width * previous.scale;
+    const top = previous.y + node.y * previous.scale, bottom = top + node.height * previous.scale;
+    return { ...previous, x: previous.x + (left < 12 ? 12 - left : right > width - 12 ? width - 12 - right : 0),
+      y: previous.y + (top < 8 ? 8 - top : bottom > height - 8 ? height - 8 - bottom : 0) };
+  });
+  const keyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") { menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus(); setMenuId(null); return; }
+    if (event.target !== event.currentTarget) return;
+    const delta: Record<string, [number, number]> = { ArrowLeft: [64, 0], ArrowRight: [-64, 0], ArrowUp: [0, 64], ArrowDown: [0, -64] };
+    if (delta[event.key]) { event.preventDefault(); const [x, y] = delta[event.key]; setView(previous => ({ ...previous, x: previous.x + x, y: previous.y + y })); }
+    else if (["+", "="].includes(event.key)) { event.preventDefault(); zoom(1.25); }
+    else if (event.key === "-") { event.preventDefault(); zoom(0.8); }
+    else if (event.key === "Home") { event.preventDefault(); reset(); }
+  };
+  const begin = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target as Element).closest("button, input, [role=menu]")) return;
+    drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, originX: view.x, originY: view.y };
+    event.currentTarget.setPointerCapture?.(event.pointerId); setDragging(true);
+  };
+  const move = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const value = drag.current;
+    if (value?.pointer === event.pointerId) setView(previous => ({ ...previous, x: value.originX + event.clientX - value.x, y: value.originY + event.clientY - value.y }));
+  };
+  const end = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (drag.current?.pointer !== event.pointerId) return;
+    drag.current = null; setDragging(false);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const mainNode = nodeById.get(mainId)!;
+  const directSessionNodes = scene.nodes.filter(node => node.parentId === mainId && node.kind === "session");
+  // One shared ownership bus; sibling cards are never joined to one another.
+  // Branch colors must not repaint an earlier branch when a later sibling waits.
+  const busPath = directSessionNodes.length
+    ? `M ${mainNode.x + mainNode.width} ${mainNode.y + mainNode.height / 2} H ${mainNode.x + mainNode.width + 10} Q ${mainNode.x + mainNode.width + 20} ${mainNode.y + mainNode.height / 2} ${mainNode.x + mainNode.width + 20} ${mainNode.y + mainNode.height / 2 - 10} V 32 Q ${mainNode.x + mainNode.width + 20} 20 ${mainNode.x + mainNode.width + 32} 20 H ${Math.max(...directSessionNodes.map(node => node.x + node.width / 2))}`
+    : null;
+  const edge = (node: CanvasNetworkNode) => {
+    if (!node.parentId) return null;
+    const parent = nodeById.get(node.parentId);
+    if (!parent) return null;
+    const card = cardById.get(node.id)!;
+    const state = networkState(card.execution, stale && !historical, card.status);
+    const fromX = parent.x + parent.width / 2, toX = node.x + node.width / 2;
+    const d = parent.id === mainId && node.kind === "session"
+      ? `M ${toX} 20 V ${node.y}`
+      : `M ${fromX} ${parent.y + parent.height} C ${fromX} ${parent.y + parent.height + 20}, ${toX} ${node.y - 20}, ${toX} ${node.y}`;
+    return <g key={node.id} data-testid="canvas-parent-edge" data-from={parent.id} data-to={node.id} className={`research-network-edge is-${state}`}>
+      <path data-testid="canvas-relation-edge" d={d} />
+      {state === "running" && <path d={d} className="research-network-flow" />}
+      <circle cx={toX} cy={node.y} r="3.2" />
+    </g>;
+  };
+  return <div ref={frameRef} className={`research-network-frame${historical ? " is-historical" : ""}${maximized ? " is-maximized" : ""}`} data-testid="tenure-network" data-tenure-id={tenure.id}>
+    <div className="research-network-toolbar">
+      <div className="research-network-heading">{!historical && <><h3>当前主 Agent · 第 {ordinal} 任期</h3><span className="research-network-bound"><i />当前绑定</span></>}
+        {historical && <span className="research-network-history-caption">任期内记录 · {included.length} 个会话</span>}
+        {term && <span className="research-network-search-count" role="status">{matchCount ? `${matchCount} 项匹配` : "没有匹配的会话"}</span>}
+      </div>
+      <div className="research-network-tools">{search}
+        <button type="button" aria-label={historical ? `重置第 ${ordinal} 任期画布` : "返回全部会话"} title="重置到 100%" onClick={reset}><Icon path={mdiArrowLeft} size={0.56} />{!historical && <span>全部会话</span>}</button>
+        <div className="research-network-zoom"><button type="button" aria-label={historical ? `缩小第 ${ordinal} 任期画布` : "缩小画布"} onClick={() => zoom(0.8)}>−</button>
+          <span data-testid={!historical ? "research-canvas-zoom" : undefined}>{Math.round(view.scale * 100)}%</span>
+          <button type="button" aria-label={historical ? `放大第 ${ordinal} 任期画布` : "放大画布"} onClick={() => zoom(1.25)}>+</button></div>
+        <button type="button" aria-label={historical ? `适应第 ${ordinal} 任期画布` : "适应画布"} title="适应画布" onClick={fit}><Icon path={mdiArrowExpandAll} size={0.64} /></button>
+        <button type="button" aria-label={maximized ? "退出全屏" : historical ? `全屏查看第 ${ordinal} 任期` : "全屏查看协作图"} title={maximized ? "退出全屏" : "全屏查看"} onClick={() => setMaximized(value => !value)}><Icon path={maximized ? mdiClose : mdiOpenInNew} size={0.64} /></button>
+      </div>
+    </div>
+    <div ref={viewportRef} role="region" aria-label={historical ? `第 ${ordinal} 任期协作图` : "协作拓扑画布"} tabIndex={0}
+      data-testid={!historical ? "research-canvas-viewport" : "historical-canvas-viewport"} data-scale={view.scale.toFixed(3)}
+      className={`research-network-viewport${dragging ? " is-dragging" : ""}`} style={{ height }} onKeyDown={keyDown}
+      onPointerDown={begin} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end}>
+      <div className="research-network-scene" style={{ width: scene.width, height: scene.height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}>
+        <svg aria-hidden="true" width={scene.width} height={scene.height} className="research-network-links">
+          {busPath && <path d={busPath} className="research-network-bus" data-testid="canvas-ownership-bus" />}
+          {scene.nodes.map(edge)}
+        </svg>
+        {scene.orphanIds.length > 0 && <span className="research-network-orphan-label" style={{ top: scene.orphanTop - 26 }}>已记录归属 · 派发父关系未载入或存在冲突</span>}
+        {scene.nodes.map(node => {
+          const card = cardById.get(node.id)!;
+          const state = networkState(card.execution, stale && !historical, card.status);
+          const status = state === "stale" ? "观测已过期" : card.main ? historical ? "历史" : "当前" : statusLabel(card.status ?? "unknown");
+          return <article key={node.id} style={nodeStyle(node)} className={`research-network-card is-${state}${card.main ? " is-main" : ""}${card.kind === "subagent" ? " is-subagent" : ""}${term && !matches(card) ? " is-dimmed" : ""}`}
+            data-testid={card.kind === "subagent" ? "canvas-role-node" : "canvas-session-node"} data-kind={card.kind} data-origin={card.origin} data-parent-id={node.parentId ?? undefined} data-depth={node.depth}>
+            <button type="button" className="research-network-card-body" aria-label={`查看 ${card.title} ${card.kind === "subagent" ? "Subagent" : "会话"}详情`}
+              onFocus={() => reveal(node)} onClick={() => { if (card.execution && card.roleObj) onAgent(card.roleObj, card.execution); }} disabled={!card.execution}>
+              <span className="research-network-card-heading"><Icon path={card.main ? mdiLayersTripleOutline : card.kind === "subagent" ? mdiFileDocumentOutline : mdiRobotOutline} size={card.kind === "subagent" ? 0.65 : 0.85} />
+                <span className="research-network-card-title" title={card.title}>{card.main ? "主 Agent" : card.title}</span>
+                <span className={`research-network-status is-${state}`}><i />{status}</span>
+              </span>
+              {card.main && <span className="research-network-card-subtitle" title={card.title}>{card.title}</span>}
+              <span className="research-network-model" data-testid="canvas-agent-model" title={`${card.role ?? (card.main ? "research-lead" : card.kind === "subagent" ? "subagent" : "multi-agent")} · ${card.model ?? "模型未记录"}`}>
+                <span>{card.role ?? (card.main ? "research-lead" : card.kind === "subagent" ? "subagent" : "multi-agent")}</span><b> · </b><strong>{card.model ?? "模型未记录"}</strong>
+              </span>
+              <span className="research-network-source" data-testid="canvas-session-origin" title={card.sourceDetail ?? card.source}>来源：{card.source}</span>
+            </button>
+            {onDetach && card.kind === "session" && card.rawId && <div ref={menuId === card.id ? menuRef : undefined} className="research-network-menu">
+              <button type="button" aria-label={`更多操作：${card.title}`} aria-haspopup="menu" aria-expanded={menuId === card.id} onClick={event => { event.stopPropagation(); setMenuId(value => value === card.id ? null : card.id); }}><Icon path={mdiDotsVertical} size={0.64} /></button>
+              {menuId === card.id && <div role="menu" className="research-network-menu-popover"><button type="button" role="menuitem" onClick={() => { setMenuId(null); onDetach(card.rawId!, tenure.id); }}><Icon path={mdiLinkOff} size={0.6} />移出 res-workflow</button></div>}
+            </div>}
+          </article>;
+        })}
+      </div>
+    </div>
+    {(hidden.length > 0 || unassignedRuns > 0) && <div className="research-network-more">
+      {hidden.map(item => <button key={item.id} type="button" onClick={() => setExpandedSessions(previous => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })}>
+        {expandedSessions.has(item.id) ? "收起" : "展开"} {item.title} 的 {item.count} 次子任务</button>)}
+      {unassignedRuns > 0 && <span>部分子任务缺少时间记录，未推定到此任期；可在会话详情中核对。</span>}
+    </div>}
+    {!historical && <div className="research-network-legend" aria-label="连线图例"><span><i className="is-running" />运行中</span><span><i className="is-completed" />已完成</span><span><i className="is-waiting" />等待 / 未记录</span><span className="research-network-hint">连线表示已记录的派发关系 · 拖动平移</span></div>}
+  </div>;
 }
