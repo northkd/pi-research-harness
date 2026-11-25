@@ -1,0 +1,52 @@
+Validation evidence, 2026-11-06. Groups can overlap; do not add them as unique-test totals.
+
+npm test
+--------
+ℹ tests 265
+ℹ suites 3
+ℹ pass 265
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7461.670355
+ℹ tests 64
+ℹ suites 0
+ℹ pass 64
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11458.618077
+
+Canvas/projection Vitest
+------------------------
+ Test Files  2 passed (2)
+      Tests  31 passed (31)
+
+Native path-gate Vitest
+-----------------------
+ Test Files  1 passed (1)
+      Tests  39 passed (39)
+
+Server gates Vitest with PI_DASHBOARD_NO_MDNS=1
+-----------------------------------------------
+ Test Files  3 passed (3)
+      Tests  10 passed (10)
+
+Mainline adapter via native Node TS loader
+------------------------------------------
+ℹ tests 27
+ℹ suites 0
+ℹ pass 27
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 311.429298
+
+Browser: 29 passed, 0 failed; native authentication and matched client build; syntheticData=true.
+Build: successful with NODE_OPTIONS=--max-old-space-size=4096.
+TypeScript: exit 1; 61 existing diagnostics in 5 files, 0 newly introduced diagnostics vs stored baseline.
+Syntax: passed.
+Release audit: see validation.json and implementation.md for final audit.

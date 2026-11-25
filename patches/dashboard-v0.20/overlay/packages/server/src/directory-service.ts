@@ -1,0 +1,2393 @@
+/**
+ * DirectoryService — server-side directory-scoped operations.
+ *
+ * Responsibilities:
+ *   - Session discovery and event loading (unchanged).
+ *   - OpenSpec polling with an mtime-gated cache, configurable interval,
+ *     concurrency cap (semaphore), and deterministic per-cwd jitter to
+ *     flatten the CPU envelope.
+ *   - Pi resources scanning on its own slower cadence (5× openspec interval)
+ *     so it does not stack onto the openspec burst.
+ *
+ * See change: optimize-openspec-poll-burst for the cost model.
+ */
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { BrowserGitHeadUpdateMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import { DEFAULT_OPENSPEC_POLL, type OpenSpecPollConfig } from "@blackbelt-technology/pi-dashboard-shared/config.js";
+import {
+  buildOpenSpecData,
+  createFsProbeFactory,
+  createFsSpecsProbeFactory,
+  deriveArtifactStatus,
+  runOpenSpecList,
+  runOpenSpecStatus,
+  runOpenSpecStatusAll,
+} from "@blackbelt-technology/pi-dashboard-shared/openspec-poller.js";
+import {
+  createStatusAllSupportCache,
+  type TrackedExtras,
+} from "@blackbelt-technology/pi-dashboard-shared/openspec-status-all.js";
+import {
+  resolveOpenSpecPackageSchemasDir,
+  resolveOpenSpecPackageVersion,
+  userSchemasDir,
+} from "@blackbelt-technology/pi-dashboard-shared/platform/openspec.js";
+import type { PiResourcesResult } from "@blackbelt-technology/pi-dashboard-shared/rest-api.js";
+import { createSemaphore, type Semaphore } from "@blackbelt-technology/pi-dashboard-shared/semaphore.js";
+import { inferPlatform, pathKey } from "@blackbelt-technology/pi-dashboard-shared/session-group-path.js";
+import type {
+  OpenSpecChange,
+  OpenSpecData,
+  OpenSpecWorkflowSchemaStatus,
+} from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import { computeFolderGroupKeys, createFolderHeadPoll, type FolderHeadPoll } from "./git-worktree/folder-head-poll.js";
+import type { EventLoopSpikeMetrics, EventLoopTurn } from "./metrics/eventloop-spike-metrics.js";
+import { type BrokeReason, deriveOpenSpecReadiness, hasWorkflowSchemaStatus } from "./openspec/readiness.js";
+import { makeValidateLocal, type WorkflowSchemaDeps } from "./openspec/workflow-schema.js";
+
+/**
+ * Debounce for the folder-HEAD entry refresh, so a registration burst collapses
+ * into one bounded fan-out. See change: fix-folder-header-worktree-branch-leak.
+ */
+const FOLDER_HEAD_ENTRY_DEBOUNCE_MS = 500;
+
+import { createFolderHeadWatcher, type FolderHeadWatcher } from "./git-worktree/folder-head-watcher.js";
+import type { HeadInfo } from "./git-worktree/git-operations.js";
+import { resolveConfigRoot } from "./git-worktree/git-operations.js";
+import type { HydrationMetrics } from "./metrics/hydration-metrics.js";
+import { createOpenSpecChangeWatcher, type OpenSpecChangeWatcher } from "./openspec/openspec-change-watcher.js";
+import {
+  effectiveMtimeOr,
+  type ProbeResponse,
+  perChangeArtifactPaths,
+  statMtimeOr,
+} from "./openspec/openspec-poll-fs-helpers.js";
+import type {
+  PollWorkerPerChangeIn,
+  PollWorkerRequest,
+  SchemaStatusRequest,
+  SchemaStatusResponse,
+  StatusAllBuildResponse,
+} from "./openspec/openspec-poll-worker.js";
+import {
+  createOpenSpecPollWorkerPool,
+  type PollWorkerPool,
+  type PollWorkerPoolOptions,
+} from "./openspec/openspec-poll-worker-pool.js";
+import type { PreferencesStore } from "./persistence/preferences-store.js";
+import { scanPiResources } from "./pi/pi-resource-scanner.js";
+import { createPiResourcesWatcher, type PiResourcesWatcher, type PiWatchFn } from "./pi/pi-resources-watcher.js";
+import {
+  customEventTypeOfEvent,
+  isGroupableCustomEvent,
+  stampEventGroup,
+} from "./session/custom-event-group-annotation.js";
+import type { SessionManager } from "./session/memory-session-manager.js";
+import { discoverSessionsForCwd } from "./session/session-discovery.js";
+import {
+  createSessionLoadWorkerPool,
+  type SessionLoadWorkerPool,
+} from "./session/session-load-worker-pool.js";
+
+// Re-export `effectiveMtimeOr` here to preserve the prior public symbol for
+// external importers. See change: offload-openspec-poll-to-worker.
+export { effectiveMtimeOr } from "./openspec/openspec-poll-fs-helpers.js";
+
+import type { DiscoveredSession } from "./session/session-discovery.js";
+
+export type { DiscoveredSession } from "./session/session-discovery.js";
+
+export interface LoadResult {
+  success: boolean;
+  events: Array<{ eventType: string; timestamp: number; data: Record<string, unknown> }>;
+  error?: string;
+  /** Branch entry count + last-entry id of the hydrated transcript: the skip-wipe
+   *  fingerprint source. See change: fix-large-session-resume-replay (D5). */
+  entryCount?: number;
+  leafEntryId?: string;
+}
+
+export interface DirectoryAddedResult {
+  sessions: DiscoveredSession[];
+  openspecData: OpenSpecData;
+}
+
+/**
+ * `true` if `OpenSpecData` represents "no useful data yet" — either
+ * absent, or `{ initialized: false, changes: [] }` (cold cache).
+ * Used by broadcast call-sites to decide whether a transition from
+ * empty→populated warrants firing `openspec_update`. Pulled into
+ * shared scope so `server.ts` (post-install repair) and
+ * `session-bootstrap.ts` (initial poll) both use the same predicate.
+ *
+ * See change: fix-cold-boot-openspec-protocol.
+ */
+export function isOpenSpecDataEmpty(d: OpenSpecData | undefined): boolean {
+  if (!d) return true;
+  return !d.initialized && (!d.changes || d.changes.length === 0);
+}
+
+/**
+ * Synchronous, spawn-free probe for `<cwd>/openspec/changes`. Returns
+ * `true` iff the path exists and is a directory. Used by the WS
+ * on-connect snapshot to disambiguate "no openspec here" from
+ * "openspec here, polling pending". ~10 μs per call.
+ *
+ * See change: fix-cold-boot-openspec-protocol.
+ */
+export function hasOpenSpecDir(cwd: string): boolean {
+  try {
+    return fs.statSync(path.join(cwd, "openspec", "changes")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `true` iff `<cwd>/openspec/` exists and is a directory. Strictly weaker than
+ * `hasOpenSpecDir` (which also requires the `changes/` subdir). Used by the
+ * WS on-connect snapshot to emit the new `hasOpenspecDir` field on every
+ * payload so freshly-initialized projects without `changes/` yet still surface
+ * the OPENSPEC subcard as an init/attach affordance on the client.
+ *
+ * See change: auto-hide-empty-session-subcards.
+ */
+export function hasOpenSpecRoot(cwd: string): boolean {
+  try {
+    return fs.statSync(path.join(cwd, "openspec")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export interface DirectoryService {
+  knownDirectories(): string[];
+  discoverSessions(cwd: string): DiscoveredSession[];
+  loadSessionEvents(sessionId: string, sessionFile: string, knownContextWindow?: number): Promise<LoadResult>;
+  /**
+   * The RETAINED-transcript sibling of `loadSessionEvents`: the same pool, the
+   * same `inFlightLoadJobs` registration (so `cancelLoad` reaches a retained
+   * job) and the same metrics `finally` — but it dispatches the transcript's
+   * RAW TEXT and applies NO `customEventGroupResolver` (retained events do not
+   * carry that annotation today, and adding it is a payload change this
+   * refactor must not make).
+   *
+   * Deliberately NOT routed through `loadSessionEvents`: its `{success,events}`
+   * shape loses the retained state (so a replay failure would land in the
+   * handler's `dataUnavailable` branch), `already_loading` would hand a
+   * concurrent second subscriber a terminal empty frame, and the group
+   * annotation would be added silently.
+   *
+   * Takes no `loadingSet` dedup — coalescing happens one layer up, in the
+   * subscription handler.
+   * See change: offload-retained-transcript-replay (D2, D6).
+   */
+  loadRetainedEvents(
+    sessionId: string,
+    raw: string,
+    knownContextWindow?: number,
+  ): Promise<LoadResult>;
+  /**
+   * Cancel an in-flight hydration for `sessionId` (e.g. on unsubscribe before
+   * it resolves). No-op when no load is in flight. The cancelled load's
+   * `loadSessionEvents` promise resolves `{success:false, error:"cancelled"}`
+   * so callers skip the insert/broadcast. See change:
+   * offload-session-events-load-to-worker.
+   */
+  cancelLoad(sessionId: string): void;
+  /**
+   * Lazy accessor for the session-load worker pool (hydration + session-diff
+   * transcript projection). Creates it on first call; returns `null` once
+   * `stopPolling` has disposed it (or before `startPolling` re-enables).
+   * See change: fix-session-diff-durable-source.
+   */
+  ensureLoadWorkerPool(): SessionLoadWorkerPool | null;
+  getOpenSpecData(cwd: string): OpenSpecData | undefined;
+  /**
+   * The ONE spawn semaphore bounding every `openspec` CLI spawn: the poll, and
+   * (passed in by `server.ts`) the REST workflow-schema validate. Resized by
+   * `reconfigurePolling`, so holders see the new cap.
+   * See change: move-workflow-schema-status-to-poll-worker.
+   */
+  readonly semaphore: Semaphore;
+  /** Force refresh: bypasses the mtime gate. Still honors the semaphore. */
+  refreshOpenSpec(cwd: string): Promise<OpenSpecData>;
+  /**
+   * Gated force-refresh for the browser-initiated `openspec_refresh` message
+   * (D1). Applies the same admission chain as `getOrPollOpenSpec`, in its
+   * order: `enabled:false` → opted out → tracked → `<cwd>/openspec/` root,
+   * the fs probe deliberately LAST so an untracked cwd never touches the
+   * filesystem. Any gate failure resolves `null` with NO cache write, NO
+   * spawn and NO fs probe; a pass delegates to `refreshOpenSpec` (whose
+   * un-gated contract its four internal callers depend on stays untouched).
+   * See change: harden-server-request-surfaces (D1).
+   */
+  refreshOpenSpecGated(cwd: string): Promise<OpenSpecData | null>;
+  /** Gated poll: respects `changeDetection` config and the semaphore. Returns cached data. */
+  pollDirectoryGated(cwd: string): Promise<OpenSpecData>;
+  /**
+   * On-demand fetch for the `openspec_get` browser message (D6). Gate order:
+   * `enabled:false` → GLOBAL_OFF; opted out → OPTED_OUT; untracked (no
+   * session cwd match, not pinned) → ABSENT; no `<cwd>/openspec/` → ABSENT
+   * (`hasOpenspecDir:false`). Gated answers and cache hits return `{ hit }`
+   * alone. A cold tracked cwd returns `{ hit: pendingPlaceholder, poll }`
+   * where `poll` is the shared per-cwd in-flight `pollAndBroadcastIfChanged`
+   * promise (entry deleted on settle, success or rejection).
+   * See change: fix-connect-snapshot-frame-loss (D6).
+   */
+  getOrPollOpenSpec(cwd: string): { hit?: OpenSpecData; poll?: Promise<OpenSpecData> };
+  /**
+   * Cached pi-resources for `cwd` (stale-while-revalidate). `stale` = a watch
+   * event invalidated it or it is ≥ 5 min old: the caller serves it AND starts
+   * a background `refreshPiResources`. `undefined` = cold (never scanned).
+   * See change: optimize-polling-hot-paths (D9).
+   */
+  getPiResources(cwd: string): { data: PiResourcesResult; stale: boolean } | undefined;
+  /** Scan now (deduped per cwd) and store the result. */
+  refreshPiResources(cwd: string): Promise<PiResourcesResult>;
+  /**
+   * Resolve with a scan that STARTED AFTER this call. An in-flight scan that
+   * began earlier (it may predate an edit) is awaited, then a new one runs.
+   * See change: add-skill-atlas-screen (design D4).
+   */
+  refreshPiResourcesFresh(cwd: string): Promise<PiResourcesResult>;
+  /**
+   * Subscribe to pi-resource invalidation: `cwd` from the watcher, `undefined`
+   * for the global scope, or whatever `notifyPiResourcesInvalidated` passes.
+   * Throwing listeners are isolated. Returns an unsubscribe function.
+   * See change: add-skill-atlas-screen (design D5).
+   */
+  onPiResourcesInvalidated(listener: (cwd: string | undefined) => void): () => void;
+  /** Fan a non-watcher invalidation (e.g. a session's `commands_list`) out to listeners. */
+  notifyPiResourcesInvalidated(cwd: string | undefined): void;
+  /**
+   * Subscribe to OpenSpec updates. The optional `serialized` arg carries the
+   * worker's pre-stringified `data` (matches `JSON.stringify(data)` byte-for-byte).
+   * Broadcast wiring can pass it straight through to the wire so the payload
+   * is stringified exactly once per tick. Pending / disabled / force-path
+   * emits omit `serialized` and callers re-stringify as needed.
+   * See change: offload-openspec-poll-to-worker.
+   */
+  startPolling(
+    onChange: (cwd: string, data: OpenSpecData, serialized?: string) => void,
+    onFolderHead?: (msg: BrowserGitHeadUpdateMessage) => void,
+  ): void;
+  stopPolling(): void;
+  /** Apply a new OpenSpecPollConfig without losing cache. Safe to call mid-stream. */
+  reconfigurePolling(config: OpenSpecPollConfig): void;
+  /**
+   * Drop the memoized current-global-signature. Called by the routes after a
+   * profile save, init, or update so the next poll tick recomputes it instead
+   * of serving a stale value. See change: add-openspec-init-affordances.
+   */
+  invalidateOpenSpecSignatureCache(): void;
+  onDirectoryAdded(cwd: string): Promise<DirectoryAddedResult>;
+  /**
+   * Read-only snapshot of the folder-HEAD diff cache, for the browser connect
+   * snapshot. Empty when the lazily-created poll does not exist (polling not
+   * started, or already stopped). PURE — never mutates the cache.
+   * See change: fix-folder-header-worktree-branch-leak.
+   */
+  folderHeadSnapshot(): Array<{ cwd: string; branch: string | null }>;
+  /**
+   * Refresh the HEAD of every folder group key that ENTERED the observed set
+   * since the last recompute, without waiting for the next periodic cycle.
+   * Debounced (~500ms) so a registration burst collapses into one fan-out.
+   *
+   * Declared REQUIRED, but call sites still guard (`?.()` in `event-wiring`,
+   * `typeof … === "function"` in `browser-gateway`): hand-built
+   * `DirectoryService` fakes cast a fixed field set through
+   * `as unknown as DirectoryService`, so the type is only a compile-time claim
+   * about a runtime object that lacks the method.
+   * See change: fix-folder-header-worktree-branch-leak.
+   */
+  refreshFolderHeadsForEnteringKeys(): void;
+}
+
+// ── Jitter ─────────────────────────────────────────────────────────
+// 32-bit FNV-1a hash — cheap, stable, well-distributed for short strings.
+export function fnv1a32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+export function phaseOffsetMs(cwd: string, jitterSeconds: number): number {
+  if (!Number.isFinite(jitterSeconds) || jitterSeconds <= 0) return 0;
+  return fnv1a32(cwd) % (jitterSeconds * 1000);
+}
+
+// mtime helpers live in `./openspec-poll-fs-helpers.ts` (shared with the
+// `openspec-poll-worker.ts` worker). See change: offload-openspec-poll-to-worker.
+
+// ── Per-directory cache ────────────────────────────────────────────
+type PerChangeEntry = {
+  mtimeMs: number | undefined;
+  change: OpenSpecChange;
+};
+
+type DirCache = {
+  /** mtime of `<cwd>/openspec/changes/` when we last ran `openspec list`. */
+  listMtimeMs: number | undefined;
+  /** Cached list-result entries (raw shape from openspec list). */
+  listResult: Array<{ name: string; status: string; completedTasks: number; totalTasks: number }> | undefined;
+  changes: Map<string, PerChangeEntry>;
+  /** Last built OpenSpecData (what we broadcast). */
+  data: OpenSpecData | undefined;
+  /**
+   * `status --all` path state (see change: use-openspec-status-all). `mode`
+   * records which path produced `changes` stamps so a path switch (CLI upgrade
+   * or first `--all` rejection) never compares stamps across tracked sets.
+   */
+  mode: "all" | "fallback" | undefined;
+  /** Cwd-level stamp (`openspec/`, `changes/`, `config.yaml`, `schemas/**`); `undefined` = re-poll next tick. */
+  allCwdMtime: number | undefined;
+  /** Tracked extras per change from the last successful result; `null` before one (legacy set only). */
+  allExtras: Record<string, TrackedExtras> | null;
+  /** Worker build output BEFORE readiness/skills finalization, reused on gate hits. */
+  allData: OpenSpecData | undefined;
+  /**
+   * Pre-stringified payload from the worker. When present and matches
+   * `JSON.stringify(data)`, broadcast wrappers reuse this string so the main
+   * loop never re-stringifies the large payload. Reset to `undefined` on
+   * force-path refresh or any code path that mutates `data` without setting
+   * this. See change: offload-openspec-poll-to-worker.
+   */
+  serialized: string | undefined;
+};
+
+function emptyDirCache(): DirCache {
+  return {
+    listMtimeMs: undefined,
+    listResult: undefined,
+    changes: new Map(),
+    data: undefined,
+    serialized: undefined,
+    mode: undefined,
+    allCwdMtime: undefined,
+    allExtras: null,
+    allData: undefined,
+  };
+}
+
+export interface DirectoryServiceOptions {
+  /**
+   * Optional async post-processor applied to `OpenSpecData` after
+   * `buildOpenSpecData` and before caching. Used to inject the per-cwd
+   * `groupId` join from the OpenSpec change-grouping store. Used by the
+   * force-refresh path (`pollOne(force=true)`). The periodic / gated path
+   * (`pollOne(force=false)`) uses `getOpenSpecGroupAssignments` so the join
+   * can run inside the worker without crossing the main→worker boundary
+   * with a Promise-returning callback.
+   * Errors propagate as a logged warning + the unenriched data.
+   * See change: add-openspec-change-grouping.
+   */
+  enrichOpenSpecData?: (cwd: string, data: OpenSpecData) => Promise<OpenSpecData> | OpenSpecData;
+  /**
+   * Optional async fetcher for the per-cwd `groupId` assignments map (change
+   * name → groupId). When set, the periodic / gated poll path resolves
+   * assignments on the main thread (cheap group-store file read) and passes
+   * them into the worker so the worker emits a fully-joined, ready-to-broadcast
+   * payload. Errors fall back to an empty assignments map. See change:
+   * offload-openspec-poll-to-worker.
+   */
+  getOpenSpecGroupAssignments?: (cwd: string) => Promise<Record<string, string>> | Record<string, string>;
+  /**
+   * Optional override for the per-cwd OpenSpec change watcher. When omitted,
+   * a real `fs.watch`-backed watcher is constructed. Tests may inject a
+   * stub to avoid touching the real filesystem.
+   * See change: fix-openspec-taskcheck-delay.
+   */
+  changeWatcher?: OpenSpecChangeWatcher;
+  /**
+   * Optional override for the folder-HEAD fs.watch watcher. When omitted, a
+   * real `fs.watch`-backed watcher is constructed. Tests may inject a stub.
+   * See change: refresh-folder-header-branch.
+   */
+  folderHeadWatcher?: FolderHeadWatcher;
+  /**
+   * Optional override for the folder-HEAD HEAD reader (may be sync or async).
+   * When omitted, the async non-blocking `readHeadDisplayAsync` is used. Tests
+   * inject a fast deterministic reader (no real git spawn). See change:
+   * attribute-openspec-poll-eventloop-stalls.
+   */
+  folderHeadReadHead?: (cwd: string) => Promise<HeadInfo> | HeadInfo;
+  /** Test seam: injected `fs.watch` / home dir for the pi-resources invalidator. */
+  piResourcesWatch?: { watch?: PiWatchFn; homeDir?: string };
+  /** Test seam: clock for pi-resources staleness / idle release. */
+  now?: () => number;
+  /**
+   * Shared in-memory recorder for session-hydration timings. When set,
+   * `loadSessionEvents` records a sample per call and the same instance is
+   * read by `/api/health`. See change: instrument-session-hydration-timing.
+   */
+  hydrationMetrics?: HydrationMetrics;
+  /**
+   * Shared ring buffer for worst-case event-loop stalls. When set, each
+   * instrumented poll turn (`tickOpen`, `dirPollPre`, `dirPollPost`) whose own
+   * synchronous run exceeds `eventLoopSpikeFloorMs` self-records `{at, ms, turn}`.
+   * Read by `/api/health`. See change: attribute-openspec-poll-eventloop-stalls.
+   */
+  eventLoopSpikes?: EventLoopSpikeMetrics;
+  /**
+   * Floor (ms) at or above which an instrumented turn self-records a spike.
+   * Default 100. See change: attribute-openspec-poll-eventloop-stalls.
+   */
+  eventLoopSpikeFloorMs?: number;
+  /**
+   * Test seam: resolves the installed `@fission-ai/openspec` package version
+   * (the `--all`-unsupported cache key). Defaults to the real resolver.
+   * See change: use-openspec-status-all.
+   */
+  openspecVersionResolver?: () => Promise<string | null>;
+  /**
+   * Test seams for `OpenSpecData.workflowSchema`: CLI/semaphore deps of the
+   * main-thread `newer`/`conflict` `schema validate`, the package-schemas dir
+   * resolver, the user-level schemas dir, and `computeStatus` — the in-process
+   * implementation of the pool's `schemaStatus` request (threaded into the
+   * pool as `schemaStatusImpl`). Defaults are the real ones.
+   * See changes: add-pi-spec-driven-schema, move-workflow-schema-status-to-poll-worker.
+   */
+  workflowSchema?: {
+    deps?: Partial<WorkflowSchemaDeps>;
+    packageSchemasDir?: () => Promise<string | null>;
+    userSchemasDirPath?: string;
+    computeStatus?: (req: SchemaStatusRequest) => Promise<SchemaStatusResponse>;
+  };
+  /**
+   * Test seam: builds the poll worker pool (default `createOpenSpecPollWorkerPool`),
+   * so tests can record or delay requests or point the pool at a fixture worker.
+   * See change: move-workflow-schema-status-to-poll-worker.
+   */
+  pollWorkerPoolFactory?: (opts: PollWorkerPoolOptions) => PollWorkerPool;
+  /**
+   * Per-turn slow-tick alarm threshold (ms). Independent of the retained wall
+   * `durationMs` alarm: fires when any single instrumented turn's synchronous
+   * run exceeds this, naming the turn. Default 250. See change:
+   * attribute-openspec-poll-eventloop-stalls.
+   */
+  perTurnWarnMs?: number;
+  /**
+   * When `false`, session-event hydration runs in-process (no worker spawn).
+   * Default `true`. Mirrors `DashboardConfig.sessions.useLoadWorker`. See
+   * change: offload-session-events-load-to-worker.
+   */
+  useLoadWorker?: boolean;
+  /**
+   * Provider for the CURRENT global OpenSpec workflow-set signature, injected
+   * from the routes layer (the CLI-spawning helper is closure-local there).
+   * The signature is machine-global — identical for every cwd — so the polling
+   * service calls it at most once per poll generation and memoizes the
+   * promise; the memo is dropped on `invalidateOpenSpecSignatureCache()`.
+   * Resolving `undefined` (or rejecting) means unknown/failed this tick —
+   * a cwd is NEVER marked STALE on that basis. See change:
+   * add-openspec-init-affordances.
+   */
+  currentGlobalSignature?: (cwd: string) => Promise<string | undefined>;
+  /**
+   * Optional resolver for custom chat rows: replayed session events are
+   * stamped with their resolved `groupId` AFTER the worker returns, using the
+   * same resolver + helper as the live path, so a reloaded session tags
+   * identically to live. See change: add-custom-event-group-filters.
+   */
+  customEventGroupResolver?: import("./session/custom-event-group-resolver.js").CustomEventGroupResolver;
+}
+
+/**
+ * `status --all` gate: true when nothing the probe watches moved since the last
+ * successful poll — same cwd-level stamp, same change set, every change
+ * stamped (an unstamped/racy entry always trips) at its probed mtime.
+ */
+function statusAllGateHit(cache: DirCache, pre: ProbeResponse): boolean {
+  if (!cache.allData || cache.allCwdMtime === undefined || pre.cwdMtime !== cache.allCwdMtime) return false;
+  if (cache.changes.size !== pre.names.length) return false;
+  return pre.names.every((n) => {
+    const e = cache.changes.get(n);
+    return e !== undefined && e.mtimeMs !== undefined && e.mtimeMs === pre.changes[n];
+  });
+}
+
+/**
+ * Apply a successful worker build to the per-cwd cache: stamp non-racy changes,
+ * keep the previous entry of a racy one (an unseen one is applied unstamped),
+ * and prune changes absent from the result.
+ */
+function applyStatusAllBuild(cache: DirCache, out: Extract<StatusAllBuildResponse, { kind: "ok" }>): void {
+  const racySet = new Set(out.racyNames);
+  const live = new Set<string>();
+  for (const change of out.data.changes ?? []) {
+    live.add(change.name);
+    if (!racySet.has(change.name)) {
+      cache.changes.set(change.name, { mtimeMs: out.stampMtimes[change.name], change });
+    } else if (!cache.changes.has(change.name)) {
+      cache.changes.set(change.name, { mtimeMs: undefined, change });
+    }
+  }
+  for (const key of Array.from(cache.changes.keys())) if (!live.has(key)) cache.changes.delete(key);
+  cache.allCwdMtime = out.cwdStamp;
+  cache.allExtras = out.extras;
+  cache.allData = out.data;
+}
+
+export function createDirectoryService(
+  preferencesStore: PreferencesStore,
+  sessionManager: SessionManager,
+  initialConfig?: Partial<OpenSpecPollConfig>,
+  options: DirectoryServiceOptions = {},
+): DirectoryService {
+  let cfg: OpenSpecPollConfig = { ...DEFAULT_OPENSPEC_POLL, ...(initialConfig ?? {}) };
+
+  // ── Readiness fold machinery (add-openspec-init-affordances) ──────
+  //
+  // Memoized per-cwd config-root resolution. `resolveConfigRoot` spawns git;
+  // calling it per cwd per TICK would blow the stat-pass budget (P4), so each
+  // cwd resolves at most once per process (a cwd does not stop being a
+  // worktree). `null` (bare hub / unresolved) is a REFUSAL the callers skip —
+  // never coerced to cwd. See change: apply-checkout-root-to-worktree-ops (D5).
+  const readinessConfigRoots = new Map<string, string | null>();
+  function configRootFor(cwd: string): string | null {
+    if (!readinessConfigRoots.has(cwd)) {
+      let root: string | null = null;
+      try {
+        root = resolveConfigRoot(cwd);
+      } catch {
+        root = null;
+      }
+      readinessConfigRoots.set(cwd, root);
+    }
+    return readinessConfigRoots.get(cwd) ?? null;
+  }
+
+  /** `.pi/skills/openspec-explore/` exists at the resolved config root. */
+  function hasOpenSpecSkillsFor(cwd: string): boolean {
+    const root = configRootFor(cwd);
+    // `null` (bare hub / worktree-of-bare / unresolved probe) is a REFUSAL,
+    // never coerced to cwd (D5): probing under cwd would adopt whatever
+    // `.pi/` tree happens to live there.
+    if (root === null) return false;
+    return statMtimeOr(path.join(root, ".pi", "skills", "openspec-explore")) !== undefined;
+  }
+
+  /** cwd listed in `openspec.optOutDirectories` (pathKey-normalized match). */
+  function isOptedOutCwd(cwd: string): boolean {
+    if (cfg.optOutDirectories.length === 0) return false;
+    const platform = inferPlatform([cwd, ...cfg.optOutDirectories]);
+    const cwdKey = pathKey(cwd, platform);
+    return cfg.optOutDirectories.some((d) => pathKey(d, platform) === cwdKey);
+  }
+
+  // Memoized current-global-signature, keyed by poll generation. One spawn
+  // per tick (P1); bumped generations and explicit invalidation recompute.
+  // `resolved` tracks the provider's value so the SYNCHRONOUS reconfigure
+  // path can reuse it; a failed provider leaves it undefined and no cwd is
+  // ever falsely STALE (X10).
+  let sigGeneration = 0;
+  let sigMemo: { gen: number; promise: Promise<string | undefined>; resolved?: string } | null = null;
+  function signatureForTick(): Promise<string | undefined> {
+    if (!options.currentGlobalSignature) return Promise.resolve(undefined);
+    if (!sigMemo || sigMemo.gen !== sigGeneration) {
+      const memo: (typeof sigMemo) = { gen: sigGeneration, promise: Promise.resolve(undefined) };
+      memo.promise = options.currentGlobalSignature(process.cwd()).then(
+        (v) => {
+          memo.resolved = v;
+          return v;
+        },
+        () => undefined,
+      );
+      sigMemo = memo;
+    }
+    return sigMemo.promise;
+  }
+  function invalidateOpenSpecSignatureCache(): void {
+    sigMemo = null;
+  }
+
+  /**
+   * Attach `hasOpenSpecSkills` + `readiness` to a polled payload. Awaited at
+   * every pollOne exit; the signature await is already-resolved in the
+   * steady state (memoized per tick).
+   */
+  async function finalizeOpenSpecData(
+    cwd: string,
+    d: OpenSpecData,
+    breakReason?: BrokeReason,
+    schemaStatus?: Promise<OpenSpecWorkflowSchemaStatus | undefined>,
+  ): Promise<OpenSpecData> {
+    const skills = d.hasOpenSpecSkills ?? hasOpenSpecSkillsFor(cwd);
+    // Optional call: standalone directory-service constructions (tests) may
+    // pass a narrower preferences-store stub without the signature API.
+    const recorded = preferencesStore.getOpenSpecUpdateSignature?.(cwd) as string | undefined;
+    const needsSigCheck =
+      recorded !== undefined && skills !== false && d.initialized === true && d.pending !== true;
+    const current = needsSigCheck ? await signatureForTick() : undefined;
+    const readiness = deriveOpenSpecReadiness(
+      {
+        enabled: cfg.enabled !== false,
+        optedOut: isOptedOutCwd(cwd),
+        pending: d.pending === true,
+        hasOpenspecDir: d.hasOpenspecDir === true,
+        initialized: d.initialized === true,
+        hasOpenSpecSkills: skills,
+        recordedSignature: recorded,
+        currentSignature: current,
+      },
+      d,
+      { breakReason },
+    );
+    // Never carry a previous tick's `workflowSchema`: the key is set below only
+    // from THIS tick's request, so a failed computation omits it.
+    const { workflowSchema: _previous, ...carried } = d;
+    const out: OpenSpecData = { ...carried, hasOpenSpecSkills: skills, readiness };
+    // Separate from readiness (never alters it): successful-poll payloads only —
+    // the success call sites pass the status promise enqueued earlier in the tick.
+    if (schemaStatus && breakReason === undefined && d.initialized === true && hasWorkflowSchemaStatus(readiness)) {
+      const workflowSchema = await schemaStatus;
+      if (workflowSchema) out.workflowSchema = workflowSchema;
+    }
+    return out;
+  }
+
+  // `OpenSpecData.workflowSchema` — the filesystem part is computed by the poll
+  // worker's `schemaStatus` request on EVERY tick (gate hit included), enqueued
+  // once per tick right after the cwd's probe (status-all path) or before the
+  // list spawn (fallback path), and attached at finalize. Only the
+  // `newer`/`conflict` `schema validate` stays on the main thread: through the
+  // shared spawn semaphore, memoized by (cwd, fingerprint, CLI version).
+  // See change: move-workflow-schema-status-to-poll-worker.
+  const workflowSchemaOpts = options.workflowSchema;
+  let packageSchemasDirMemo: { version: string | null; dir: string | null } | null = null;
+  async function packageSchemasDirFor(version: string | null): Promise<string | null> {
+    if (workflowSchemaOpts?.packageSchemasDir) return workflowSchemaOpts.packageSchemasDir();
+    if (packageSchemasDirMemo && packageSchemasDirMemo.version === version) return packageSchemasDirMemo.dir;
+    const dir = await resolveOpenSpecPackageSchemasDir().catch(() => undefined);
+    if (dir === undefined) return null; // resolution threw: do not memoize
+    packageSchemasDirMemo = { version, dir }; // a `null` (no CLI) is memoized too: no per-tick re-walk
+    return dir;
+  }
+  type SchemaStatusInputs = Pick<SchemaStatusRequest, "packageSchemasDir" | "userSchemasDir">;
+  /**
+   * Main-thread inputs of the `schemaStatus` request (the worker module must not
+   * import them). Advisory: a resolution failure yields `{ error }`, never a throw,
+   * so it can neither fail a poll nor escape `pollOne`.
+   */
+  async function schemaStatusInputsFor(version: string | null): Promise<SchemaStatusInputs | { error: unknown }> {
+    try {
+      return {
+        packageSchemasDir: await packageSchemasDirFor(version),
+        userSchemasDir: workflowSchemaOpts?.userSchemasDirPath ?? userSchemasDir(),
+      };
+    } catch (error) {
+      return { error };
+    }
+  }
+  // cwds whose status computation failed on the previous tick (log once per failure run).
+  const schemaStatusFailing = new Set<string>();
+  function noteSchemaStatusFailure(cwd: string, err: unknown): void {
+    if (schemaStatusFailing.has(cwd)) return;
+    schemaStatusFailing.add(cwd);
+    console.warn(
+      `[openspec-poll] workflow-schema status failed for ${cwd} (worker request and in-process fallback); omitting workflowSchema this tick:`,
+      err,
+    );
+  }
+  /**
+   * Enqueue the `schemaStatus` request NOW (synchronously — callers rely on its
+   * place in the pool FIFO) and resolve the finished status. Never rejects: a
+   * computation failure (worker AND in-process fallback) resolves `undefined`,
+   * so the key is omitted for the tick and an abandoned promise is never an
+   * unhandled rejection.
+   */
+  function requestSchemaStatus(
+    cwd: string,
+    version: string | null,
+    inputs: SchemaStatusInputs | { error: unknown },
+  ): Promise<OpenSpecWorkflowSchemaStatus | undefined> {
+    if ("error" in inputs) {
+      noteSchemaStatusFailure(cwd, inputs.error);
+      return Promise.resolve(undefined);
+    }
+    const localVersion = version ?? "";
+    const run = async (): Promise<OpenSpecWorkflowSchemaStatus | undefined> => {
+      try {
+        const res = await ensureWorkerPool().schemaStatus({ cwd, localVersion, ...inputs });
+        let status = res.status;
+        if (res.validateFingerprint !== undefined) {
+          const validate = makeValidateLocal(cwd, localVersion, { semaphore, ...workflowSchemaOpts?.deps });
+          if (!(await validate(res.validateFingerprint))) status = { ...status, generated: "incompatible" };
+        }
+        schemaStatusFailing.delete(cwd);
+        return status;
+      } catch (err) {
+        noteSchemaStatusFailure(cwd, err);
+        return undefined; // advisory only: never fail or alter a poll
+      }
+    };
+    return run();
+  }
+
+  /** Cleared disabled payload — allocation-only, no stat, no CLI. */
+  function clearedDisabledPayload(): OpenSpecData {
+    return { initialized: false, pending: false, changes: [], hasOpenspecDir: false, readiness: { state: "GLOBAL_OFF" } };
+  }
+
+  const enrichOpenSpecData = options.enrichOpenSpecData;
+  const getOpenSpecGroupAssignments = options.getOpenSpecGroupAssignments;
+  const hydrationMetrics = options.hydrationMetrics;
+  // Reuse the openspec-poll slow-tick convention for the hydration warning.
+  const HYDRATION_SLOW_WARN_MS = 5000;
+
+  // Per-turn event-loop attribution. `eventLoopSpikes` (when set) receives a
+  // self-record for any instrumented turn whose OWN synchronous run exceeds
+  // `eventLoopSpikeFloorMs`; the per-turn alarm fires (independently of the
+  // wall `durationMs` alarm) at `perTurnWarnMs`. Attribution is per single
+  // synchronous turn, NEVER a sum across turns.
+  // See change: attribute-openspec-poll-eventloop-stalls.
+  const eventLoopSpikes = options.eventLoopSpikes;
+  const eventLoopSpikeFloorMs = Number.isFinite(options.eventLoopSpikeFloorMs)
+    ? Math.max(0, options.eventLoopSpikeFloorMs as number)
+    : 100;
+  const perTurnWarnMs = Number.isFinite(options.perTurnWarnMs)
+    ? Math.max(1, options.perTurnWarnMs as number)
+    : 250;
+  /**
+   * Time a single synchronous event-loop turn: given its `performance.now()`
+   * start, self-record `{at, ms, turn}` when its run reaches the spike floor,
+   * and emit the per-turn slow-tick warning when it reaches `perTurnWarnMs`.
+   * Measurement failures never propagate. Call at the turn's synchronous exit
+   * (before any `await`), NEVER across an await. See change above.
+   */
+  function recordTurn(turn: Exclude<EventLoopTurn, null>, startPerf: number): void {
+    try {
+      const ms = performance.now() - startPerf;
+      if (ms >= eventLoopSpikeFloorMs) {
+        eventLoopSpikes?.record({ at: Date.now(), ms, turn });
+      }
+      if (ms >= perTurnWarnMs) {
+        console.warn(
+          `[openspec-poll] slow turn: ${turn} ${Math.round(ms)}ms (threshold ${perTurnWarnMs}ms). Single synchronous turn blocked the event loop.`,
+        );
+      }
+    } catch { /* attribution must never break the poll */ }
+  }
+
+  // Lazy worker pool for the periodic / gated poll path. Constructed on
+  // `startPolling()`; disposed on `stopPolling()`. `cfg.useWorker === false`
+  // produces an in-process-only pool (no thread spawn). See change:
+  // offload-openspec-poll-to-worker.
+  let workerPool: PollWorkerPool | null = null;
+  function ensureWorkerPool(): PollWorkerPool {
+    if (workerPool) return workerPool;
+    const cpuCount = os.cpus().length || 1;
+    const poolOptions: PollWorkerPoolOptions = {
+      size: Math.max(1, Math.min(cfg.maxConcurrentSpawns, cpuCount)),
+      useWorker: cfg.useWorker !== false,
+      ...(workflowSchemaOpts?.computeStatus ? { schemaStatusImpl: workflowSchemaOpts.computeStatus } : {}),
+    };
+    workerPool = (options.pollWorkerPoolFactory ?? createOpenSpecPollWorkerPool)(poolOptions);
+    return workerPool;
+  }
+
+  // ── `openspec status --all` path state (use-openspec-status-all) ───
+  //
+  // `--all` support is a per-CLI-installation verdict keyed by the resolved
+  // package version, so an upgrade re-tries `--all` on the next poll.
+  const statusAllSupport = createStatusAllSupportCache();
+  const resolveCliVersionOnce = options.openspecVersionResolver ?? resolveOpenSpecPackageVersion;
+  // Concurrent polls (one per cwd per tick) share ONE in-flight resolution;
+  // sequential polls re-resolve, so an upgrade is picked up on the next poll.
+  let cliVersionInFlight: Promise<string | null> | null = null;
+  function resolveCliVersion(): Promise<string | null> {
+    if (!cliVersionInFlight) {
+      cliVersionInFlight = resolveCliVersionOnce()
+        .catch(() => null)
+        .finally(() => {
+          cliVersionInFlight = null;
+        });
+    }
+    return cliVersionInFlight;
+  }
+  // Server-canonical `<cwd>/openspec` (realpath), resolved once per cwd. The
+  // CLI emits canonical paths (symlinked cwds, `/tmp` → `/private/tmp`,
+  // junctions); probe + watcher paths are mapped onto this root.
+  const canonicalOpenspecDirs = new Map<string, string>();
+  async function canonicalOpenspecDir(cwd: string): Promise<string> {
+    const known = canonicalOpenspecDirs.get(cwd);
+    if (known) return known;
+    const lexical = path.join(cwd, "openspec");
+    try {
+      const real = await fs.promises.realpath(lexical);
+      canonicalOpenspecDirs.set(cwd, real);
+      return real;
+    } catch {
+      return lexical; // not cached: a later tick may find it
+    }
+  }
+
+  // Per-cwd `fs.watch` on `openspec/changes/`. On a relevant file event
+  // (debounced 300 ms) fans into `pollOne(cwd, false)` so the existing
+  // mtime-gate + semaphore + broadcast dedup do their job. Periodic poll
+  // remains as the fallback for missed events (network FS, EMFILE, etc.).
+  // See change: fix-openspec-taskcheck-delay.
+  const changeWatcher: OpenSpecChangeWatcher = options.changeWatcher ?? createOpenSpecChangeWatcher({
+    onChange: (cwd) => { void onWatcherFired(cwd); },
+    // Schema-declared outputs of the cached `status --all` result, so a
+    // not-yet-created output (e.g. `dependencies.yaml`) triggers a re-poll.
+    getOutputPatterns: (cwd) => {
+      const extras = caches.get(cwd)?.allExtras;
+      if (!extras) return undefined;
+      const out: Record<string, string[]> = {};
+      for (const [name, e] of Object.entries(extras)) out[name] = e.outputs;
+      return out;
+    },
+  });
+  const attachedWatcherCwds = new Set<string>();
+
+  // Folder-HEAD poll + watcher. The poll is constructed lazily on
+  // `startPolling` once the broadcast callback is known. The watcher is a
+  // fast trigger that fans HEAD-file events into `folderHeadPoll.refreshOne`
+  // (single broadcast path — never a parallel poll). Both recompute their
+  // work set from `computeFolderGroupKeys` each tick.
+  // See change: refresh-folder-header-branch.
+  let folderHeadPoll: FolderHeadPoll | null = null;
+  const folderHeadWatcher: FolderHeadWatcher = options.folderHeadWatcher ?? createFolderHeadWatcher({
+    // `refreshOne` is async (non-blocking git read); fire-and-forget with a
+    // catch so a rejected read can't surface as an unhandled rejection.
+    // See change: attribute-openspec-poll-eventloop-stalls.
+    onChange: (cwd) => { folderHeadPoll?.refreshOne(cwd)?.catch(() => { /* logged inside */ }); },
+  });
+  const attachedFolderHeadCwds = new Set<string>();
+  // The most recently COMPUTED folder group-key set, held as CANONICAL
+  // `pathKey`s rather than display paths: cosmetic display drift (`/repo` vs
+  // `/repo/`, drive-letter or case changes, a pin swapping which display path
+  // wins a collision) would otherwise read as a key ENTERING the set and cost a
+  // redundant git read on every drift. `computeFolderGroupKeys` already
+  // de-duplicates by `pathKey`, so this just keeps the entry predicate on the
+  // same footing. Display paths are still what gets read and broadcast.
+  //
+  // Single writer: `recomputeFolderHeadKeys` below, called by the periodic tick
+  // and by every entry trigger. Two independent updaters would let a
+  // trigger-side recompute mark a key "previously seen" that no refresh read.
+  // See change: fix-folder-header-worktree-branch-leak.
+  let previousFolderHeadKeys = new Set<string>();
+  let folderHeadEntryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const caches = new Map<string, DirCache>();
+  // pi-resources: scanned on demand, never on a timer. Entries are revalidated
+  // in the background when stale (watch event or ≥ 5 min). Map order = LRU.
+  // See change: optimize-polling-hot-paths (D9).
+  interface PiResourcesEntry {
+    data: PiResourcesResult;
+    scannedAt: number;
+    lastRequestedAt: number;
+    stale: boolean;
+  }
+  const PI_RESOURCES_STALE_MS = 5 * 60_000;
+  const PI_RESOURCES_WATCH_IDLE_MS = 10 * 60_000;
+  const PI_RESOURCES_MAX_WATCHED = 16;
+  const PI_RESOURCES_MAX_DATA = 64;
+  const piResourcesNow = options.now ?? Date.now;
+  const piResourcesCache = new Map<string, PiResourcesEntry>();
+  const piResourcesInFlight = new Map<string, Promise<PiResourcesResult>>();
+  const piResourcesVersion = new Map<string, number>();
+  // Start sequence of each scan (monotonic) + of the in-flight scan per cwd, so a
+  // fresh read can tell a scan that predates it. See change: add-skill-atlas-screen.
+  let piResourcesScanSeq = 0;
+  const piResourcesInFlightSeq = new Map<string, number>();
+  const piResourcesInvalidationListeners = new Set<(cwd: string | undefined) => void>();
+  function notifyPiResourcesInvalidated(cwd: string | undefined): void {
+    for (const listener of [...piResourcesInvalidationListeners]) {
+      try { listener(cwd); } catch (err) { console.error("[pi-resources] invalidation listener failed:", err); }
+    }
+  }
+  const piResourcesWatcher: PiResourcesWatcher = createPiResourcesWatcher({
+    onInvalidate: (cwd) => invalidatePiResources(cwd),
+    ...options.piResourcesWatch,
+  });
+
+  const semaphore: Semaphore = createSemaphore(cfg.maxConcurrentSpawns);
+
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let onChangeCallback: ((cwd: string, data: OpenSpecData, serialized?: string) => void) | null = null;
+  const scheduledPhaseTimers = new Set<ReturnType<typeof setTimeout>>();
+  // cwds for which the current poll cycle broadcast a transitional
+  // `pending:true` that the diff-guarded wrappers must still clear, even when
+  // the final payload's JSON equals the prior cache (e.g. a second
+  // back-to-back empty/failed poll). Without this the spinner would stay stuck
+  // after the pending emit. See change: emit-openspec-pending-from-poll.
+  const pendingEmittedCwds = new Set<string>();
+
+  // In-progress session loads for dedup
+  const loadingSet = new Set<string>();
+
+  // Lazy session-load worker pool. Constructed on first `loadSessionEvents`;
+  // disposed on `stopPolling`. `useLoadWorker === false` → in-process-only
+  // pool (no thread spawn). Maps sessionId → in-flight jobId so `cancelLoad`
+  // can drop a wasted hydration. See change: offload-session-events-load-to-worker.
+  let loadWorkerPool: SessionLoadWorkerPool | null = null;
+  const useLoadWorker = options.useLoadWorker !== false;
+  const inFlightLoadJobs = new Map<string, number>();
+  // Set by `stopPolling`, cleared by `startPolling`. While set, the public
+  // `ensureLoadWorkerPool()` returns `null` so a route can run in-process
+  // rather than spawning a pool during shutdown. See change:
+  // fix-session-diff-durable-source.
+  let loadWorkerPoolDisposed = false;
+  function ensureLoadWorkerPool(): SessionLoadWorkerPool | null {
+    if (loadWorkerPoolDisposed) return null;
+    if (loadWorkerPool) return loadWorkerPool;
+    const cpuCount = os.cpus().length || 1;
+    loadWorkerPool = createSessionLoadWorkerPool({
+      size: Math.max(1, Math.min(cfg.maxConcurrentSpawns, cpuCount)),
+      useWorker: useLoadWorker,
+    });
+    return loadWorkerPool;
+  }
+
+  function computeKnownDirectories(): string[] {
+    const dirs = new Set<string>();
+    for (const dir of preferencesStore.getPinnedDirectories()) dirs.add(dir);
+    // Only non-ended sessions contribute their cwd to the work set. Pinning
+    // remains an explicit "watch this" signal independent of session state
+    // and is handled above. See change: scope-openspec-poll-to-active-cwds.
+    for (const session of sessionManager.listAll()) {
+      if (session.status !== "ended") dirs.add(session.cwd);
+    }
+    return Array.from(dirs);
+  }
+
+  /**
+   * `openspec_get` tracked-cwd gate (D6): a cwd is tracked when ANY session
+   * (any status — a rendered ended card must still reconcile its entry) holds
+   * it as cwd, or it is pinned. Wider than `computeKnownDirectories` (which
+   * drops ended sessions) by design.
+   * See change: fix-connect-snapshot-frame-loss.
+   */
+  function isTrackedCwd(cwd: string): boolean {
+    if (preferencesStore.getPinnedDirectories().includes(cwd)) return true;
+    return sessionManager.listAll().some((s) => s.cwd === cwd);
+  }
+
+  function discoverSessions(cwd: string): DiscoveredSession[] {
+    return discoverSessionsForCwd(cwd);
+  }
+
+  async function loadSessionEvents(sessionId: string, sessionFile: string, knownContextWindow?: number): Promise<LoadResult> {
+    if (loadingSet.has(sessionId)) {
+      return { success: false, events: [], error: "already_loading" };
+    }
+    loadingSet.add(sessionId);
+    // Instrumentation only — never alters the returned LoadResult. fileBytes
+    // is best-effort (stat may race a delete). entry/event counts default to
+    // 0 on the failure path. See change: instrument-session-hydration-timing.
+    const start = performance.now();
+    let fileBytes = 0;
+    try {
+      fileBytes = fs.statSync(sessionFile).size;
+    } catch {
+      // ignore — fileBytes stays 0
+    }
+    let entryCount = 0;
+    let eventCount = 0;
+    // Parse + replay run in a worker_threads worker (off the main loop) when
+    // `useLoadWorker` is on; the pool falls back in-process on
+    // spawn/crash/timeout. `cancelLoad(sessionId)` drops the job via this
+    // jobId. See change: offload-session-events-load-to-worker.
+    const pool = ensureLoadWorkerPool();
+    if (!pool) {
+      // Post-dispose: no pool to dispatch to. Callers do not hydrate after
+      // `stopPolling`; fail cleanly rather than spawning a fresh pool.
+      loadingSet.delete(sessionId);
+      return { success: false, events: [], error: "disposed" };
+    }
+    const { jobId, result } = pool.load({ sessionId, sessionFile, knownContextWindow });
+    inFlightLoadJobs.set(sessionId, jobId);
+    try {
+      const out = await result;
+      entryCount = out.entryCount ?? 0;
+      eventCount = out.events.length;
+      if (out.success) {
+        // Replay-path group annotation — same resolver + helper as the live
+        // path, so a reloaded session tags identically to live (design D1).
+        // LoadedEvent is structurally a DashboardEvent.
+        if (options.customEventGroupResolver) {
+          for (const ev of out.events) {
+            if (!isGroupableCustomEvent(ev)) continue;
+            const customType = customEventTypeOfEvent(ev);
+            if (customType === undefined) continue;
+            // Fail-open parity with the live path: a resolution failure
+            // leaves THIS event unannotated (client → other) and never
+            // fails the whole session load.
+            try {
+              stampEventGroup(ev, await options.customEventGroupResolver.resolve(customType));
+            } catch (err) {
+              console.warn(
+                `[custom-event-groups] replay annotation failed for ${customType} (${sessionId}):`,
+                err instanceof Error ? err.message : err,
+              );
+            }
+          }
+        }
+        return { success: true, events: out.events, entryCount: out.entryCount, leafEntryId: out.leafEntryId };
+      }
+      return { success: false, events: [], error: out.error };
+    } finally {
+      loadingSet.delete(sessionId);
+      inFlightLoadJobs.delete(sessionId);
+      // Instrumentation must never change the load outcome — isolate any
+      // recorder/logging throw so it can't reject a successful LoadResult.
+      try {
+        const wallMs = performance.now() - start;
+        hydrationMetrics?.record({ sessionId, wallMs, fileBytes, entryCount, eventCount, at: Date.now() });
+        if (wallMs > HYDRATION_SLOW_WARN_MS) {
+          console.warn(`[hydration] slow load: ${Math.round(wallMs)}ms (session=${sessionId} bytes=${fileBytes})`);
+        }
+      } catch {
+        // swallow — measurement-only path
+      }
+    }
+  }
+
+  function cancelLoad(sessionId: string): void {
+    const jobId = inFlightLoadJobs.get(sessionId);
+    if (jobId !== undefined) loadWorkerPool?.cancel(jobId);
+  }
+
+  /**
+   * Hydrate a retained REMOTE transcript off the main thread.
+   *
+   * The read (`RemoteTranscriptStore.readRaw`) has already happened by the time
+   * this is called; what is left is the CPU-bound split + parse + replay, which
+   * runs in the same worker as the local path.
+   * See change: offload-retained-transcript-replay (D2, D6).
+   */
+  async function loadRetainedEvents(
+    sessionId: string,
+    raw: string,
+    knownContextWindow?: number,
+  ): Promise<LoadResult> {
+    // Instrumentation only — never alters the returned LoadResult.
+    // `Buffer.byteLength(raw)` is the decoded text's true size, comparable with
+    // the local path's `statSync().size` for the UTF-8 JSONL a transcript is;
+    // summing a split entries array instead would undercount by every newline.
+    // See change: offload-retained-transcript-replay (D6).
+    const start = performance.now();
+    const fileBytes = Buffer.byteLength(raw);
+    let entryCount = 0;
+    let eventCount = 0;
+    const pool = ensureLoadWorkerPool();
+    if (!pool) {
+      // Post-dispose: no pool to dispatch to. No sample is recorded — this read
+      // never reached the parse-and-replay stage, and the ring holds 20 slots.
+      return { success: false, events: [], error: "disposed" };
+    }
+    const { jobId, result } = pool.load({ sessionId, raw, knownContextWindow });
+    // Registered like a local job so `cancelLoad(sessionId)` — called by
+    // `browser-gateway` on last-unsubscribe — reaches it.
+    inFlightLoadJobs.set(sessionId, jobId);
+    try {
+      const out = await result;
+      entryCount = out.entryCount ?? 0;
+      eventCount = out.events.length;
+      if (out.success) return { success: true, events: out.events, entryCount: out.entryCount, leafEntryId: out.leafEntryId };
+      return { success: false, events: [], error: out.error };
+    } finally {
+      inFlightLoadJobs.delete(sessionId);
+      // Instrumentation must never change the load outcome — isolate any
+      // recorder/logging throw so it cannot reject a successful load.
+      try {
+        const wallMs = performance.now() - start;
+        hydrationMetrics?.record({ sessionId, wallMs, fileBytes, entryCount, eventCount, at: Date.now() });
+        if (wallMs > HYDRATION_SLOW_WARN_MS) {
+          console.warn(`[hydration] slow load: ${Math.round(wallMs)}ms (session=${sessionId} bytes=${fileBytes})`);
+        }
+      } catch {
+        // swallow — measurement-only path
+      }
+    }
+  }
+
+  /** Per-cwd groupId assignments for the worker-side join; any failure degrades to "no join". */
+  async function groupAssignmentsFor(cwd: string): Promise<Record<string, string>> {
+    if (!getOpenSpecGroupAssignments) return {};
+    try {
+      const assignments = await Promise.resolve(getOpenSpecGroupAssignments(cwd));
+      return assignments && typeof assignments === "object" ? assignments : {};
+    } catch (err) {
+      if (typeof process !== "undefined" && /pi-dashboard|openspec-poll/.test(process.env?.DEBUG ?? "")) {
+        // eslint-disable-next-line no-console
+        console.warn(`[directory-service] getOpenSpecGroupAssignments(${cwd}) threw:`, err);
+      }
+      return {};
+    }
+  }
+
+  // ── `status --all` poll (use-openspec-status-all) ─────────────────
+  //
+  // Turns: `dirPollPre` (caller prefix) → await version/canonical dir/probe →
+  // `dirPollGate` (gate comparison + CLI dispatch) → await CLI → `dirPollCli`
+  // (stdout received → build dispatched) → await build → `dirPollPost`
+  // (response applied; the caller times the broadcast). Returns `null` when
+  // the CLI turned out not to support `--all`, so the caller continues on the
+  // fallback in the same poll. Also hands back the tick's `schemaStatus`
+  // request (enqueued right after the probe), so the fallback reuses it.
+  async function pollOneStatusAll(
+    cwd: string,
+    force: boolean,
+    cache: DirCache,
+    ctx: { hasOpenspecDir: boolean; cliVersion: string | null },
+  ): Promise<{ data: OpenSpecData | null; schemaStatus: Promise<OpenSpecWorkflowSchemaStatus | undefined> }> {
+    const { hasOpenspecDir, cliVersion } = ctx;
+    const gateEnabled = cfg.changeDetection === "mtime" && !force;
+    if (cache.mode !== "all") {
+      cache.mode = "all";
+      cache.changes.clear();
+      cache.listMtimeMs = undefined;
+      cache.listResult = undefined;
+      cache.allCwdMtime = undefined;
+      cache.allExtras = null;
+      cache.allData = undefined;
+    }
+
+    const openspecDir = await canonicalOpenspecDir(cwd);
+    const probeReq = { openspecDir, extras: cache.allExtras };
+    const schemaInputs = await schemaStatusInputsFor(cliVersion);
+    const pool = ensureWorkerPool();
+    const probePromise = pool.probe(probeReq);
+    // Enqueued right after the probe (before it is awaited): the FIFO keeps the
+    // probe ahead of it, the CLI spawn and `build` never wait for it.
+    const schemaStatus = requestSchemaStatus(cwd, cliVersion, schemaInputs);
+    const pre = await probePromise.catch(() => ({
+      cwdMtime: undefined as number | undefined,
+      names: [] as string[],
+      changes: {} as Record<string, number | undefined>,
+    }));
+
+    // dirPollGate: gate comparison + CLI dispatch. Synchronous up to the spawn await.
+    const gateStart = performance.now();
+    if (gateEnabled && statusAllGateHit(cache, pre)) {
+      recordTurn("dirPollGate", gateStart);
+      const reused = await finalizeOpenSpecData(cwd, cache.allData as OpenSpecData, undefined, schemaStatus);
+      cache.data = reused;
+      cache.serialized = undefined;
+      caches.set(cwd, cache);
+      return { data: reused, schemaStatus };
+    }
+    const rawPromise = semaphore.run(() => runOpenSpecStatusAll(cwd));
+    // Read concurrently with the CLI; awaited before the `dirPollCli` turn
+    // starts so that turn never spans an await.
+    const groupsPromise = groupAssignmentsFor(cwd);
+    recordTurn("dirPollGate", gateStart);
+    const raw = await rawPromise;
+    const groupAssignments = await groupsPromise;
+
+    // dirPollCli: CLI stdout received → build request dispatched.
+    const cliStart = performance.now();
+    const failedPayload = async (): Promise<OpenSpecData> => {
+      // BROKEN · cli-failed — handled exactly like a failed `openspec list`:
+      // cache blanked, retried on the next gated tick (allCwdMtime undefined).
+      const empty = await finalizeOpenSpecData(
+        cwd,
+        { initialized: false, changes: [], hasOpenspecDir },
+        "cli-failed",
+      );
+      cache.data = empty;
+      cache.allCwdMtime = undefined;
+      cache.allExtras = null;
+      cache.allData = undefined;
+      cache.listMtimeMs = undefined;
+      cache.listResult = undefined;
+      cache.serialized = undefined;
+      cache.changes.clear();
+      caches.set(cwd, cache);
+      return empty;
+    };
+    const cachedChanges: Record<string, OpenSpecChange> = {};
+    for (const [name, entry] of cache.changes) cachedChanges[name] = entry.change;
+    const buildPromise = pool.build({
+      cwd,
+      openspecDir,
+      hasOpenspecDir,
+      raw,
+      probeReq,
+      pre,
+      cachedChanges,
+      groupAssignments,
+    });
+    recordTurn("dirPollCli", cliStart);
+    let out: Awaited<typeof buildPromise>;
+    try {
+      out = await buildPromise;
+    } catch {
+      return { data: await failedPayload(), schemaStatus };
+    }
+
+    // dirPollPost: the build response applied to the cache. Timed up to its
+    // first await — never across one.
+    const postStart = performance.now();
+    if (out.kind === "unsupported") {
+      statusAllSupport.markUnsupported(cliVersion);
+      recordTurn("dirPollPost", postStart);
+      return { data: null, schemaStatus }; // continue on the fallback in this same poll
+    }
+    if (out.kind === "failed") {
+      recordTurn("dirPollPost", postStart);
+      return { data: await failedPayload(), schemaStatus };
+    }
+
+    applyStatusAllBuild(cache, out);
+    statusAllSupport.markSupported(); // a re-evaluating force refresh may flip a null-version verdict
+    recordTurn("dirPollPost", postStart);
+    const finalized = await finalizeOpenSpecData(cwd, out.data, undefined, schemaStatus);
+    cache.data = finalized;
+    // The worker's serialized form no longer matches (readiness/skills are
+    // attached on main); wrappers re-stringify once. See change:
+    // add-openspec-init-affordances.
+    cache.serialized = undefined;
+    caches.set(cwd, cache);
+    return { data: finalized, schemaStatus };
+  }
+
+  // ── Core gated poll ──────────────────────────────────────────────
+  // Contract:
+  //   - `force=true` bypasses both the list-mtime and per-change-mtime gates.
+  //   - Every CLI spawn goes through the shared semaphore.
+  //   - Cache is updated atomically per directory: on any failure the
+  //     old cache stays intact.
+  async function pollOne(cwd: string, force: boolean): Promise<OpenSpecData> {
+    const cache = caches.get(cwd) ?? emptyDirCache();
+    const gateEnabled = cfg.changeDetection === "mtime" && !force;
+
+    const openspecRoot = path.join(cwd, "openspec");
+    const changesRoot = path.join(cwd, "openspec", "changes");
+    // `hasOpenspecDir` is strictly weaker than `initialized`: it's true when
+    // the project is OpenSpec-initialized (`openspec/` dir exists) even if no
+    // proposals are authored yet (no `openspec/changes/` subdir). The session
+    // card visibility gate uses this signal so a fresh `openspec init` project
+    // still shows the OPENSPEC subcard as an init/attach affordance.
+    // See change: auto-hide-empty-session-subcards.
+    const hasOpenspecDir = statMtimeOr(openspecRoot) !== undefined;
+    const rootMtime = statMtimeOr(changesRoot);
+
+    // If the changes/ subdirectory doesn't exist, short-circuit (matches old
+    // behavior re: list polling). `hasOpenspecDir` still carries the broader
+    // "is this an OpenSpec project?" signal for the client.
+    if (rootMtime === undefined) {
+      // BROKEN · missing-changes-dir: `openspec/` exists but `changes/` does
+      // not — remediable by re-running init. See change:
+      // add-openspec-init-affordances.
+      const empty = await finalizeOpenSpecData(
+        cwd,
+        { initialized: false, changes: [], hasOpenspecDir },
+        "missing-changes-dir",
+      );
+      cache.data = empty;
+      cache.listMtimeMs = undefined;
+      cache.listResult = undefined;
+      cache.serialized = undefined;
+      cache.changes.clear();
+      caches.set(cwd, cache);
+      return empty;
+    }
+
+    // ── `openspec status --all` path (preferred) ──
+    //
+    // One spawn per directory serves both the gated and the force path. An
+    // older CLI that rejects `--all` is detected once per installed version;
+    // the poll that detects it continues on the fallback below in the SAME
+    // poll (`pollOneStatusAll` resolves `null`). See change:
+    // use-openspec-status-all.
+    const cliVersion = await resolveCliVersion();
+    //
+    // The `schemaStatus` request is enqueued at most once per tick: inside
+    // `pollOneStatusAll` (right after its probe) or, on the fallback path,
+    // before the `list` spawn. See change: move-workflow-schema-status-to-poll-worker.
+    let schemaStatus: Promise<OpenSpecWorkflowSchemaStatus | undefined> | undefined;
+    if (!statusAllSupport.isKnownUnsupported(cliVersion, force)) {
+      const handled = await pollOneStatusAll(cwd, force, cache, { hasOpenspecDir, cliVersion });
+      schemaStatus = handled.schemaStatus;
+      if (handled.data) return handled.data;
+    }
+    schemaStatus ??= requestSchemaStatus(cwd, cliVersion, await schemaStatusInputsFor(cliVersion));
+    if (cache.mode !== "fallback") {
+      // Entering (or re-entering) the fallback path: drop `--all` state so
+      // stamps over the two different tracked sets are never compared.
+      cache.mode = "fallback";
+      cache.changes.clear();
+      cache.allCwdMtime = undefined;
+      cache.allExtras = null;
+      cache.allData = undefined;
+      cache.listMtimeMs = undefined;
+      cache.listResult = undefined;
+    }
+
+    // ── Step 1: list (gated) ──
+    //
+    // The list-step gate signal must catch in-place edits to <change>/tasks.md
+    // because `completedTasks` / `totalTasks` are derived from those files. POSIX
+    // dir-mtime alone misses these edits (it only advances on entry create/
+    // delete/rename), so we union the parent-dir mtime with each known
+    // tasks.md file's mtime. See change: fix-openspec-mtime-gate-blind-spots.
+    let listResult: typeof cache.listResult = cache.listResult;
+    let listSignal: number | undefined = rootMtime;
+    if (cache.listResult !== undefined) {
+      const taskFiles = cache.listResult.map((c) =>
+        path.join(changesRoot, c.name, "tasks.md"),
+      );
+      listSignal = effectiveMtimeOr([changesRoot, ...taskFiles]) ?? rootMtime;
+    }
+    const listCacheValid = gateEnabled && cache.listMtimeMs === listSignal && cache.listResult !== undefined;
+    if (!listCacheValid) {
+      const raw = await semaphore.run(() => runOpenSpecList(cwd));
+      if (!raw || !Array.isArray(raw.changes)) {
+        // BROKEN · cli-failed: the CLI itself failed — NOT remediable by
+        // re-running init with --force. See change:
+        // add-openspec-init-affordances.
+        const empty = await finalizeOpenSpecData(
+          cwd,
+          { initialized: false, changes: [], hasOpenspecDir },
+          "cli-failed",
+        );
+        cache.data = empty;
+        cache.listMtimeMs = rootMtime;
+        cache.listResult = undefined;
+        cache.serialized = undefined;
+        cache.changes.clear();
+        caches.set(cwd, cache);
+        return empty;
+      }
+      listResult = raw.changes;
+      // Recompute the signal against the freshly returned change set so the
+      // cache stamps the same shape we'll compare against on the next tick.
+      const taskFiles = (listResult ?? []).map((c) =>
+        path.join(changesRoot, c.name, "tasks.md"),
+      );
+      cache.listMtimeMs = effectiveMtimeOr([changesRoot, ...taskFiles]) ?? rootMtime;
+      cache.listResult = listResult;
+    }
+
+    // Prune cache for changes no longer present.
+    const liveNames = new Set((listResult ?? []).map((c) => c.name));
+    for (const key of Array.from(cache.changes.keys())) {
+      if (!liveNames.has(key)) cache.changes.delete(key);
+    }
+
+    // ── Step 2 + 3 (gated, non-force): dispatch to worker pool ──
+    //
+    // The worker computes pre/post-call mtimes, runs `deriveArtifactStatus`
+    // per change, applies the TOCTOU gate, assembles `buildOpenSpecData`,
+    // joins `groupAssignments`, and serializes the payload — all off the
+    // main event loop. The main thread keeps ownership of the CLI spawn
+    // (above), the spawn semaphore, the cache, and the broadcast.
+    // See change: offload-openspec-poll-to-worker.
+    if (!force) {
+      const perChange: PollWorkerPerChangeIn[] = (listResult ?? []).map((c) => {
+        const cached = cache.changes.get(c.name);
+        return {
+          name: c.name,
+          cached: cached
+            ? {
+                mtimeMs: cached.mtimeMs,
+                artifacts: cached.change.artifacts.map((a) => ({ id: a.id, status: a.status })),
+                ...(cached.change.isComplete !== undefined ? { isComplete: cached.change.isComplete } : {}),
+              }
+            : null,
+        };
+      });
+
+      const groupAssignments = await groupAssignmentsFor(cwd);
+
+      const req: PollWorkerRequest = {
+        cwd,
+        changesRoot,
+        hasOpenspecDir,
+        gateEnabled,
+        listResult: listResult ?? [],
+        perChange,
+        groupAssignments,
+      };
+      const out = await ensureWorkerPool().process(req);
+      const racySet = new Set(out.racyNames);
+      for (const change of out.data.changes ?? []) {
+        if (racySet.has(change.name)) continue; // preserve prior cache for racy
+        cache.changes.set(change.name, { mtimeMs: out.stampMtimes[change.name], change });
+      }
+      // Attach hasOpenSpecSkills + readiness on the main thread — the worker
+      // has neither the config, the preferences store, nor the signature
+      // provider. The worker's pre-serialized payload no longer matches, so
+      // the cached form is invalidated (one extra stringify per tick — the
+      // correctness cost of the fold). See change:
+      // add-openspec-init-affordances.
+      const finalized = await finalizeOpenSpecData(cwd, out.data, undefined, schemaStatus);
+      cache.data = finalized;
+      cache.serialized = undefined;
+      caches.set(cwd, cache);
+      return finalized;
+    }
+
+    // ── Force path (force === true): per-change `openspec status` CLI ──
+    //
+    // TOCTOU note: we capture the file-aware effective mtime BEFORE invoking
+    // `openspec status` and stamp THAT value into the cache. If a tracked
+    // artifact file is written during the CLI invocation, the post-call mtime
+    // will differ from `preCallMtime` and we discard this tick's status for
+    // that change — leaving the prior cache entry (if any) untouched so the
+    // next gated tick re-polls naturally. See change:
+    // fix-openspec-mtime-gate-toctou.
+    const statusResults = new Map<string, { artifacts?: Array<{ id: string; status: string }>; isComplete?: boolean } | null>();
+    const preCallMtimes = new Map<string, number | undefined>();
+    const racyNames = new Set<string>();
+
+    // Per-change evidence probes for the local-derivation path (kept here as
+    // a defensive fallback; the force branch normally uses `runOpenSpecStatus`).
+    // See change: optimize-openspec-poll-derive-artifacts-locally.
+    const designFactory = createFsProbeFactory(cwd);
+    const specsFactory = createFsSpecsProbeFactory(cwd);
+
+    await Promise.all((listResult ?? []).map(async (c) => {
+      // File-aware effective mtime: catches in-place edits to tasks.md /
+      // proposal.md / design.md that POSIX dir-mtime misses. See change:
+      // fix-openspec-mtime-gate-blind-spots.
+      const preCallMtime = effectiveMtimeOr(perChangeArtifactPaths(changesRoot, c.name));
+      preCallMtimes.set(c.name, preCallMtime);
+      const cached = cache.changes.get(c.name);
+
+      if (gateEnabled && cached && cached.mtimeMs !== undefined && cached.mtimeMs === preCallMtime) {
+        // Cache hit. Reuse the artifacts/isComplete from the cached OpenSpecChange.
+        statusResults.set(c.name, {
+          artifacts: cached.change.artifacts.map((a) => ({ id: a.id, status: a.status })),
+          ...(cached.change.isComplete !== undefined ? { isComplete: cached.change.isComplete } : {}),
+        });
+        return;
+      }
+
+      // Periodic / gated path (force === false): derive per-artifact status
+      // from local files instead of spawning `openspec status` per change (the
+      // spawn storm). Force-refresh (force === true) keeps the authoritative
+      // CLI spawn. The TOCTOU mtime gate below is unchanged — derivation reads
+      // the same files the gate stats. See change:
+      // optimize-openspec-poll-derive-artifacts-locally.
+      const status = force
+        ? await semaphore.run(() => runOpenSpecStatus(cwd, c.name))
+        : deriveArtifactStatus(path.join(changesRoot, c.name), c, {
+            design: designFactory(c.name),
+            specs: specsFactory(c.name),
+          });
+
+      // TOCTOU check. If any tracked artifact path was written between the
+      // pre-call stat and now, the CLI's view of disk is stale relative to
+      // the mtime we'd stamp — discard. See change: fix-openspec-mtime-gate-toctou.
+      const postCallMtime = effectiveMtimeOr(perChangeArtifactPaths(changesRoot, c.name));
+      if (preCallMtime !== postCallMtime) {
+        if (typeof process !== "undefined" && /pi-dashboard|openspec-poll/.test(process.env?.DEBUG ?? "")) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[fix-openspec-mtime-gate-toctou] discarded racy status for ${c.name} (pre=${preCallMtime} post=${postCallMtime})`,
+          );
+        }
+        racyNames.add(c.name);
+        if (cached) {
+          // Reuse the prior cached status so buildOpenSpecData doesn't render
+          // an empty artifact list for this tick. Cache entry is preserved
+          // unchanged below by skipping the stamping loop for racy names.
+          statusResults.set(c.name, {
+            artifacts: cached.change.artifacts.map((a) => ({ id: a.id, status: a.status })),
+            ...(cached.change.isComplete !== undefined ? { isComplete: cached.change.isComplete } : {}),
+          });
+        }
+        return;
+      }
+      statusResults.set(c.name, status);
+    }));
+
+    // ── Step 3: build + cache + return ──
+    let data = buildOpenSpecData(
+      { changes: listResult ?? [] },
+      statusResults,
+      createFsProbeFactory(cwd),
+      createFsSpecsProbeFactory(cwd),
+    );
+    // `hasOpenspecDir` is true here by definition: we only reach Step 3 when
+    // `<cwd>/openspec/changes/` exists, which implies `<cwd>/openspec/` exists.
+    // See change: auto-hide-empty-session-subcards.
+    data = { ...data, hasOpenspecDir };
+    if (enrichOpenSpecData) {
+      try {
+        data = await enrichOpenSpecData(cwd, data);
+      } catch (err) {
+        // Don\'t fail the whole poll if the enricher (e.g. group-store read)
+        // throws — log and continue with the unenriched data. See change:
+        // add-openspec-change-grouping.
+        // eslint-disable-next-line no-console
+        if (typeof process !== "undefined" && /pi-dashboard|openspec-poll/.test(process.env?.DEBUG ?? "")) {
+          // eslint-disable-next-line no-console
+          console.warn(`[directory-service] enrichOpenSpecData(${cwd}) threw:`, err);
+        }
+      }
+    }
+
+    // Attach hasOpenSpecSkills + readiness (force path). See change:
+    // add-openspec-init-affordances.
+    data = await finalizeOpenSpecData(cwd, data, undefined, schemaStatus);
+
+    // Stamp the cache with the pre-call mtime — i.e. the mtime that
+    // demonstrably reflects the file state observed by the CLI. Skip racy
+    // names so the next gated tick re-polls. See change:
+    // fix-openspec-mtime-gate-toctou.
+    for (const change of data.changes) {
+      if (racyNames.has(change.name)) continue;
+      const stampMtime = preCallMtimes.has(change.name)
+        ? preCallMtimes.get(change.name)
+        : effectiveMtimeOr(perChangeArtifactPaths(changesRoot, change.name));
+      cache.changes.set(change.name, { mtimeMs: stampMtime, change });
+    }
+    cache.data = data;
+    // Force path serializes inline on the broadcast wrappers (rare, async
+    // CLI-per-change path). Invalidate any stale worker-serialized form so
+    // wrappers re-stringify against the fresh data. See change:
+    // offload-openspec-poll-to-worker.
+    cache.serialized = undefined;
+    caches.set(cwd, cache);
+    return data;
+  }
+
+  async function refreshOpenSpec(cwd: string): Promise<OpenSpecData> {
+    // Master gate: when `openspec.enabled` is false, every refresh path is a
+    // no-op. Return the cleared-state shape so callers (including
+    // `openspec_refresh` browser handler) converge to the disabled UX.
+    // See change: auto-hide-empty-session-subcards.
+    if (cfg.enabled === false) {
+      // Disabled state: `hasOpenspecDir: false` ensures the client wrapper
+      // hides the OPENSPEC subcard for every cwd; `readiness` carries
+      // GLOBAL_OFF so current clients never fall into the legacy gate.
+      // Allocation-only — no stat, no CLI. See changes:
+      // auto-hide-empty-session-subcards, add-openspec-init-affordances.
+      const cleared = clearedDisabledPayload();
+      const cache = caches.get(cwd) ?? emptyDirCache();
+      cache.data = cleared;
+      caches.set(cwd, cache);
+      return cleared;
+    }
+    try {
+      // User-initiated refresh bypasses the gate. The gate is heuristic; the
+      // CLI is authoritative. When the user clicks the OpenSpec refresh icon
+      // they expect fresh data, never silently-cached data — force-mode is
+      // the user's escape hatch when the gate's heuristic is wrong, while
+      // periodic paths (`pollDirectoryGated`, `onDirectoryAdded`,
+      // `handleOpenSpecBulkArchive` post-archive refresh) stay gated.
+      // See changes: fix-openspec-mtime-gate-toctou (re-introduced force=true),
+      // fix-openspec-mtime-gate-blind-spots (initial removal of force=true).
+      return await pollOne(cwd, true);
+    } catch {
+      // A throw out of the poll (worker/in-process failure) is a whole-call
+      // failure: the directory resolves to BROKEN · cli-failed and the next
+      // gated tick retries. It NEVER falls back to the unbounded per-change
+      // `pollOpenSpecAsync` fan-out. See change: use-openspec-status-all.
+      const cache = caches.get(cwd) ?? emptyDirCache();
+      const empty = await finalizeOpenSpecData(
+        cwd,
+        { initialized: false, changes: [], hasOpenspecDir: statMtimeOr(path.join(cwd, "openspec")) !== undefined },
+        "cli-failed",
+      );
+      cache.data = empty;
+      cache.allCwdMtime = undefined;
+      cache.allExtras = null;
+      cache.allData = undefined;
+      cache.listMtimeMs = undefined;
+      cache.listResult = undefined;
+      cache.serialized = undefined;
+      cache.changes.clear();
+      caches.set(cwd, cache);
+      return empty;
+    }
+  }
+
+  /**
+   * Gated sibling of `refreshOpenSpec` for browser-initiated `openspec_refresh`
+   * (D1): applies `getOrPollOpenSpec`'s admission chain in its order —
+   * `enabled:false` → opted out → tracked → `<cwd>/openspec/` root, the fs
+   * probe deliberately LAST so an untracked cwd never touches the filesystem
+   * (same X8 ordering) — and resolves `null` on any gate failure WITHOUT
+   * writing the cache, spawning, or probing the fs. Silence matches
+   * `openspec_get`'s no-broadcast rule for gated answers: the client only
+   * renders folders for tracked cwds, so a gated broadcast has no consumer.
+   * On a pass it delegates to `refreshOpenSpec` — a separate method, NOT a
+   * gate inside `refreshOpenSpec`, because that contract is load-bearing for
+   * its four internal callers (server.ts group re-order,
+   * session/session-bootstrap cold boot, `POST /api/openspec/init`, task
+   * toggle), none of which takes a caller-supplied cwd.
+   * See change: harden-server-request-surfaces (D1).
+   */
+  async function refreshOpenSpecGated(cwd: string): Promise<OpenSpecData | null> {
+    if (cfg.enabled === false) return null;
+    if (isOptedOutCwd(cwd)) return null;
+    if (!isTrackedCwd(cwd) || !hasOpenSpecRoot(cwd)) return null;
+    return refreshOpenSpec(cwd);
+  }
+
+  /**
+   * Called from `OpenSpecChangeWatcher` when a relevant artifact under
+   * `<cwd>/openspec/changes/` is touched. Runs the gated poll and (when the
+   * resulting data differs from the cached snapshot) invokes the broadcast
+   * callback installed by `startPolling`. Errors are swallowed — the next
+   * periodic tick covers correctness.
+   * See change: fix-openspec-taskcheck-delay.
+   */
+  async function onWatcherFired(cwd: string): Promise<void> {
+    if (cfg.enabled === false) return;
+    try {
+      // Reuse the worker's pre-serialized payload when available so the
+      // diff is free and `JSON.stringify` runs exactly once per tick.
+      // See change: offload-openspec-poll-to-worker.
+      const prevCache = caches.get(cwd);
+      const prevJson = prevCache?.serialized ?? (prevCache?.data ? JSON.stringify(prevCache.data) : undefined);
+      const next = await pollDirectoryGated(cwd);
+      const nextSerialized = caches.get(cwd)?.serialized;
+      const nextJson = nextSerialized ?? JSON.stringify(next);
+      // Force the broadcast when a transitional pending was emitted this cycle,
+      // so the terminal clear always reaches the spinner even if the final
+      // JSON matches the prior cache. See change: emit-openspec-pending-from-poll.
+      const pendingWasEmitted = pendingEmittedCwds.delete(cwd);
+      if (nextJson !== prevJson || pendingWasEmitted) onChangeCallback?.(cwd, next, nextSerialized);
+    } catch (err) {
+      console.error(`[openspec-watcher] poll failed for ${cwd}:`, err);
+    }
+  }
+
+  /**
+   * Ensure `changeWatcher` is attached to every currently-known cwd and
+   * detached from every cwd that is no longer known. Cheap (set diff over
+   * typically < 10 cwds); called at the start of each periodic tick and
+   * from `onDirectoryAdded`.
+   * See change: fix-openspec-taskcheck-delay.
+   */
+  function reconcileWatchers(): void {
+    const known = new Set(computeKnownDirectories());
+    for (const cwd of known) {
+      if (!attachedWatcherCwds.has(cwd)) {
+        // Only mark as attached when fs.watch actually succeeded; failed
+        // attaches (ENOENT for missing openspec/changes/, EMFILE, etc.)
+        // remain eligible for retry on the next tick, so a cwd that gains
+        // openspec/changes/ later lights up within one poll interval.
+        // See change: fix-openspec-taskcheck-delay.
+        if (changeWatcher.attach(cwd)) attachedWatcherCwds.add(cwd);
+      }
+    }
+    for (const cwd of Array.from(attachedWatcherCwds)) {
+      if (!known.has(cwd)) {
+        changeWatcher.detach(cwd);
+        attachedWatcherCwds.delete(cwd);
+      }
+    }
+  }
+
+  /**
+   * Folder-HEAD tick: recompute the folder group-key set, refresh each (read →
+   * diff → broadcast), and reconcile watcher attachments to match the set
+   * (attach folders entering, detach folders leaving). Runs every poll tick
+   * INDEPENDENT of `cfg.enabled` (openspec disablement must not stop folder
+   * HEAD refresh). No-op until `startPolling` installs the broadcast callback.
+   * See change: refresh-folder-header-branch.
+   */
+  /**
+   * THE single recompute path for the folder group-key set. Returns the fresh
+   * key list plus the keys that were NOT in the previously computed set, and
+   * atomically installs the fresh set as "previously computed". Called by the
+   * periodic tick and by every entry trigger.
+   * See change: fix-folder-header-worktree-branch-leak.
+   */
+  function recomputeFolderHeadKeys(): { keys: string[]; entering: string[] } {
+    const sessions = sessionManager.listAll();
+    const pinned = preferencesStore.getPinnedDirectories();
+    const keys = computeFolderGroupKeys(sessions, pinned);
+    // Same inference inputs as `computeFolderGroupKeys` uses internally, so the
+    // canonical keys here fold exactly the drift it folds.
+    const platform = inferPlatform([...sessions.map((s) => s.cwd), ...pinned]);
+    const canonical = keys.map((k) => pathKey(k, platform));
+    const entering = keys.filter((_k, i) => !previousFolderHeadKeys.has(canonical[i]));
+    previousFolderHeadKeys = new Set(canonical);
+    return { keys, entering };
+  }
+
+  /**
+   * Entry refresh: read the HEAD of every key that entered the observed set
+   * since the last recompute. Debounced so a registration burst collapses into
+   * one bounded fan-out; the fan-out reuses the poll's read → diff → broadcast
+   * funnel and its concurrency cap, so this is not a second broadcast path.
+   * See change: fix-folder-header-worktree-branch-leak.
+   */
+  function refreshFolderHeadsForEnteringKeys(): void {
+    if (!folderHeadPoll) return;
+    if (folderHeadEntryTimer) return; // burst already collapsing into one fan-out
+    folderHeadEntryTimer = setTimeout(() => {
+      folderHeadEntryTimer = null;
+      const poll = folderHeadPoll;
+      if (!poll) return;
+      const { entering } = recomputeFolderHeadKeys();
+      if (entering.length === 0) return;
+      void poll.refreshMany(entering).catch((err) => {
+        console.warn("[folder-head] entry refresh failed:", err);
+      });
+    }, FOLDER_HEAD_ENTRY_DEBOUNCE_MS);
+    folderHeadEntryTimer.unref?.();
+  }
+
+  async function tickFolderHeads(): Promise<void> {
+    if (!folderHeadPoll) return;
+    // Async, concurrency-bounded HEAD reads (no `execSync` burst on this turn).
+    // See change: attribute-openspec-poll-eventloop-stalls.
+    const { keys } = recomputeFolderHeadKeys();
+    await folderHeadPoll.refreshMany(keys);
+    const known = new Set(keys);
+    for (const cwd of keys) {
+      if (!attachedFolderHeadCwds.has(cwd)) {
+        if (folderHeadWatcher.attach(cwd)) attachedFolderHeadCwds.add(cwd);
+      }
+    }
+    for (const cwd of Array.from(attachedFolderHeadCwds)) {
+      if (!known.has(cwd)) {
+        folderHeadWatcher.detach(cwd);
+        attachedFolderHeadCwds.delete(cwd);
+      }
+    }
+  }
+
+  /**
+   * Broadcast the transitional `{ initialized:false, pending:true }` snapshot
+   * before the slow `openspec list` spawn, for any cwd whose
+   * `<cwd>/openspec/changes/` exists (cheap synchronous stat) but whose cache
+   * does not yet hold authoritative `initialized:true` data. Fires via the
+   * `onChangeCallback` installed by `startPolling` (null no-ops). All three
+   * broadcast wrappers — periodic tick, watcher-fired re-poll, and
+   * `onDirectoryAdded` — funnel through `pollDirectoryGated`, so this single
+   * call covers every path that can surface a newly-present openspec dir while
+   * `pollOne` stays pure (returns data only). The `initialized:true` guard
+   * suppresses repeats on steady-state ticks and the post-bulk-archive refresh.
+   * The final authoritative payload follows from each wrapper when the CLI
+   * returns. See change: emit-openspec-pending-from-poll.
+   */
+  function emitPendingIfDiscovered(cwd: string): void {
+    if (statMtimeOr(path.join(cwd, "openspec", "changes")) === undefined) return; // not pollable → no spinner
+    if (caches.get(cwd)?.data?.initialized === true) return; // already authoritative
+    pendingEmittedCwds.add(cwd);
+    onChangeCallback?.(cwd, {
+      initialized: false,
+      pending: true,
+      changes: [],
+      hasOpenspecDir: true,
+      readiness: { state: "PENDING" },
+    });
+  }
+
+  async function pollDirectoryGated(cwd: string): Promise<OpenSpecData> {
+    // Master gate: when `openspec.enabled` is false, never spawn a CLI for the
+    // periodic poll path either. See change: auto-hide-empty-session-subcards.
+    if (cfg.enabled === false) {
+      const cleared = clearedDisabledPayload();
+      const cache = caches.get(cwd) ?? emptyDirCache();
+      cache.data = cleared;
+      caches.set(cwd, cache);
+      return cleared;
+    }
+    // Opt-out gate: an opted-out cwd is never polled and never spawns the
+    // CLI. Its payload keeps the last observed shape but always carries the
+    // OPTED_OUT readiness. See change: add-openspec-init-affordances.
+    if (isOptedOutCwd(cwd)) {
+      const base = caches.get(cwd)?.data;
+      const payload: OpenSpecData = {
+        initialized: false,
+        pending: false,
+        changes: [],
+        hasOpenspecDir: base?.hasOpenspecDir ?? statMtimeOr(path.join(cwd, "openspec")) !== undefined,
+        readiness: { state: "OPTED_OUT" },
+      };
+      const cache = caches.get(cwd) ?? emptyDirCache();
+      cache.data = payload;
+      caches.set(cwd, cache);
+      return payload;
+    }
+    emitPendingIfDiscovered(cwd);
+    return pollOne(cwd, false);
+  }
+
+  /**
+   * One cwd's poll + change-gated broadcast (D6): prevJson capture →
+   * `pollDirectoryGated` → nextJson compare (or a transitional-pending clear)
+   * → `onChangeCallback`. Extracted from the scheduler tick's per-cwd body so
+   * the compare-or-pending broadcast discipline has ONE implementation; the
+   * tick and `getOrPollOpenSpec`'s cold-miss poll both call it. Rejections
+   * propagate to the caller (the tick swallows; the get's in-flight promise
+   * deletes its entry). Per-turn instrumentation (`dirPollPre`/`dirPollPost`)
+   * rides along — `recordTurn` no-ops without `eventLoopSpikes`.
+   * See change: fix-connect-snapshot-frame-loss (D6; behaviour-preserving
+   * for the tick).
+   */
+  async function pollAndBroadcastIfChanged(cwd: string): Promise<OpenSpecData> {
+    // `dirPollPre` = the caller's synchronous prefix, INCLUDING `pollOne`'s
+    // synchronous run before the worker `await` (root `statMtimeOr` +
+    // list-signal `effectiveMtimeOr` stat-fan). Record BEFORE awaiting so we
+    // never time across the await.
+    // See change: attribute-openspec-poll-eventloop-stalls.
+    const dirPollPreStart = performance.now();
+    const prevCache = caches.get(cwd);
+    const prevJson = prevCache?.serialized ?? (prevCache?.data ? JSON.stringify(prevCache.data) : undefined);
+    const nextPromise = pollDirectoryGated(cwd);
+    recordTurn("dirPollPre", dirPollPreStart);
+    const next = await nextPromise;
+    // `dirPollPost` = the continuation after the worker resolves:
+    // `nextJson` compare + `JSON.stringify` fallback + broadcast.
+    const dirPollPostStart = performance.now();
+    const nextSerialized = caches.get(cwd)?.serialized;
+    const nextJson = nextSerialized ?? JSON.stringify(next);
+    // See change: emit-openspec-pending-from-poll — clear the spinner
+    // even when the final JSON equals the prior cache.
+    const pendingWasEmitted = pendingEmittedCwds.delete(cwd);
+    if (nextJson !== prevJson || pendingWasEmitted) {
+      // A throwing broadcast callback must NOT reject a poll that already
+      // produced and cached valid data — `getOrPollOpenSpec` would otherwise
+      // report `BROKEN · cli-failed` for a successful poll.
+      try {
+        onChangeCallback?.(cwd, next, nextSerialized);
+      } catch (err) {
+        console.error(`[directory-service] onChangeCallback failed for ${cwd}:`, err);
+      }
+    }
+    recordTurn("dirPollPost", dirPollPostStart);
+    return next;
+  }
+
+  // ── openspec_get (D6) — on-demand gated fetch ──────────────────
+  const openspecGetInFlight = new Map<string, Promise<OpenSpecData>>();
+
+  function getOrPollOpenSpec(cwd: string): { hit?: OpenSpecData; poll?: Promise<OpenSpecData> } {
+    // Gates in D6 order; a gated answer is finalized and spawn-free. The
+    // untracked gate sits BEFORE any fs probe so a hostile cwd never touches
+    // the filesystem (X8).
+    if (cfg.enabled === false) {
+      return { hit: clearedDisabledPayload() };
+    }
+    if (isOptedOutCwd(cwd)) {
+      const base = caches.get(cwd)?.data;
+      return {
+        hit: {
+          initialized: false,
+          pending: false,
+          changes: [],
+          hasOpenspecDir: base?.hasOpenspecDir ?? statMtimeOr(path.join(cwd, "openspec")) !== undefined,
+          readiness: { state: "OPTED_OUT" },
+        },
+      };
+    }
+    if (!isTrackedCwd(cwd) || !hasOpenSpecRoot(cwd)) {
+      return {
+        hit: {
+          initialized: false,
+          pending: false,
+          changes: [],
+          hasOpenspecDir: false,
+          readiness: { state: "ABSENT" },
+        },
+      };
+    }
+    const cached = caches.get(cwd)?.data;
+    if (cached) return { hit: cached };
+    const placeholder: OpenSpecData = {
+      initialized: false,
+      pending: true,
+      changes: [],
+      hasOpenspecDir: true,
+      readiness: { state: "PENDING" },
+    };
+    // Per-cwd shared in-flight poll: concurrent `openspec_get`s for one cold
+    // cwd ride one spawn (E26); the entry is deleted on settle — success OR
+    // rejection — so a failed poll never poisons later requests (X1).
+    const inFlight = openspecGetInFlight.get(cwd);
+    if (inFlight) return { hit: placeholder, poll: inFlight };
+    const poll = pollAndBroadcastIfChanged(cwd).finally(() => openspecGetInFlight.delete(cwd));
+    openspecGetInFlight.set(cwd, poll);
+    return { hit: placeholder, poll };
+  }
+
+  /** Mark one cwd (or, for `undefined`, every cwd) stale. */
+  function invalidatePiResources(cwd: string | undefined): void {
+    if (cwd === undefined) {
+      for (const [key, entry] of piResourcesCache) {
+        entry.stale = true;
+        piResourcesVersion.set(key, (piResourcesVersion.get(key) ?? 0) + 1);
+      }
+    } else {
+      const entry = piResourcesCache.get(cwd);
+      if (entry) entry.stale = true;
+      piResourcesVersion.set(cwd, (piResourcesVersion.get(cwd) ?? 0) + 1);
+    }
+    notifyPiResourcesInvalidated(cwd);
+  }
+
+  async function refreshPiResourcesFresh(cwd: string): Promise<PiResourcesResult> {
+    const callSeq = piResourcesScanSeq;
+    // ≤ 2 iterations: an awaited pre-call scan is cleared before the next starts.
+    for (;;) {
+      const run = refreshPiResourcesInternal(cwd);
+      if ((piResourcesInFlightSeq.get(cwd) ?? 0) > callSeq) return run;
+      await run.catch(() => { /* superseded by the fresh scan below */ });
+    }
+  }
+
+  /** Release watchers beyond the caps, oldest first; drop data beyond its cap. */
+  function enforcePiResourcesBounds(): void {
+    // Map order is LRU (oldest first): `touchPiResources` re-inserts on access.
+    let watched = 0;
+    for (const key of piResourcesCache.keys()) if (piResourcesWatcher.has(key)) watched++;
+    for (const key of piResourcesCache.keys()) {
+      if (watched <= PI_RESOURCES_MAX_WATCHED) break;
+      if (piResourcesWatcher.has(key)) {
+        piResourcesWatcher.detach(key);
+        const entry = piResourcesCache.get(key);
+        if (entry) entry.stale = true; // unwatched ⇒ cannot be trusted fresh
+        watched--;
+      }
+    }
+    for (const key of [...piResourcesCache.keys()]) {
+      if (piResourcesCache.size <= PI_RESOURCES_MAX_DATA) break;
+      piResourcesWatcher.detach(key);
+      piResourcesCache.delete(key);
+      piResourcesVersion.delete(key);
+    }
+  }
+
+  /** Keep a requested cwd's watches attached and mark it most-recently-used. */
+  function touchPiResources(cwd: string): void {
+    const entry = piResourcesCache.get(cwd);
+    if (entry) {
+      entry.lastRequestedAt = piResourcesNow();
+      piResourcesCache.delete(cwd);
+      piResourcesCache.set(cwd, entry);
+    }
+    try {
+      if (!piResourcesWatcher.hasGlobal()) piResourcesWatcher.attachGlobal();
+      if (piResourcesWatcher.has(cwd)) piResourcesWatcher.reconcile(cwd);
+      else piResourcesWatcher.attach(cwd);
+    } catch { /* watch is an optimisation; the 5-minute bound still applies */ }
+    enforcePiResourcesBounds();
+  }
+
+  /**
+   * Reconcile watcher attachment for every cached cwd: attach subdirs that now
+   * exist, release watchers of entries idle > 10 min (KEEP their data — served
+   * stale and revalidated on the next request). Runs at the top of every poll
+   * timer firing, before its in-flight / `enabled` gates, so it also runs with
+   * OpenSpec disabled. No timer of its own. See change: optimize-polling-hot-paths.
+   */
+  function reconcilePiResources(): void {
+    const now = piResourcesNow();
+    // Newest first: only the most recently requested non-idle cwds keep watches,
+    // so the cap holds across ticks and never thrashes attach/detach.
+    let watchBudget = PI_RESOURCES_MAX_WATCHED;
+    for (const [cwd, entry] of [...piResourcesCache].reverse()) {
+      try {
+        const idle = now - entry.lastRequestedAt > PI_RESOURCES_WATCH_IDLE_MS;
+        if (!idle && watchBudget > 0) {
+          watchBudget--;
+          if (piResourcesWatcher.has(cwd)) piResourcesWatcher.reconcile(cwd);
+          else piResourcesWatcher.attach(cwd);
+        } else if (piResourcesWatcher.has(cwd)) {
+          piResourcesWatcher.detach(cwd);
+          entry.stale = true; // unwatched ⇒ cannot be trusted fresh
+        }
+      } catch { /* best-effort */ }
+    }
+    enforcePiResourcesBounds();
+    if (!piResourcesCache.size && piResourcesWatcher.hasGlobal()) {
+      // Nobody is viewing anything: release the shared global watches too.
+      try { piResourcesWatcher.detachAll(); } catch { /* best-effort */ }
+    }
+  }
+
+  function refreshPiResourcesInternal(cwd: string): Promise<PiResourcesResult> {
+    const inFlight = piResourcesInFlight.get(cwd);
+    if (inFlight) return inFlight;
+    // Attach BEFORE scanning so an edit during the scan is not missed.
+    touchPiResources(cwd);
+    const startVersion = piResourcesVersion.get(cwd) ?? 0;
+    piResourcesInFlightSeq.set(cwd, ++piResourcesScanSeq);
+    const run = scanPiResources(cwd)
+      .then((data) => {
+        const now = piResourcesNow();
+        piResourcesCache.delete(cwd);
+        piResourcesCache.set(cwd, {
+          data,
+          scannedAt: now,
+          lastRequestedAt: now,
+          // An invalidation that landed during the scan leaves the result stale.
+          stale: (piResourcesVersion.get(cwd) ?? 0) !== startVersion,
+        });
+        enforcePiResourcesBounds();
+        return data;
+      })
+      .catch((err) => {
+        // A failed COLD scan never enters the cache, so nothing else would ever
+        // release the watchers `touchPiResources` attached for it.
+        if (!piResourcesCache.has(cwd)) {
+          try { piResourcesWatcher.detach(cwd); } catch { /* best-effort */ }
+          piResourcesVersion.delete(cwd);
+        }
+        throw err;
+      })
+      .finally(() => {
+        piResourcesInFlight.delete(cwd);
+        piResourcesInFlightSeq.delete(cwd);
+      });
+    piResourcesInFlight.set(cwd, run);
+    return run;
+  }
+
+  // ── Scheduler ────────────────────────────────────────────────────
+  const TICK_SLOW_WARN_MS = 5000;
+  const DEBUG_ENABLED =
+    typeof process !== "undefined" && typeof process.env?.DEBUG === "string" && /pi-dashboard|openspec-poll/.test(process.env.DEBUG);
+
+  let openspecTickInFlight = false;
+  async function scheduleOpenSpecTick() {
+    // `tickOpen` = the `setInterval` fire's single synchronous turn:
+    // `tickFolderHeads` + `reconcileWatchers` + `computeKnownDirectories` +
+    // the timer setup, all before the first `await`. Time from entry and
+    // self-record at each synchronous exit (early return OR just before the
+    // `await Promise.all`). See change: attribute-openspec-poll-eventloop-stalls.
+    const tickOpenStart = performance.now();
+    // New poll generation: the memoized global signature recomputes lazily on
+    // first use this tick (P1: at most one spawn per tick). See change:
+    // add-openspec-init-affordances.
+    sigGeneration++;
+    // pi-resources watch reconciliation rides this tick (no timer of its own).
+    // Before the in-flight / `enabled` gates below so it runs with OpenSpec
+    // disabled. See change: optimize-polling-hot-paths (D9).
+    try { reconcilePiResources(); } catch (err) { console.warn("[pi-resources] reconcile failed:", err); }
+    // Folder-HEAD poll runs every tick regardless of openspec enablement and
+    // regardless of an in-flight openspec tick. The HEAD reads are now async +
+    // non-blocking (change: attribute-openspec-poll-eventloop-stalls) — the
+    // previous synchronous `execSync` fan-out was the attributed ~700ms
+    // `tickOpen` stall. Kick it off WITHOUT blocking the loop; await it before
+    // the openspec fan-out so `git_head_update` still precedes `openspec_update`
+    // per cwd. See change: refresh-folder-header-branch.
+    const folderHeadDone = tickFolderHeads().catch((err) => { console.warn("[folder-head] tick failed:", err); });
+    if (openspecTickInFlight) { recordTurn("tickOpen", tickOpenStart); await folderHeadDone; return; }
+    // Master gate: when `openspec.enabled` is false, the tick is a no-op.
+    // No CLI spawns. See change: auto-hide-empty-session-subcards.
+    if (cfg.enabled === false) { recordTurn("tickOpen", tickOpenStart); await folderHeadDone; return; }
+    openspecTickInFlight = true;
+    // Reconcile watcher attachments at the top of every tick. Catches
+    // newly-known cwds (e.g. session_register) and forgotten ones (unpin /
+    // last session ended) without needing explicit lifecycle hooks.
+    // See change: fix-openspec-taskcheck-delay.
+    try { reconcileWatchers(); } catch (err) { console.warn("[openspec-watcher] reconcile failed:", err); }
+    const tickStart = Date.now();
+    let spawnsBefore = 0;
+    let spawnsAfter = 0;
+    try {
+      // Opted-out cwds are never polled (no timers created for them). See
+      // change: add-openspec-init-affordances.
+      const dirs = computeKnownDirectories().filter((d) => !isOptedOutCwd(d));
+      // Track spawn count by hooking the semaphore's size(). Approximation.
+      spawnsBefore = semaphore.size();
+      // End of the `tickOpen` synchronous turn: everything above ran in the
+      // one `setInterval` fire; the `await` below yields. With the folder-head
+      // reads now async, this synchronous head no longer includes the git burst.
+      recordTurn("tickOpen", tickOpenStart);
+      // Ordering guard: every `git_head_update` for this tick completes before
+      // the openspec fan-out begins, preserving per-cwd git-head-before-openspec
+      // ordering. See change: attribute-openspec-poll-eventloop-stalls.
+      await folderHeadDone;
+      await Promise.all(dirs.map((cwd) => new Promise<void>((resolve) => {
+        const delay = phaseOffsetMs(cwd, cfg.jitterSeconds);
+        const timer = setTimeout(async () => {
+          scheduledPhaseTimers.delete(timer);
+          try {
+            await pollAndBroadcastIfChanged(cwd);
+          } catch (err) {
+            // Swallow — the next tick will retry.
+            console.error(`[openspec-poll] tick failed for ${cwd}:`, err);
+          } finally {
+            resolve();
+          }
+        }, delay);
+        scheduledPhaseTimers.add(timer);
+      })));
+      spawnsAfter = semaphore.size();
+    } finally {
+      openspecTickInFlight = false;
+      const durationMs = Date.now() - tickStart;
+      if (DEBUG_ENABLED) {
+        const dirs = computeKnownDirectories().length;
+        // eslint-disable-next-line no-console
+        console.log(`[openspec-poll] tick dirs=${dirs} queueBefore=${spawnsBefore} queueAfter=${spawnsAfter} durationMs=${durationMs}`);
+      }
+      if (durationMs > TICK_SLOW_WARN_MS) {
+        console.warn(`[openspec-poll] slow tick: ${durationMs}ms (threshold ${TICK_SLOW_WARN_MS}ms). Consider raising pollIntervalSeconds or lowering maxConcurrentSpawns.`);
+      }
+    }
+  }
+
+  function installTimers() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(scheduleOpenSpecTick, cfg.pollIntervalSeconds * 1000);
+  }
+
+  function stopTimers() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    try { piResourcesWatcher.detachAll(); } catch { /* best-effort */ }
+    // Unwatched ⇒ cannot be trusted fresh: an edit made while polling was
+    // stopped is otherwise served as fresh after a restart re-attaches.
+    for (const [cwd, entry] of piResourcesCache) {
+      entry.stale = true;
+      piResourcesVersion.set(cwd, (piResourcesVersion.get(cwd) ?? 0) + 1);
+    }
+    for (const t of scheduledPhaseTimers) clearTimeout(t);
+    scheduledPhaseTimers.clear();
+  }
+
+  return {
+    knownDirectories: computeKnownDirectories,
+    discoverSessions,
+    loadSessionEvents,
+    loadRetainedEvents,
+    cancelLoad,
+    ensureLoadWorkerPool,
+
+    getOpenSpecData(cwd: string): OpenSpecData | undefined {
+      return caches.get(cwd)?.data;
+    },
+
+    invalidateOpenSpecSignatureCache,
+
+    refreshOpenSpec,
+    refreshOpenSpecGated,
+    pollDirectoryGated,
+    getOrPollOpenSpec,
+
+    getPiResources(cwd: string): { data: PiResourcesResult; stale: boolean } | undefined {
+      const entry = piResourcesCache.get(cwd);
+      if (!entry) return undefined;
+      touchPiResources(cwd);
+      return { data: entry.data, stale: entry.stale || piResourcesNow() - entry.scannedAt >= PI_RESOURCES_STALE_MS };
+    },
+
+    async refreshPiResources(cwd: string): Promise<PiResourcesResult> {
+      return refreshPiResourcesInternal(cwd);
+    },
+
+    refreshPiResourcesFresh,
+
+    onPiResourcesInvalidated(listener: (cwd: string | undefined) => void): () => void {
+      piResourcesInvalidationListeners.add(listener);
+      return () => { piResourcesInvalidationListeners.delete(listener); };
+    },
+
+    notifyPiResourcesInvalidated,
+
+    startPolling(
+      onChange: (cwd: string, data: OpenSpecData, serialized?: string) => void,
+      onFolderHead?: (msg: BrowserGitHeadUpdateMessage) => void,
+    ) {
+      onChangeCallback = onChange;
+      // A restart of polling re-enables the load-worker pool accessor.
+      // See change: fix-session-diff-durable-source.
+      loadWorkerPoolDisposed = false;
+      // Construct the folder-HEAD poll now that the broadcast callback is
+      // known. The poll's diff cache lives for the polling lifetime.
+      // See change: refresh-folder-header-branch.
+      if (onFolderHead) {
+        folderHeadPoll = createFolderHeadPoll({ broadcast: onFolderHead, readHead: options.folderHeadReadHead });
+        // Run an immediate folder-HEAD tick so the first paint reflects
+        // current HEADs without waiting a full poll interval.
+        void tickFolderHeads().catch((err) => { console.warn("[folder-head] initial tick failed:", err); });
+      }
+      // Lazy worker pool spawn happens on first request from `ensureWorkerPool()`.
+      installTimers();
+    },
+
+    stopPolling() {
+      stopTimers();
+      onChangeCallback = null;
+      // Tear down every per-cwd fs.watch so the process can exit cleanly.
+      // See change: fix-openspec-taskcheck-delay.
+      try { changeWatcher.detachAll(); } catch { /* best-effort */ }
+      attachedWatcherCwds.clear();
+      // Tear down folder-HEAD watchers + poll state. See change:
+      // refresh-folder-header-branch.
+      try { folderHeadWatcher.detachAll(); } catch { /* best-effort */ }
+      attachedFolderHeadCwds.clear();
+      if (folderHeadEntryTimer) { clearTimeout(folderHeadEntryTimer); folderHeadEntryTimer = null; }
+      previousFolderHeadKeys = new Set();
+      folderHeadPoll = null;
+      // Terminate the OpenSpec poll worker pool (best-effort — callers that
+      // restart polling will respawn it lazily). See change:
+      // offload-openspec-poll-to-worker.
+      if (workerPool) {
+        const p = workerPool;
+        workerPool = null;
+        void p.dispose().catch(() => { /* ignore shutdown errors */ });
+      }
+      // Terminate the session-load worker pool too (respawns lazily if polling
+      // restarts). See change: offload-session-events-load-to-worker.
+      if (loadWorkerPool) {
+        const lp = loadWorkerPool;
+        loadWorkerPool = null;
+        void lp.dispose().catch(() => { /* ignore shutdown errors */ });
+      }
+      loadWorkerPoolDisposed = true;
+    },
+
+    reconfigurePolling(newCfg: OpenSpecPollConfig) {
+      const oldInterval = cfg.pollIntervalSeconds;
+      const wasEnabled = cfg.enabled;
+      const prev = cfg;
+      cfg = { ...newCfg };
+      semaphore.setMax(cfg.maxConcurrentSpawns);
+      // Worker-pool sizing tracks maxConcurrentSpawns. Reconfigure by
+      // tearing down the pool; it respawns lazily with the new size on the
+      // next request. See change: offload-openspec-poll-to-worker.
+      if (workerPool) {
+        const p = workerPool;
+        workerPool = null;
+        void p.dispose().catch(() => { /* ignore */ });
+      }
+      // Only re-install timers if they were running and the interval actually changed.
+      if (pollTimer && oldInterval !== cfg.pollIntervalSeconds) {
+        installTimers();
+      }
+
+      // ── Readiness re-broadcast (add-openspec-init-affordances) ──
+      // Re-broadcast ONLY when a readiness-affecting key changed, so
+      // poll-tuning writes (interval, concurrency, jitter, worker flag) do
+      // not trigger a readiness storm (E24). Membership changes re-broadcast
+      // only the cwds whose membership changed (E25); `enabled` /
+      // `offerInitialization` are global and re-broadcast every cached cwd.
+      const optOutKeys = (dirs: string[]): string[] => {
+        const platform = inferPlatform(dirs.length > 0 ? dirs : [process.cwd()]);
+        return dirs.map((d) => pathKey(d, platform)).sort();
+      };
+      const readinessKey = (c: OpenSpecPollConfig): string =>
+        JSON.stringify({ e: c.enabled, o: c.offerInitialization, d: optOutKeys(c.optOutDirectories) });
+      const prevKey = readinessKey(prev);
+      const nextKey = readinessKey(cfg);
+
+      // On the `true → false` transition, clear every per-cwd `OpenSpecData`
+      // cache and notify the broadcast channel so connected browsers converge
+      // to the disabled-state shape — which now carries readiness GLOBAL_OFF
+      // explicitly (E26). The `false → true` transition falls through to the
+      // global-flip broadcast below; the next regular poll tick repopulates
+      // caches with authoritative data. See changes:
+      // auto-hide-empty-session-subcards, add-openspec-init-affordances.
+      if (wasEnabled !== false && cfg.enabled === false) {
+        const cleared = clearedDisabledPayload();
+        for (const [cwd, cache] of caches.entries()) {
+          cache.data = cleared;
+          caches.set(cwd, cache);
+          try {
+            onChangeCallback?.(cwd, cleared);
+          } catch (err) {
+            console.warn(`[openspec-poll] onChange after disable failed for ${cwd}:`, err);
+          }
+        }
+        return;
+      }
+
+      if (prevKey === nextKey) return;
+
+      const rebroadcast = (cwds: string[]): void => {
+        for (const cwd of cwds) {
+          const cache = caches.get(cwd);
+          if (!cache?.data) continue;
+          // Recompute readiness synchronously against the NEW config. The
+          // signature check uses the last resolved value (never spawns here);
+          // a STALE correction arrives on the next tick.
+          const d = cache.data;
+          const readiness = deriveOpenSpecReadiness(
+            {
+              enabled: cfg.enabled !== false,
+              optedOut: isOptedOutCwd(cwd),
+              pending: d.pending === true,
+              hasOpenspecDir: d.hasOpenspecDir === true,
+              initialized: d.initialized === true,
+              hasOpenSpecSkills: d.hasOpenSpecSkills,
+              recordedSignature: preferencesStore.getOpenSpecUpdateSignature?.(cwd) as string | undefined,
+              currentSignature: sigMemo?.resolved,
+            },
+            d,
+          );
+          const { workflowSchema, ...rest } = d;
+          const payload: OpenSpecData = {
+            ...rest,
+            readiness,
+            ...(workflowSchema && hasWorkflowSchemaStatus(readiness) ? { workflowSchema } : {}),
+          };
+          cache.data = payload;
+          caches.set(cwd, cache);
+          try {
+            onChangeCallback?.(cwd, payload);
+          } catch (err) {
+            console.warn(`[openspec-poll] onChange after reconfigure failed for ${cwd}:`, err);
+          }
+        }
+      };
+
+      const globalFlip =
+        prev.enabled !== cfg.enabled || prev.offerInitialization !== cfg.offerInitialization;
+      if (globalFlip) {
+        rebroadcast([...caches.keys()]);
+      } else {
+        // optOut membership diff — broadcast only the changed cwds (E25).
+        const before = new Set(optOutKeys(prev.optOutDirectories));
+        const after = new Set(optOutKeys(cfg.optOutDirectories));
+        const platformDirs = [...before, ...after];
+        const platform = inferPlatform(platformDirs.length > 0 ? platformDirs : [process.cwd()]);
+        const changed = new Set<string>();
+        for (const d of prev.optOutDirectories) if (!after.has(pathKey(d, platform))) changed.add(d);
+        for (const d of cfg.optOutDirectories) if (!before.has(pathKey(d, platform))) changed.add(d);
+        rebroadcast([...changed]);
+      }
+    },
+
+    async onDirectoryAdded(cwd: string): Promise<DirectoryAddedResult> {
+      // Internal path — use the gated poll, not the user-facing
+      // `refreshOpenSpec` (which now bypasses the gate). For a freshly-added
+      // directory the cache is empty, so the gate lets the CLI run anyway.
+      // See change: fix-openspec-mtime-gate-toctou.
+      const [sessions, openspecData] = await Promise.all([
+        discoverSessions(cwd),
+        pollDirectoryGated(cwd),
+      ]);
+      // The caller (event-wiring `onDirectoryAdded`) broadcasts `openspecData`
+      // unconditionally, so any transitional pending emitted by the gated poll
+      // is already cleared here — drop the flag so the next tick doesn't fire a
+      // stale duplicate broadcast. See change: emit-openspec-pending-from-poll.
+      pendingEmittedCwds.delete(cwd);
+      // Attach the per-cwd fs.watch immediately so subsequent edits to
+      // tasks.md / proposal.md / design.md / specs/**/*.md trigger a
+      // sub-second refresh. Mark only on success; failed attaches (missing
+      // openspec/changes/) get retried by `reconcileWatchers` on the next
+      // poll tick. See change: fix-openspec-taskcheck-delay.
+      if (!attachedWatcherCwds.has(cwd)) {
+        if (changeWatcher.attach(cwd)) attachedWatcherCwds.add(cwd);
+      }
+      // A pinned/added directory enters the folder-HEAD key set with no session
+      // at all — refresh it rather than waiting a full poll interval. For a
+      // brand-new session cwd this is the SECOND trigger (the `session_register`
+      // handler already fired one); the debounce collapses the pair, so the
+      // duplicate costs nothing and neither call site depends on the other.
+      // See change: fix-folder-header-worktree-branch-leak.
+      refreshFolderHeadsForEnteringKeys();
+      return { sessions, openspecData };
+    },
+
+    folderHeadSnapshot(): Array<{ cwd: string; branch: string | null }> {
+      return folderHeadPoll?.snapshot() ?? [];
+    },
+
+    refreshFolderHeadsForEnteringKeys,
+    semaphore,
+  };
+}

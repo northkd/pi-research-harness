@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+export PI_RESEARCH_HOST_DIR="${PI_RESEARCH_HOST_DIR:-$ROOT/.runtime/host}"
+exec node "$ROOT/extensions/research-host/server.mjs" "$@"

@@ -1,0 +1,98 @@
+{
+  "schema": "pi-research-acp-source-manifest.v1",
+  "generatedAt": "2026-11-23T08:44:20.843Z",
+  "adaptation": "TypeScript syntax removal and local ESM paths. Adapter and ACP protocol logic preserved without behavioral edits. New host mounts the deployed adapter locally or in an authenticated private Unix-socket worker.",
+  "modules": [
+    {
+      "source": "pi-dashboard-server/src/acp-bridge/acp-session-adapter.ts",
+      "sourceSha256": "21de67c2baf788a8df00bb68a1af72bbfaef7143f3238a5ffea5a311943873ed",
+      "output": "acp-bridge/acp-session-adapter.mjs",
+      "outputSha256": "bd669841d645c504db2484925b445be0a93f2add998d9de4290a9822818bca68",
+      "bytes": 15465
+    },
+    {
+      "source": "pi-dashboard-server/src/acp-bridge/acp-connection.ts",
+      "sourceSha256": "9b751514b5c4338d171cd68182dfc651aea1af072508e59f25342dff53c0017c",
+      "output": "acp-bridge/acp-connection.mjs",
+      "outputSha256": "4e49f806438ce53539986ea1b8a424fd27bb5b25b7136841de76bdda7c3ebae4",
+      "bytes": 4740
+    },
+    {
+      "source": "pi-dashboard-server/src/acp-bridge/child-env.ts",
+      "sourceSha256": "451af9b9395ddd8714ae03da84e320b550d58d4a6303676729880a47e694a3ba",
+      "output": "acp-bridge/child-env.mjs",
+      "outputSha256": "fd6e958e5b7dffcbd2211c7f25631894ee0563a555dad059c1a45995f6896e7c",
+      "bytes": 1598
+    },
+    {
+      "source": "pi-dashboard-server/src/acp-bridge/event-log.ts",
+      "sourceSha256": "48c3fa0e02f5a5cd8afa0769ec7866d6c0d9d45659bf63e858d7b4e9175beddf",
+      "output": "acp-bridge/event-log.mjs",
+      "outputSha256": "5535aa71538c6cad63d1c32be1eacf7fdaea635249cb27aae8bf228cd57e28d9",
+      "bytes": 4340
+    },
+    {
+      "source": "pi-dashboard-server/src/acp-bridge/models.ts",
+      "sourceSha256": "16f027d662928cf269a9998af991533544efdaee5a6cdae98993c7c60a2dbf66",
+      "output": "acp-bridge/models.mjs",
+      "outputSha256": "f188be816b6b4e12b9495cd4c75c49b792c7b4e92f25342c1ea9deeab7a882e4",
+      "bytes": 837
+    },
+    {
+      "source": "pi-dashboard-server/src/acp-bridge/permission-bridge.ts",
+      "sourceSha256": "22d5be8cafb8feaa872f63bda590905f050e50bdce8c974cac5d508ee3ee9b6f",
+      "output": "acp-bridge/permission-bridge.mjs",
+      "outputSha256": "70e15894166b2f038dd3c3835550b3f617949c0a1870ab09df92e09cbce6479b",
+      "bytes": 2655
+    },
+    {
+      "source": "pi-dashboard-server/src/acp-bridge/server-requests.ts",
+      "sourceSha256": "8ec6f84e8c9a258f47ca7f6c531b0c358b5bffeffa6884dcde85ba4ec24d08f9",
+      "output": "acp-bridge/server-requests.mjs",
+      "outputSha256": "b9f4ed1f6f81eaed9abea10d54fee31d24108943d46d2151260504b5e432fa05",
+      "bytes": 3444
+    },
+    {
+      "source": "pi-dashboard-server/src/acp-bridge/session-state.ts",
+      "sourceSha256": "6b671be3c02bc94ccfe5aa9c8b56de560f44ccec676fd6359304e2a311b99d0e",
+      "output": "acp-bridge/session-state.mjs",
+      "outputSha256": "ba9bd59cd121d3333f6dcf0a85756ddbc0b673c3f8fb4279d47aab17a68b4273",
+      "bytes": 2456
+    },
+    {
+      "source": "pi-dashboard-shared/src/acp/acp-config.ts",
+      "sourceSha256": "a17252a2cb0526811043ea2da2e9560dbe23aa12d3ab7c0dc6706f686d86b285",
+      "output": "shared/acp/acp-config.mjs",
+      "outputSha256": "c73e6cc969be34e6bdd3ec0c50b24aece75dcd95a311ca7033bd1604b53d77f7",
+      "bytes": 3185
+    },
+    {
+      "source": "pi-dashboard-shared/src/acp/normalize-v1.ts",
+      "sourceSha256": "6aa62c1135bb496811111e26360a979e77edeb01d49c7d96b44e0e7182b5d03a",
+      "output": "shared/acp/normalize-v1.mjs",
+      "outputSha256": "a0137846f3ca0bd5f34664476d886af7cfd38506c78dc8527712be53e1c64b6f",
+      "bytes": 2140
+    },
+    {
+      "source": "pi-dashboard-shared/src/acp/to-dashboard-events.ts",
+      "sourceSha256": "49dad068841f69861466d79ffb764554df25fbf88697ae77d4f46572851c0f29",
+      "output": "shared/acp/to-dashboard-events.mjs",
+      "outputSha256": "e5a39d224197210d7efd70a3feb4aac1498a621c15f43d39d51a38bc54888c21",
+      "bytes": 13965
+    },
+    {
+      "source": "pi-dashboard-shared/src/acp/update-model.ts",
+      "sourceSha256": "e94183e732f62b1d2922bc3d290dc8c59ac490451f56adba53747d72687eaa0a",
+      "output": "shared/acp/update-model.mjs",
+      "outputSha256": "2e32dcc695c31be08ac3b5c3a5d732f5846c7b02c3156f866e1efceb51638234",
+      "bytes": 13234
+    },
+    {
+      "source": "pi-dashboard-shared/src/platform/exec.ts",
+      "sourceSha256": "5d080f8556b25b78f840e0dac2b22545ebace9ffb1adb4796e95ed8ac3416d3e",
+      "output": "shared/platform/exec.mjs",
+      "outputSha256": "777fcecd07b0c0c2b5782bd4920daa6ca5afd70589253a3f1f1aa8728038dd8b",
+      "bytes": 2420
+    }
+  ]
+}

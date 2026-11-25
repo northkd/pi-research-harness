@@ -1,0 +1,158 @@
+{
+  "schema": "pi-research-adoption-source-manifest.v1",
+  "generatedAt": "2026-11-23T08:03:24.253Z",
+  "modules": [
+    {
+      "source": "pi-dashboard-server/src/res-workflow/adoption-service.ts",
+      "sha256": "6f657f0bd891d5d4fb4cc6d2698c9cb11f7a16b4f001e5dfa0ef2145cb7b9a96",
+      "output": "res-workflow/adoption-service.mjs",
+      "bytes": 128809,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "d43501b5a5c8e4f7cb3fd6f0296e19392669043f61600ccfa8c7a61fe5d20d90"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/analysis.ts",
+      "sha256": "e4fe5a172da91d80fa167aa808c97a8767806e8958ba43b186052c1971bb4e25",
+      "output": "res-workflow/analysis.mjs",
+      "bytes": 8375,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "d3220527e621d9e2fd7e66a3194b35680c73d3e34fbc531867c89d04d437ae74"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/analysis-agent.ts",
+      "sha256": "4370dd0bfe429c6c7e26fc8e30731425de1bd13a52a1c94221b50c1d7b4f7a0b",
+      "output": "res-workflow/analysis-agent.mjs",
+      "bytes": 25121,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "1f9ac0f4e2216164991b22f075f99c2ab3d22e4637310b10e5dc34618aac160d"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/inventory.ts",
+      "sha256": "479661a77f21e671540830067572753c03b2518a09d94b0de263bce5ff779eb7",
+      "output": "res-workflow/inventory.mjs",
+      "bytes": 16315,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "a22584a706fe72e98d987aab20b2c4fe28937a280141b7ed0dce8fb4c09d01cf"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/history-candidates.ts",
+      "sha256": "bcad6257ced95fee28aa842ecc61fb564b885062f8530f844be63bb30e11fe0c",
+      "output": "res-workflow/history-candidates.mjs",
+      "bytes": 7304,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "9a5cd8e6be8b8a8933c3dd735e776f17316e8ef464b839c3f79c42ee4a5078dc"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/safe-files.ts",
+      "sha256": "62e6c4f24b120c0e50616914b76f5c1c7d38463c721f0e2c39880b92d2662352",
+      "output": "res-workflow/safe-files.mjs",
+      "bytes": 2568,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "31e4e7657421f9fdb3c1fbc5d11d50c9f66a1d880934259f242228665df473ee"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/strict-model.ts",
+      "sha256": "18d9d0d22425c95477cb26d1bb184d46faa8f3756b4353424c5d767e3a042b6f",
+      "output": "res-workflow/strict-model.mjs",
+      "bytes": 8966,
+      "modification": "Select the independently managed Pi SDK from PI_CODING_AGENT_DIR/install; remove Dashboard registry and SDK fallback.",
+      "outputSha256": "2558c8de7d1fde8c4eef88bca1453fa9fd02924b91342326e84866720bf4a356"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/full-history-material.ts",
+      "sha256": "1d326815c1922a8f91e347b4665da45765ee6565e8058f9a6fc2239dca07666f",
+      "output": "res-workflow/full-history-material.mjs",
+      "bytes": 30803,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "dac7dc881d5d2b804c0b544f1bb1f4c665759576546f41eb30f29db48216495c"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/full-history-review.ts",
+      "sha256": "e654750f5a562397492828aa67bdd5655877b7a75571213287e326050e27bf49",
+      "output": "res-workflow/full-history-review.mjs",
+      "bytes": 20309,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "c5bf0da32a16ed0a8b43d5e9e5ad4e4fa6385459a397159aa4c6bc3799e52d37"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/full-history-agent.ts",
+      "sha256": "9beccb6d311137669e2812f760aa17ae416fb0adfa8613cf8ca6f5bae9147928",
+      "output": "res-workflow/full-history-agent.mjs",
+      "bytes": 37172,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "7acd2ba5842d08fcc1e2b29b0ca2544799f0b81c497f4137bc8f45acab424a31"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/full-history-agent-budget.ts",
+      "sha256": "9e513a44cbb8cecff98976ae42ba9d923bd978f93f0484dbac2b3fd79fac7481",
+      "output": "res-workflow/full-history-agent-budget.mjs",
+      "bytes": 6569,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "eca46f67970644521ac7307b2d1d344598581044593ae6edcddd47f52f70c918"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/full-history-agent-store.ts",
+      "sha256": "2c7f6a9f36b406fc69191e35c8ce051b2f607df7943cf73a80dd3e42aa3a74a1",
+      "output": "res-workflow/full-history-agent-store.mjs",
+      "bytes": 36792,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "0684267a106078cdf0830ac568198b09d0740057b65bc282b97c1075368d91e5"
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/local-history-stream.ts",
+      "sha256": "692da7b4cca0d47026ed583bb77272cff4d670b2200beda3044fcf4daec91607",
+      "output": "res-workflow/local-history-stream.mjs",
+      "bytes": 17650,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "d3160188d75edb331b8f910277c9b383f7ad370c7b6a482b54b5e1a1faffd8e9"
+    },
+    {
+      "source": "pi-dashboard-server/src/session/session-file-reader.ts",
+      "sha256": "88de89485763b1c7e209284b8b864e1ac7b0afc293ec1de305104a4566723cc0",
+      "output": "session/session-file-reader.mjs",
+      "bytes": 4362,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "07586f2e95d3e90005aded00a6e93d6b9368c976eaa8f34f7980cfd6d35bc021"
+    },
+    {
+      "source": "pi-dashboard-server/src/session/research-message-projection.ts",
+      "sha256": "b65f0f25b9abfdac5d9e2dcefde319683720bf4e9049302ee3312d6074b12ce2",
+      "output": "session/research-message-projection.mjs",
+      "bytes": 819,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "677f4011eea70b818086fa6560b90bac40960667662e60a6d634bdefda4d3a78"
+    },
+    {
+      "source": "pi-dashboard-server/src/access/verified-read.ts",
+      "sha256": "2a35357bb4c22b4f8f087d2a7180a3dcaf6b80cf785ddce93757c839cc2ded67",
+      "output": "access/verified-read.mjs",
+      "bytes": 1845,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "b609283c10465714c889b3e1c302e89f8a5cbc1d44d86401d9fcf7a0cc771336"
+    },
+    {
+      "source": "pi-dashboard-shared/src/res-workflow.ts",
+      "sha256": "4747d9236e3cd65afa647e40a8be005a46a691385703bd8922ee1f94783d3487",
+      "output": "shared/res-workflow.mjs",
+      "bytes": 250,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "de17049e76875144b01ecf0aef3b221d83dcbc372ded5e31d2f8dd0f6ef9209d"
+    },
+    {
+      "source": "pi-dashboard-shared/src/research-charter-binding.ts",
+      "sha256": "e954b259e4aebcd8f36a857a7327041e944109adccb87cf924c6cb917e9aaf4d",
+      "output": "shared/research-charter-binding.mjs",
+      "bytes": 3323,
+      "modification": "TypeScript syntax removal and relative ESM module import paths.",
+      "outputSha256": "1507739a5aaa7e7709f381bf261bb2bb5fe7965c2b6a43e7413c06012371eafa"
+    },
+    {
+      "source": "pi-dashboard-shared/src/enabled-models-match.ts",
+      "sha256": "27fe7f6add537f8dac20394d3eb30eb7a827df550343c348d83ae4cc7c12f833",
+      "output": "shared/enabled-models-match.mjs",
+      "bytes": 61063,
+      "modification": "Bundle the deployed minimatch matcher with its dependencies.",
+      "outputSha256": "6e955ca26719ec0698cc1bbd75d4c9974bd2747fa6285c0f6d528ecf91da1cde"
+    }
+  ]
+}

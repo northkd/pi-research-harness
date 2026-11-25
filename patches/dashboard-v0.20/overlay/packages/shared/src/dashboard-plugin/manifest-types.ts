@@ -1,0 +1,365 @@
+import type { SettingsTab, SlotId } from "./slot-types.js";
+
+/**
+ * A single slot claim in a plugin manifest.
+ */
+/**
+ * `settings-section` nav promotion hint. Strings are stored NFKC-normalised
+ * and trimmed; `label` ≤ 40 and `description` ≤ 200 chars; no Unicode Cc/Cf.
+ * See change: promote-model-roles-settings.
+ */
+export interface SettingsNavHint {
+  group: string;
+  label: string;
+  description?: string;
+  order?: number;
+}
+
+export interface PluginClaim {
+  /** The slot this claim targets. */
+  slot: SlotId;
+  /** Exported component name from the plugin's client entry (for React slots). */
+  component?: string;
+  /**
+   * Package-relative path (`./…`) of a client module that exports `component`.
+   * When set, the generated registry loads the component lazily (a separate
+   * chunk fetched the first time the claim renders) instead of importing it
+   * statically from the plugin's main client entry. The main entry MUST NOT
+   * export `component` (a static path would pin the module into the eager
+   * bundle); `predicate` / `shouldRender` / `labelComponent` still resolve from
+   * the main entry. Requires a dashboard that understands `module` — an older
+   * dashboard ignores it and fails the build on the missing main-entry export.
+   * See change: lazy-plugin-claim-modules.
+   */
+  module?: string;
+  /** Route command for "command-route" slot (e.g. "/specs"). */
+  command?: string;
+  /** Trigger id for "anchored-popover" slot. */
+  trigger?: string;
+  /** toolName for "tool-renderer" slot. */
+  toolName?: string;
+  /**
+   * `customType` for `custom-entry-renderer` slot. Matched by EXACT equality
+   * against a chat custom row's `customType`. Two plugins claiming the same
+   * value is a fatal load-time collision.
+   *
+   * See change: add-custom-entry-renderer-slot.
+   */
+  customType?: string;
+  /**
+   * For `editor-pane-tab` slot: the virtual-path prefix this claim owns.
+   * Tabs whose path is `<pathPrefix>:<rest>` render the claim's `component`.
+   * Must match `^[a-z][a-z0-9-]{1,31}$`; the built-in `diff`/`term`/`url`/
+   * `live` are reserved; two plugins claiming one prefix fail registry
+   * generation. See change: add-browser-editor-pane-tab.
+   */
+  pathPrefix?: string;
+  /**
+   * For `editor-pane-file-handler` slot: claim id, `^[a-z][a-z0-9-]{0,31}$`,
+   * unique within the plugin. The claim is addressed as `<pluginId>/<id>`.
+   * See change: add-editor-pane-file-handlers (D1).
+   */
+  id?: string;
+  /**
+   * For `editor-pane-file-handler`: non-empty list of lower-case single-segment
+   * extensions (`^\.[a-z0-9][a-z0-9+-]{0,15}$`). Text-backed or frozen-deny-listed
+   * extensions (`isUnclaimableHandlerExt`) are rejected.
+   */
+  extensions?: string[];
+  /** For `editor-pane-file-handler`: `"preview"` (read-only) or `"edit"` (may save). */
+  mode?: "preview" | "edit";
+  /** For `editor-pane-file-handler`: switcher label, ≤ 40 chars. */
+  label?: string;
+  /** For `editor-pane-file-handler`: keep the instance alive across tab switches; `max` 1..3. */
+  keepAlive?: { max: number };
+  /** For `editor-pane-file-handler`: size ceiling in bytes, ≤ HANDLER_MAX_BYTES (128 MiB); default = ceiling. */
+  maxBytes?: number;
+  /** For `editor-pane-file-handler`: first-overwrite notice text, ≤ 300 chars. */
+  firstOverwriteNotice?: string;
+  /** For `editor-pane-file-handler` edit mode: `<stem>.<copySuffix>.<ext>` suffix, `^[a-z][a-z0-9-]{1,31}$` (required for edit). */
+  copySuffix?: string;
+  /**
+   * For `editor-pane-file-handler` edit mode: native-format extensions a save may create as a NEW sibling
+   * `<stem><ext>` next to the tab's file (never-overwrite). Same per-extension rules as `extensions`, disjoint
+   * from them; edit claims only. An older runtime drops the key (saves then go to the device).
+   * See change: extend-craft-web-to-all-apps (D6).
+   */
+  siblingExtensions?: string[];
+  /**
+   * For `editor-pane-file-handler`: `true` = saves require the plugin's
+   * `ctx.registerFileValidator` validator; fail closed (503) while it is not loaded.
+   */
+  validator?: boolean;
+  /**
+   * For `resource-page-section` slot: restrict the section to one resource
+   * page (`skill` | `agent` | `extension` | `prompt` | `theme`). Absent = every
+   * resource page. See change: add-skill-atlas-screen.
+   */
+  resourceType?: "skill" | "agent" | "extension" | "prompt" | "theme";
+  /**
+   * For `editor-pane-tab` slot: optional exported component name rendered as
+   * the tab-strip label (props: `{ path, session, pluginContext }`). Stays
+   * mounted while the tab is in the background. See change: add-browser-editor-pane-tab.
+   */
+  labelComponent?: string;
+  /**
+   * For "settings-section" slot: which SettingsPanel tab to render in.
+   * Defaults to "general" if omitted.
+   */
+  tab?: SettingsTab;
+  /**
+   * For "settings-section" slot: optional request to PROMOTE the owning
+   * plugin's settings page into a host nav group. Placement only — the page
+   * still lives at `/settings/plugins/<id>`. The validator shape-checks and
+   * drops an invalid hint with a warning (never fatal); whether a valid hint
+   * is honoured (group allowlist, first-party scope, reserved labels) is the
+   * host's decision.
+   *
+   * See change: promote-model-roles-settings.
+   */
+  nav?: SettingsNavHint;
+  /**
+   * URL path pattern (wouter syntax, must start with "/") for the
+   * `shell-overlay-route` slot. First-class field so the slot consumer
+   * has a typed contract instead of digging through `config`.
+   * Example: "/session/:sid/flow/:flowId/agent/:agentId".
+   *
+   * See change: fix-flows-plugin-polish (path-as-first-class-claim-field).
+   */
+  path?: string;
+  /**
+   * For `shell-overlay-route` claims: which URL parameter holds the session
+   * id. The slot consumer uses this to resolve the parent session metadata
+   * via `useShellSession`. Defaults to "sid" when omitted.
+   *
+   * See change: fix-flows-plugin-polish (path-as-first-class-claim-field).
+   */
+  sessionParam?: string;
+  /**
+   * Shell navigation depth a `shell-overlay-route` occupies for the
+   * depth-aware back action: `1` = detail (back → cards), `2` = overlay-on-
+   * detail (back → declared `parentPath`, else cards). When omitted, the route
+   * is treated as `depth: 2` and the validator emits a non-fatal warning.
+   *
+   * See change: fix-plugin-and-scoped-back-navigation.
+   */
+  depth?: 1 | 2;
+  /**
+   * For `depth: 2` `shell-overlay-route` claims: the wouter path pattern the
+   * back action returns to. `:params` are interpolated from the current route
+   * match; when a required `:param` is not present in the match (e.g. a run
+   * URL that omits the parent's cwd) the back target degrades to `/`. When
+   * omitted, a `depth: 2` route's back target defaults to `/`.
+   *
+   * See change: fix-plugin-and-scoped-back-navigation.
+   */
+  parentPath?: string;
+  /**
+   * How a `shell-overlay-route` claim is presented. Defaults to `"dialog"`.
+   *
+   * - `"dialog"` — the shell renders the claim in a route-backed overlay: a
+   *   `Dialog` over a plain backdrop on desktop, and the `MobileShell` depth
+   *   slide on mobile. The URL stays canonical either way, so deep links, the
+   *   browser back button, and `depth`/`parentPath` all still apply.
+   *
+   *   The launching route is NOT kept mounted behind the dialog. A route-backed
+   *   dialog moves the URL to its own path, so the launching route stops
+   *   matching and cannot render. The guarantee is that DISMISSAL returns to
+   *   it — not that it stays visible.
+   *
+   * - `"page"` — the claim takes the full viewport on BOTH desktop and
+   *   mobile, outside the `MobileShell` panel. Opting out of the dialog opts
+   *   out of the mobile depth slide too: a surface that declares it needs the
+   *   whole viewport needs it on a phone most of all, and rendering it inside
+   *   a depth-1 detail panel would reintroduce exactly the constraint the
+   *   opt-out exists to escape.
+   *
+   * Declare `"page"` only for width-hungry surfaces (boards, wide tables) that
+   * a dialog would visibly cramp. `depth` remains REQUIRED for `"page"` claims —
+   * it is the only thing driving their back action. `parentPath` follows the
+   * ordinary rule (required when `depth: 2`), not an extra `"page"` condition.
+   *
+   * NOTE: a claim nested under `/folder/:cwd` or `/session/:id` MUST NOT declare
+   * `depth: 1`. The history fast-path needs a strictly shallower predecessor, so
+   * a surface at the same depth as its own parent falls through to the depth-1
+   * default `/` — ejecting the user from the folder or session it was opened
+   * from. Declare `depth: 2` plus a `parentPath` naming that parent.
+   *
+   * `"content"` renders the claim in the shell content area beside the
+   * sidebar (like the OpenSpec board) and in the mobile detail panel at its
+   * declared `depth`; `depth` is REQUIRED for it.
+   *
+   * See change: add-route-backed-overlay-dialogs, add-plugin-app-host.
+   */
+  presentation?: "page" | "dialog" | "content";
+  /** Slot-specific extra config (escape hatch — prefer first-class fields). */
+  config?: Record<string, unknown>;
+  /**
+   * Optional exported predicate function name for filtering contributions.
+   * Answers "does this claim apply to this target?" — a claim failing its
+   * predicate is removed from the slot's claim list entirely.
+   */
+  predicate?: string;
+  /**
+   * Optional exported sync function name. Answers "will this claim's component
+   * produce visible output for this target?" — a claim whose shouldRender
+   * returns false is NOT mounted and counts as absent for the wrapper-gate
+   * helpers (e.g. `useSlotHasClaimsForSession`), so parent subcards hide
+   * cleanly. Use when the component conditionally returns `null` based on
+   * dynamic state (e.g. "extension not installed"). MUST be synchronous.
+   *
+   * See change: auto-hide-empty-session-subcards.
+   */
+  shouldRender?: string;
+}
+
+/**
+ * Declarative requirements a plugin has on its environment.
+ * Probed by the dashboard-plugin-runtime; surfaced in PluginStatus.requirements.
+ *
+ * Names are matched against pi extensions (via /api/packages/installed),
+ * binaries (via the shared ToolRegistry), and named service probes from a
+ * closed built-in registry. Plugins SHALL NOT register additional service
+ * names in V1.
+ *
+ * See change: add-plugin-activation-ui (Layer 1.5).
+ */
+export interface PluginRequirements {
+  /** pi extension package identifiers (matched via the same logic
+      RECOMMENDED_EXTENSIONS uses: name / id / source / displayName). */
+  piExtensions?: string[];
+  /** Binaries that must resolve on PATH via the tool-registry. */
+  binaries?: string[];
+  /** Named service probes (closed built-in registry; "model-proxy" only in V1). */
+  services?: string[];
+  /**
+   * Absolute filesystem paths that must exist — the "where does this live"
+   * question for a `.app`-bundled or otherwise non-PATH binary (e.g. iMCP's
+   * `/Applications/iMCP.app/Contents/MacOS/imcp-server`, which the `binaries`
+   * PATH probe cannot see). An entry MAY be a single `${<configKey>}`
+   * placeholder resolved from the declaring plugin's own validated config
+   * before probing; the key must exist in `configSchema` and resolve to an
+   * absolute path, else the requirement is unsatisfied (never a throw). This
+   * is a config read and an existence check only — never a shell expansion,
+   * never an execution of the path.
+   *
+   * See change: add-apple-tools-imcp-plugin.
+   */
+  paths?: string[];
+}
+
+/**
+ * One project-type detection rule a plugin manifest MAY declare. `markers` are
+ * root-anchored relative path patterns (1–3 segments, `*` inside a segment
+ * only); the server matches them in one bounded, symlink-free walk of an
+ * admitted folder.
+ * See change: add-project-scoped-apps.
+ */
+export interface ProjectTypeRule {
+  /** `^[a-z][a-z0-9-]{0,63}$`. */
+  type: string;
+  /** 1–16 patterns; a type matches when at least one marker matches. */
+  markers: string[];
+}
+
+/**
+ * Wire result of `GET /api/folder/project`. `source` describes where `types`
+ * came from (not `id`, which only ever comes from the declaration file).
+ * See change: add-project-scoped-apps.
+ */
+export interface FolderProject {
+  id: string | null;
+  types: string[];
+  source: "declared" | "detected" | "none";
+  /** Present (true) when an entry/pattern budget or the deadline cut detection short. */
+  truncated?: true;
+}
+
+/**
+ * The pi-dashboard-plugin manifest.
+ * Declared as the `pi-dashboard-plugin` field in a package.json,
+ * or as a top-level `dashboard-plugin.json` adjacent to package.json.
+ */
+export interface PluginManifest {
+  /** Globally unique kebab-case plugin id. */
+  id: string;
+  /** Human-readable display name. */
+  displayName: string;
+  /**
+   * Lower number = rendered earlier in multi-contribution slots.
+   * Default 1000. First-party plugins use 100.
+   */
+  priority?: number;
+  /** Relative path to the bundled client entry (from package root). */
+  client?: string;
+  /** Optional relative path to the server entry. */
+  server?: string;
+  /** Optional relative path to a pi-extension/bridge entry. */
+  bridge?: string;
+  /** Optional relative path to a JSON Schema 7 file for plugin config validation. */
+  configSchema?: string;
+  /**
+   * Whether the plugin is enabled when `plugins.<id>.enabled` is unset in
+   * `~/.pi/dashboard/config.json`. Defaults to true (the historical
+   * `enabled !== false` behaviour). A plugin carrying real-user surface —
+   * e.g. the browser relay driving the operator's SSO Chrome — sets
+   * `defaultEnabled: false` so it ships opt-in.
+   * Honoured by the server-side enabled checks (loader `isEnabled`, toggle
+   * impact graph) and reported via `/api/health.plugins[].enabled`, which the
+   * client's enabled-set consumes — no client change needed.
+   * See change: add-browser-relay (GAP B).
+   */
+  defaultEnabled?: boolean;
+  /** Slot claims. */
+  claims: PluginClaim[];
+  /**
+   * Optional declarative requirements probed by the runtime and surfaced as
+   * `PluginStatus.requirements` / `missingRequirements`.
+   * See change: add-plugin-activation-ui (Layer 1.5).
+   */
+  requires?: PluginRequirements;
+  /**
+   * Env-style vault binding names this plugin reads through `ctx.vault`. A name
+   * is readable only after the user approves the declaration in Settings; a
+   * declaration added by an update needs its own approval. Capability contract,
+   * not isolation. See change: add-credential-vault (D4).
+   */
+  vaultBindings?: string[];
+  /**
+   * Other plugin ids this plugin requires (hard, transitive). When a
+   * dependency is missing from discovery or disabled in config, the loader
+   * SHALL skip this plugin's server entry and surface the gap via
+   * `PluginStatus.missingDeps`. Cycles soft-fail at discovery (loaded: false
+   * for every plugin in the cycle).
+   *
+   * See change: add-plugin-activation-ui (Layer 2 — dependency graph).
+   */
+  dependsOn?: string[];
+  /**
+   * When true, the plugin is a test fixture and SHALL be excluded from
+   * production bundles (NODE_ENV=production).
+   */
+  fixture?: boolean;
+  /**
+   * Optional named export in the plugin's client entry holding this plugin's
+   * i18n catalog (a {@link PluginI18nCatalog}). When set, the generated
+   * registry imports it and the shell merges it under the `plugin.<id>.*`
+   * namespace via `registerPluginCatalog`, exposing it through the plugin
+   * context `t`. Keys are authored UNPREFIXED by the plugin.
+   * See change: make-all-ui-text-i18n.
+   */
+  i18nCatalog?: string;
+  /**
+   * Optional project-type detection rules (max 8). Evaluated server-side, only
+   * while this plugin is loaded and enabled. See change: add-project-scoped-apps.
+   */
+  projectTypes?: ProjectTypeRule[];
+}
+
+/**
+ * A plugin's translation catalog: language code -> (unprefixed key -> value).
+ * The runtime prefixes every key with `plugin.<id>.` on merge, so plugin keys
+ * cannot collide with core keys or another plugin's keys. `en` is optional and
+ * usually omitted (English lives at the call-site fallback).
+ */
+export type PluginI18nCatalog = Partial<Record<string, Record<string, string>>>;

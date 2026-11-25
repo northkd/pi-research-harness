@@ -1,0 +1,63 @@
+[
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/questions/question-store.ts",
+    "sha256": "8f0369257fee702020c0a761a06db33ccf8fab8ddc84ac5a8dd3406a1de63f3b",
+    "destination": "upstream/question-store.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/questions/question-snapshot.ts",
+    "sha256": "01a52a9d54e757f89eef48f44fd3c4fcd06f6ac162632de4badcc9919d03d8df",
+    "destination": "upstream/question-snapshot.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/questions/question-files.ts",
+    "sha256": "2c799da883e01d880800fd9fbd37f22a7bf15ebb4810a33ae7542dd27c570cd3",
+    "destination": "upstream/question-files.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/questions/brief-policy.ts",
+    "sha256": "8286974f81b7551e953713f3dea258721dee2e06042ca5a861ef1e2ad206840b",
+    "destination": "upstream/brief-policy.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/questions/brief-prompt.ts",
+    "sha256": "b49a4783c1f6e0822b0f36ad1e689eb28d914343a3f1f53d105693f049d63c25",
+    "destination": "upstream/brief-prompt.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/questions/brief-generator.ts",
+    "sha256": "606c3f64363ad4eef989790e71a1e6df396ecba5ab70cbac98c3b37a48d7cfb6",
+    "destination": "upstream/brief-generator.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/questions/brief-model.ts",
+    "sha256": "8926b5c19c8265c5600a21c492f8a8dad1994974a1a05d263cdf2d233a19b31e",
+    "destination": "upstream/brief-model.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/question-types.ts",
+    "sha256": "d32f6519e1cd4207b0d733dd364671db02f62acac07c05c743943c2d7d30a4f5",
+    "destination": "upstream/question-types.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/redaction.ts",
+    "sha256": "4b45223e2ca2398d169efb428be98a83177dcec107972b997573b7260b795731",
+    "destination": "upstream/redaction.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/prompt-answer.ts",
+    "sha256": "8c5a65fbb9c87a97f327781c32c080080211f3d64984314b86839a111fd9b9a6",
+    "destination": "upstream/prompt-answer.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/role-schema.ts",
+    "sha256": "5b111559bbba2740c17aa517f1727331fc681176d194a5bb5a060fd3d5fdf38a",
+    "destination": "upstream/role-schema.js"
+  },
+  {
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-extension/src/ask-user-tool.ts",
+    "sha256": "43fc67e16fd229d8bc4c0e7738144d8a1ba3c067b0230ee5de293ec8b5788fc1",
+    "destination": "upstream/ask-user.js",
+    "modification": "Use the injected native multiselect adapter; keep original tool schema, normalization and result formatting."
+  }
+]

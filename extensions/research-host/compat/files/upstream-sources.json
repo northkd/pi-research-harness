@@ -1,0 +1,40 @@
+{
+  "sources": [
+    {
+      "source": "pi-dashboard-server/src/lib/path-containment.ts",
+      "sha256": "aed4ac7a54394689bfe44f96e074a38527f99500cca00946105018b030b7281f"
+    },
+    {
+      "source": "pi-dashboard-server/src/lib/writable-md-target.ts",
+      "sha256": "e020eb05f299bacf04178a6da8ce2ecd38af851215fb946f564c5678f97918bb"
+    },
+    {
+      "source": "pi-dashboard-server/src/lib/file-write-lock.ts",
+      "sha256": "ad0995a0de04487c5bc25d66ec140f2ea85a09971755d10af3e41e052d05a639"
+    },
+    {
+      "source": "pi-dashboard-server/src/lib/mime-types.ts",
+      "sha256": "c29a6125b9611ba654366c1e2eb38ea846af472d40294a690aa798ada0934a88"
+    },
+    {
+      "source": "pi-dashboard-server/src/lib/decode-file-uri.ts",
+      "sha256": "e0684064662a5e2487fcbe62de301c10d2e812d6c6e8d3387c53142380181996"
+    },
+    {
+      "source": "pi-dashboard-server/src/lib/md-candidates.ts",
+      "sha256": "10aed9c192f7b2c108fe584ba48d7bea2183f24ef0b3737f58959e236f89c021"
+    },
+    {
+      "source": "pi-dashboard-server/src/lib/artifact-roots.ts",
+      "sha256": "e91465cf0a46eabe116a60a72643ac4d66960afa84851402ecf3db0052726342"
+    },
+    {
+      "source": "pi-dashboard-server/src/browse.ts",
+      "sha256": "89fb31085d99db3d3214a21f9b57dec81e0d93c2c40f70e798a3fcdc756c475d"
+    },
+    {
+      "source": "pi-dashboard-shared/src/file-kind.ts",
+      "sha256": "72d299050f93b1036ae16649d4d2fbdfaff9f1d77410a4a1d4be69fd84ad42b9"
+    }
+  ]
+}

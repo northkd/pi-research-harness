@@ -1,0 +1,1768 @@
+/**
+ * REST API endpoint types.
+ */
+import type {
+  ApiResponse,
+  DashboardEvent,
+  DashboardSession,
+  OpenSpecGroup,
+  OpenSpecGroupsFile,
+  ProviderSource,
+} from "./types.js";
+
+export type { ApiResponse } from "./types.js";
+
+import type { EnrichedRecommendedExtension } from "./recommended-extensions.js";
+
+export type { EnrichedRecommendedExtension } from "./recommended-extensions.js";
+export type { Tier } from "./tiers.js";
+// Tier primitives are shared with the MCP plugin and the route→tier map; the
+// API surface re-exports them so consumers have one import path for the REST
+// types they carry (see change: expand-mcp-tiered-surface, D1).
+export { defaultTierForSource, isTier, minTier, rank, TIERS } from "./tiers.js";
+
+/**
+ * MCP tool input types (change: expand-mcp-tiered-surface, D5). A manifest row
+ * names one of these (or a route's own `*Request` type); the codegen resolves
+ * it to a JSON Schema, so the schema cannot drift from the type.
+ */
+
+/** A tool that takes no arguments. */
+export type ToolEmptyInput = Record<string, never>;
+
+/**
+ * Permissive body/query for a route with no narrow exported request type yet.
+ * Path parameters are still typed (and validated) by the codegen from the route
+ * pattern, so the untrusted part — the body — is what stays open here.
+ */
+export type ToolJsonBody = Record<string, unknown>;
+
+/** MCP: send a prompt to a session. */
+export interface SendPromptRequest {
+  sessionId: string;
+  text: string;
+  images?: unknown[];
+}
+
+/**
+ * MCP: args for a session-bound bridge tool. `sessionId` is explicit (so the
+ * guard and the schema can see it) plus any bridge-specific fields.
+ */
+export interface SessionToolArgs {
+  sessionId: string;
+  [k: string]: unknown;
+}
+
+/** MCP: a bare session reference (abort and similar). */
+export interface SessionIdRequest {
+  sessionId: string;
+}
+
+/**
+ * MCP `list_sessions` args (change: paginate-mcp-list-sessions). Bounds and the
+ * status enum are enforced by the tool's validator; the shape drives the schema.
+ */
+export interface ListSessionsToolArgs {
+  /**
+   * @minimum 1
+   * @maximum 200
+   * @integer
+   */
+  limit?: number;
+  status?: Array<"active" | "idle" | "streaming" | "ended">;
+  cwd?: string;
+  since?: number;
+  cursor?: string;
+}
+
+// ── Sessions ────────────────────────────────────────────────────────
+
+export interface ListSessionsQuery {
+  status?: "active" | "ended";
+}
+
+export type ListSessionsResponse = ApiResponse<DashboardSession[]>;
+
+// ── Events ──────────────────────────────────────────────────────────
+
+export type FetchEventContentResponse = ApiResponse<DashboardEvent>;
+
+// pi retry policy (pi-retry-settings capability). pi's OWN native retry knobs,
+// read from / written to the GLOBAL `~/.pi/agent/settings.json` `retry` block.
+// The dashboard keeps no parallel policy and runs no retry loop; this is a thin
+// editor over pi's settings. GLOBAL only -- pi has no persisted per-session
+// retry policy (`setAutoRetryEnabled` delegates to the global setter), so there
+// is no project-scoped or per-session variant.
+// See change: retry-forever-with-stop-control.
+
+/** pi's `retry.provider.*` sub-block (provider/SDK-level request controls). */
+export interface PiRetryProviderPolicy {
+  /** Provider/SDK request timeout (ms). Absent = SDK default. */
+  timeoutMs?: number;
+  /** Provider/SDK retry attempts. pi default 0. */
+  maxRetries: number;
+  /** Max server-requested delay (ms) before failing. pi default 60000; 0 disables the limit. */
+  maxRetryDelayMs: number;
+}
+
+export interface PiRetryPolicy {
+  /** pi retries transient provider failures. */
+  enabled: boolean;
+  /** Max agent-level retry attempts. No clamp -- pi accepts any non-negative int. */
+  maxRetries: number;
+  /** Base backoff (ms); pi's delay is `baseDelayMs * 2^(attempt-1)`, uncapped. */
+  baseDelayMs: number;
+  /** Provider/SDK-level controls. A wait taken here emits NO event (invisible). */
+  provider: PiRetryProviderPolicy;
+}
+
+export type GetPiRetryPolicyResponse = ApiResponse<PiRetryPolicy>;
+
+/** PUT body -- all fields required (the client always sends the full policy). */
+export type PutPiRetryPolicyRequest = PiRetryPolicy;
+
+export interface PutPiRetryPolicyResult {
+  policy: PiRetryPolicy;
+  /** How many connected sessions were reloaded to apply the new policy. */
+  reloadedSessions: number;
+}
+
+export type PutPiRetryPolicyResponse = ApiResponse<PutPiRetryPolicyResult>;
+
+// ── pi settings editor (global ~/.pi/agent/settings.json) ───────────
+// See change: edit-pi-agent-settings.
+
+/** Auth state of a legacy settings.json key against `auth.json` (server-computed; no values cross the wire). */
+export type PiLegacyAuthState = "none" | "same" | "different";
+
+/** A plain-text API key found in pi's settings.json, masked. See change: pi-settings-full-coverage. */
+export interface PiLegacyCredential {
+  /** `anthropicApiKey` | `openaiApiKey` | `apiKey` | `providers.<id>.apiKey`. */
+  key: string;
+  /** Normalised auth.json provider id; `null` for the providerless top-level `apiKey`. */
+  provider: string | null;
+  auth: PiLegacyAuthState;
+  /** `…last4` for values of 32+ chars, otherwise fully masked. Never the value. */
+  masked: string;
+}
+
+/** GET /api/pi-settings body (also the 409 `stale` payload minus `error`). */
+export interface PiSettingsReadResponse {
+  success: true;
+  /** Parsed file; `{}` when absent or unparseable. */
+  settings: Record<string, unknown>;
+  /** Raw file text (BOM kept); `""` when absent. */
+  raw: string;
+  /** Concurrency token; `"absent"` for no file. */
+  etag: string;
+  /** Present when the file exists but is not a valid JSON object. Never quotes file content. */
+  parseError?: string;
+  /** Theme names pi can resolve (built-ins plus global/package themes), sorted. */
+  themes: string[];
+  /** Plain-text API keys left in settings.json, masked. */
+  legacyCredentials: PiLegacyCredential[];
+}
+
+/**
+ * Leaf-key patch over the typed key set (`pi-settings-schema.ts`); a `null` leaf
+ * deletes the key, `enabledModels` is replaced whole. Blocks hold dotted leaves.
+ */
+export type PiSettingsPatch = Record<string, unknown>;
+
+export interface PutPiSettingsRequest {
+  patch: PiSettingsPatch;
+  baseEtag: string;
+}
+
+export interface PutPiSettingsRawRequest {
+  raw: string;
+  baseEtag: string;
+}
+
+/** Successful write (typed or raw): post-write state so the client re-baselines. */
+export interface PiSettingsWriteResponse {
+  success: true;
+  settings: Record<string, unknown>;
+  raw: string;
+  etag: string;
+  reloadedSessions: number;
+  /** Raw writes only: managed keys whose submitted value was replaced from disk. */
+  restoredKeys?: string[];
+  /** Plain-text API keys still in settings.json after the write (a raw save can add or drop some). */
+  legacyCredentials: PiLegacyCredential[];
+}
+
+/** 409 body: the file changed after the client read it. */
+export interface PiSettingsConflict {
+  success: false;
+  error: "stale";
+  etag: string;
+  settings: Record<string, unknown>;
+  raw: string;
+}
+
+/** Result of mirroring the dashboard default model / thinking level into pi. */
+export interface PiMirrorResult {
+  ok: boolean;
+  /** `ok:false` reason. */
+  error?: "parse" | "busy" | "io";
+  /** The dashboard model id has no `provider/` prefix, so nothing was mirrored. */
+  skipped?: "no-provider-separator";
+}
+
+/** POST /api/pi-settings/sync-defaults success body. */
+export interface PiSettingsSyncResponse {
+  success: true;
+  piMirror: PiMirrorResult;
+  settings: Record<string, unknown>;
+  raw: string;
+  etag: string;
+}
+
+/** POST /api/pi-settings/legacy-credentials body. Key paths only — never values. */
+export interface PiLegacyCredentialsRequest {
+  baseEtag: string;
+  actions: { key: string; action: "move" | "remove" }[];
+}
+
+/** Success: post-write state plus the refreshed masked list. */
+export interface PiLegacyCredentialsResponse {
+  success: true;
+  settings: Record<string, unknown>;
+  raw: string;
+  etag: string;
+  reloadedSessions: number;
+  legacyCredentials: PiLegacyCredential[];
+}
+
+// ── Session Spawn ───────────────────────────────────────────────────
+
+export interface SpawnSessionRequest {
+  cwd: string;
+  /** Configured ACP agent id; absent → pi. See change: add-acp-session-driver. */
+  agent?: string;
+}
+
+export type SpawnSessionResponse = ApiResponse<{ message: string }>;
+
+// ── Aggregate Stats ─────────────────────────────────────────────────
+
+export interface AggregateStats {
+  activeSessions: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  totalCost: number;
+}
+
+export type AggregateStatsResponse = ApiResponse<AggregateStats>;
+
+// ── File Read ───────────────────────────────────────────────────────
+
+import type { FileKind } from "./file-kind.js";
+
+export interface FileContentResult {
+  type: "file";
+  /** Viewer-discrimination class from the shared `fileKind` classifier. */
+  kind: FileKind;
+  /** Resolved MIME type for the entry. */
+  mimeType: string;
+  /** File size in bytes. */
+  size: number;
+  /**
+   * UTF-8 content. Present for text-renderable kinds (`text` / `markdown` /
+   * `unknown` → Monaco / Markdown viewers); omitted for `image` / `pdf` /
+   * `binary`, which fetch raw bytes via `GET /api/file/raw`.
+   * See change: add-internal-monaco-editor-pane.
+   */
+  content?: string;
+  /**
+   * On-disk modification time: full-precision `stat.mtimeMs` (NOT rounded).
+   * Opaque token: echo unchanged on `POST /api/file/write` for optimistic-
+   * concurrency conflict detection.
+   * See change: directory-settings-page-and-scoped-md-editing, fix-editor-mtime-token-precision.
+   */
+  mtime?: number;
+}
+
+// ── File Write (markdown editing) ─────────────────────────────────
+
+/**
+ * Request body for `POST /api/file/write`.
+ * - `cwd` present → directory scope; `path` resolves against `cwd` via
+ *   `path.resolve(cwd, path)`, so it accepts BOTH an absolute path (as returned
+ *   by `MdCandidate.path`) and a cwd-relative path — absolute wins.
+ * - `cwd` absent  → global scope; `path` MUST be absolute under `~/.pi/agent`.
+ * Authorization is gated server-side by `isWritableMdTarget`.
+ * See change: directory-settings-page-and-scoped-md-editing.
+ */
+export interface FileWriteRequest {
+  cwd?: string;
+  /** Absolute on-disk path (e.g. from `MdCandidate.path`) or, with `cwd`, a cwd-relative path. */
+  path: string;
+  content: string;
+  /** mtime the buffer was loaded at; mismatch with disk → 409 Conflict. */
+  mtime: number;
+}
+
+export interface FileWriteResult {
+  /** New on-disk mtime after the write (full-precision `stat.mtimeMs`; opaque token). */
+  mtime: number;
+}
+
+export type FileWriteResponse = ApiResponse<FileWriteResult>;
+
+/**
+ * One candidate for the Instructions file picker. Every candidate is guaranteed
+ * to satisfy `isWritableMdTarget` server-side (picker ⊆ guard).
+ * See change: directory-settings-page-and-scoped-md-editing.
+ */
+export interface MdCandidate {
+  /** Absolute, on-disk path (the write target). */
+  path: string;
+  /** Path relative to the scope root, for display. */
+  relPath: string;
+}
+
+export interface MdCandidatesResult {
+  candidates: MdCandidate[];
+}
+
+export type MdCandidatesResponse = ApiResponse<MdCandidatesResult>;
+
+/**
+ * `GET /api/file/md-read?cwd=<cwd?>&path=<path>` — scoped markdown read for the
+ * Instructions editor, gated by the same `isWritableMdTarget` guard as write +
+ * candidates. Serves global scope (`~/.pi/agent`) which `/api/file` cannot.
+ * See change: directory-settings-page-and-scoped-md-editing.
+ */
+export interface MdReadResult {
+  content: string;
+  /** On-disk mtime (full-precision `stat.mtimeMs`; opaque token) the buffer is loaded at; carried into the write. */
+  mtime: number;
+}
+
+export type MdReadResponse = ApiResponse<MdReadResult>;
+
+/**
+ * `GET /api/file/raw?cwd=<cwd>&path=<relPath>` streams raw file bytes with a
+ * resolved `Content-Type` header and HTTP Range support. Same cwd-allowlist +
+ * anti-traversal gate as `/api/file`. Not a JSON envelope — the body is the
+ * file itself. Used by image / pdf tabs.
+ */
+export interface FileRawQuery {
+  cwd: string;
+  path: string;
+}
+
+export interface DirectoryListResult {
+  type: "directory";
+  entries: string[];
+}
+
+export type FileReadResult = FileContentResult | DirectoryListResult;
+
+export type FileReadResponse = ApiResponse<FileReadResult>;
+
+// ── Browse ──────────────────────────────────────────────────────────
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  /**
+   * Set only when the request used `detect=1`. When the response was
+   * produced without `detect=1`, this field is absent (undefined) —
+   * meaning "not classified", NOT "classified as not-git". Consumers
+   * that need badges SHOULD call `GET /api/browse/flags` to fill in
+   * the flags lazily.
+   *
+   * See change: split-browse-flags.
+   */
+  isGit?: boolean;
+  /** See `isGit` — same opt-in / detect-gated semantics. */
+  isPi?: boolean;
+}
+
+/**
+ * Response shape for `GET /api/browse?path=<dir>&q=<query>&detect=<0|1>`.
+ *
+ * The optional `q` query parameter, when present and non-empty, causes the
+ * server to filter entries by case-insensitive substring on `name` and rank
+ * them (exact → prefix → word-boundary → substring) before the 200-entry cap.
+ * When omitted or whitespace-only, entries are sorted alphabetically.
+ *
+ * The optional `detect` query parameter (only the literal string `"1"` is
+ * truthy) opts into eager `.git` / `.pi` classification on every entry. When
+ * absent (the default), per-entry `isGit` / `isPi` are omitted and no
+ * filesystem probes run — use the bulk `GET /api/browse/flags` endpoint to
+ * classify entries lazily.
+ *
+ * See change: split-browse-flags.
+ */
+export interface BrowseResult {
+  entries: BrowseEntry[];
+  parent: string | null;
+  current: string;
+  /**
+   * True when the request was confined to the shared-root set (a non-local
+   * caller); absent for local callers. See change: harden-server-capability-bounds.
+   */
+  confined?: boolean;
+  /**
+   * The server's `process.platform` — lets the client use OS-correct path
+   * handling (separator, case-sensitivity, drive-letter rules) without
+   * having to sniff `navigator.userAgent`. Optional for backward
+   * compatibility; consumers fall back to inferring from the `current`
+   * path shape when absent.
+   *
+   * See change: platform-path-normalization.
+   */
+  platform?: NodeJS.Platform;
+}
+
+export type BrowseResponse = ApiResponse<BrowseResult>;
+
+// ── Browse flags (bulk classifier) ──────────────────────────────────
+
+/**
+ * Per-path classification record returned by `GET /api/browse/flags`.
+ * Booleans only — any probe failure (ENOENT, EACCES, ELOOP, race-on-
+ * deletion, …) maps to `false` for that flag, never an error.
+ *
+ * See change: split-browse-flags.
+ */
+export interface BrowseFlagEntry {
+  isGit: boolean;
+  isPi: boolean;
+}
+
+/**
+ * Wire shape passed via the `paths` query parameter on
+ * `GET /api/browse/flags?paths=<json-array>`. The value MUST be a
+ * URL-encoded JSON array of absolute path strings (length ≤ 100).
+ * Provided here for type-only documentation — the request itself is a
+ * GET, so this interface is not serialized as a body.
+ */
+export interface BrowseFlagsRequest {
+  paths: string[];
+}
+
+/** Successful response payload for `GET /api/browse/flags`. */
+export interface BrowseFlagsResult {
+  /**
+   * Map keyed by the absolute paths that were requested. The key set
+   * SHALL equal the input `paths` set — one classification per input
+   * path, no extras, no omissions.
+   */
+  flags: Record<string, BrowseFlagEntry>;
+}
+
+export type BrowseFlagsResponse = ApiResponse<BrowseFlagsResult>;
+
+/** Request body for `POST /api/browse/mkdir`. */
+export interface MkdirRequest {
+  parent: string;
+  name: string;
+}
+
+export interface MkdirResult {
+  path: string;
+}
+
+export type MkdirResponse = ApiResponse<MkdirResult>;
+
+/** Request body for `POST /api/browse/create-project`. See change: streamline-first-run. */
+export interface CreateProjectRequest {
+  name: string;
+}
+
+/** Stable machine codes returned as `reason` on a failed create-project call. */
+export type CreateProjectErrorReason =
+  | "invalid_name"
+  | "reserved_name"
+  | "too_long"
+  | "not_a_directory"
+  | "root_not_a_directory"
+  | "outside_root"
+  | "home_missing"
+  | "fs_error";
+
+export interface CreateProjectResult {
+  /** Real (symlink-resolved) absolute path of the project directory. */
+  path: string;
+  /** True when the directory already existed before the call. */
+  existed: boolean;
+}
+
+/** Failure envelope: `ApiResponse` plus the machine `reason`. */
+export type CreateProjectResponse =
+  | ApiResponse<CreateProjectResult>
+  | { success: false; error: string; reason: CreateProjectErrorReason };
+
+// ── Tunnel Status ───────────────────────────────────────────────────
+
+export interface TunnelWatchdogPublicStatus {
+  running: boolean;
+  intervalMs: number;
+  failureThreshold: number;
+  probeTimeoutMs: number;
+  lastProbeAt: number | null;
+  lastSuccessAt: number | null;
+  lastFailureAt: number | null;
+  lastFailureReason: string | null;
+  consecutiveFailures: number;
+  lastRecycleAt: number | null;
+  recycleCount: number;
+}
+
+/**
+ * A tunnel that is active, but NOT at the reserved name the operator asked for.
+ *
+ * Deliberately a field on `active` rather than a fourth `degraded` status: the
+ * tunnel genuinely works, and `TunnelStatus` is the shared shape every provider
+ * and every existing consumer reads. It is a RECONCILIATION — derived by
+ * comparing the stored `tunnel.zrok.reservedName` against the name actually
+ * present in the live URL — which is what keeps a watchdog recycle from
+ * emitting a fresh notification every cycle: the same mismatch yields the same
+ * signal. See change: add-zrok-custom-reserved-name (D2).
+ */
+export interface TunnelDegraded {
+  /** The name configured but not served. */
+  configuredName: string;
+  /** The name the live URL actually carries, when one can be parsed from it. */
+  effectiveName?: string;
+}
+
+export type TunnelStatus = (
+  | {
+      status: "active";
+      url: string;
+      serverOs: string;
+      watchdog?: TunnelWatchdogPublicStatus;
+      degraded?: TunnelDegraded;
+    }
+  | { status: "inactive"; serverOs: string }
+  | { status: "unavailable"; serverOs: string }
+) & {
+  /**
+   * Counts across EVERY planned provider (primary + enabled extras), so the
+   * toolbar can show partial. `status` above stays the zrok projection.
+   * Counts only: this route is ungated.
+   */
+  gateway?: { connected: number; expected: number };
+};
+
+export type TunnelStatusResponse = ApiResponse<TunnelStatus>;
+
+/**
+ * Gated `/api/tunnel-status-detail` body: the status plus the providers THIS
+ * server process connected (zrok + extras). Drives the Setup Connect/Disconnect
+ * toggle; readiness cannot, since an OS-level daemon reads `connected` there.
+ */
+export type TunnelStatusDetail = TunnelStatus & {
+  connectedProviders?: string[];
+  /** Per planned provider: connected / failed / dropped / idle + reason. */
+  providers?: GatewayProviderState[];
+};
+
+/** One planned provider's Gateway connection state (mirrors server `gatewayProviderStatus`). */
+export interface GatewayProviderState {
+  provider: string;
+  primary: boolean;
+  state: "connected" | "failed" | "dropped" | "idle";
+  error?: string;
+}
+
+// ── Reserved-name configuration ──────────────────────────────────
+
+/**
+ * Why a zrok reserved-name request did or did not take effect.
+ *
+ * The point of the type is that `taken`, `invalid` and `write-failed` are
+ * DIFFERENT things a user can act on differently, where the previous bare
+ * `null` made all three arrive as a green tunnel at an unrequested URL.
+ */
+export type ReservedNameStatus = "ok" | "taken" | "invalid" | "write-failed";
+
+export interface ReservedNameResult {
+  status: ReservedNameStatus;
+  /** The name that was attempted (echoed so a stale client cannot mis-attribute a reason). */
+  name: string;
+  /** Human-readable reason. Present for every non-`ok` status. */
+  message?: string;
+  /**
+   * Set when a tunnel was already live and IS STILL SERVING its previous URL:
+   * the stored name now differs from what is served until a reconnect. Never
+   * omitted when that divergence exists — a silent divergence is the exact
+   * defect this endpoint removes.
+   */
+  liveUrlUnchanged?: string;
+  /**
+   * Set when the live tunnel was STOPPED to complete the request.
+   *
+   * Replacing a name must tear the share down before `delete name` (a release
+   * may never run against a running share), so after a replace-while-connected
+   * the tunnel is down — not "still serving the old URL". Reporting the latter
+   * would be factually false at the moment of the response.
+   */
+  tunnelStopped?: boolean;
+}
+
+export type ReservedNameResponse = ApiResponse<ReservedNameResult>;
+
+// ── Pi Resources ────────────────────────────────────────────────────
+
+export interface PiResource {
+  name: string;
+  description?: string;
+  filePath: string;
+  type: "extension" | "skill" | "prompt" | "theme" | "agent";
+  /**
+   * Scope-derived activation state, sourced from pi's own resolver
+   * (`PackageManager.resolve()` → `ResolvedResource.enabled`). A resource pi
+   * does not report defaults to `true`. See change: folder-resource-activation-toggle.
+   */
+  enabled: boolean;
+  /** Agent-only: `model` from frontmatter (e.g. `sonnet`, `@fast`). See change: resources-card-tabs. */
+  model?: string;
+  /** Agent-only: compact `tools` summary from frontmatter (e.g. `edit,read` or `all`). */
+  tools?: string;
+  /** Theme-only: palette swatch colors (bg / surface / accent / text) for the card strip. */
+  colors?: string[];
+  /**
+   * Raw `metadata.source` of a package-origin resolver entry whose source matched
+   * no known package row. Rendered as the card's package label rather than dropped.
+   * See change: fix-skill-discovery-parity.
+   */
+  packageSource?: string;
+  /**
+   * Skill-only provenance from the live join against a session's retained
+   * `commands_list`. Absent when the payload is scan-only or degraded.
+   * See change: fix-skill-discovery-parity.
+   */
+  status?: PiSkillStatus;
+  /** Skill-only: the path the session reported, for `loaded-elsewhere` entries. */
+  sessionPath?: string;
+}
+
+/**
+ * Provenance of a skill relative to the session that reported its loaded set.
+ * See change: fix-skill-discovery-parity.
+ */
+export type PiSkillStatus = "active" | "not-loaded" | "loaded-elsewhere";
+
+export interface PiResourceScope {
+  extensions: PiResource[];
+  skills: PiResource[];
+  prompts: PiResource[];
+  /** Subagents from `agents/*.md`. See change: resources-card-tabs. */
+  agents: PiResource[];
+  /** Themes from pi's resolver (`ResolvedPaths.themes`). See change: fix-skill-discovery-parity. */
+  themes: PiResource[];
+}
+
+export interface PiPackageInfo {
+  name: string;
+  description?: string;
+  source: string; // e.g. "npm:pi-web-access", "git:github.com/user/repo", "../relative"
+  resources: PiResourceScope;
+  /** Which scope this package was resolved from */
+  scope?: "local" | "global";
+}
+
+export interface PiResourcesResult {
+  local: PiResourceScope;
+  global: PiResourceScope;
+  packages: PiPackageInfo[];
+  /**
+   * True when skills/prompts/themes came from the filesystem fallback because
+   * pi's resolver was unavailable or returned a contradicted empty result.
+   * See change: fix-skill-discovery-parity.
+   */
+  degraded?: boolean;
+  /**
+   * True when no single session has reported a `commands_list` for this folder
+   * (none, or more than one). No skill carries a `status` in that case.
+   */
+  scanOnly?: boolean;
+  /**
+   * The single reporting session behind the join, when there is exactly one.
+   * `differsFromFolder` is true when its working directory is not the scanned
+   * folder (a worktree or subdirectory), which is what makes a `not-loaded`
+   * status attributable to scope rather than to rejection.
+   */
+  contributingSession?: { sessionId: string; cwd: string; differsFromFolder: boolean };
+  /** True when the retained skill commands carried no joinable `path` at all. */
+  pathlessCommands?: boolean;
+}
+
+export type PiResourcesResponse = ApiResponse<PiResourcesResult>;
+
+// ── Git Operations ──────────────────────────────────────────────────
+
+export interface GitBranchEntry {
+  name: string;
+  isRemote: boolean;
+  isCurrent: boolean;
+}
+
+export interface GitBranchesResult {
+  current: string;
+  detached: boolean;
+  branches: GitBranchEntry[];
+}
+
+export type GitBranchesResponse = ApiResponse<GitBranchesResult>;
+
+export interface GitCheckoutRequest {
+  cwd: string;
+  branch: string;
+  stash?: boolean;
+}
+
+export type GitCheckoutResponse =
+  | ApiResponse<{ stashed?: boolean }>
+  | ApiResponse<never> & { success: false; dirty: true; files: string[] };
+
+export interface GitInitRequest {
+  cwd: string;
+}
+
+export type GitInitResponse = ApiResponse<void>;
+
+export interface GitStashPopResult {
+  conflicts: boolean;
+}
+
+export type GitStashPopResponse = ApiResponse<GitStashPopResult>;
+
+// ── Git status / commit (session-uncommitted-indicator-and-commit) ──────────
+
+/** `GET /api/git/status?cwd=` — fresh working-tree state for a cwd. */
+export type GitStatusResponse = ApiResponse<import("./types.js").GitStatus>;
+
+/** A single changed file in the commit dialog's picker. */
+export interface GitChangedFile {
+  /** Path relative to the repo root (cwd). */
+  path: string;
+  /** Porcelain-v2 status class. */
+  state: "staged" | "unstaged" | "untracked";
+  /** Lines added (undefined for untracked / binary). */
+  additions?: number;
+  /** Lines removed (undefined for untracked / binary). */
+  deletions?: number;
+}
+
+/** `GET /api/git/changed-files?cwd=` — file list for the commit dialog. */
+export type GitChangedFilesResponse = ApiResponse<GitChangedFile[]>;
+
+export interface GitCommitRequest {
+  cwd: string;
+  message: string;
+  /** Repo-relative paths to stage and commit. Must resolve inside cwd. */
+  files: string[];
+}
+
+export interface GitCommitResult {
+  commitHash: string;
+  subject: string;
+}
+
+export type GitCommitResponse = ApiResponse<GitCommitResult>;
+
+export interface GitCommitDraftRequest {
+  cwd: string;
+  files: string[];
+  /** Session whose context seeds the AI draft. */
+  sessionId: string;
+}
+
+export interface GitCommitDraftResult {
+  message: string;
+  /** How the message was produced (fork-subagent, diff-only fallback, stub). */
+  source: "fork-subagent" | "inherit-context" | "diff-only" | "stub";
+}
+
+export type GitCommitDraftResponse = ApiResponse<GitCommitDraftResult>;
+
+// ── Pull Requests ─────────────────────────────────────────────────────────
+
+export interface PullRequestInfo {
+  number: number;
+  title: string;
+  headRefName: string;
+  headRefOid: string;
+  author: string;
+  isDraft: boolean;
+  isCrossRepository: boolean;
+  checkRollup: "passing" | "failing" | "pending" | "none";
+}
+
+export type PullRequestListResponse = ApiResponse<PullRequestInfo[]>;
+
+// ── Provider Auth ─────────────────────────────────────────────────────────
+
+export interface ProviderAuthInfo {
+  id: string;
+  name: string;
+  flowType: "auth_code" | "device_code";
+}
+
+/**
+ * A provider id pi renamed (pi 1.0.3: `azure-openai-responses` → `azure`) still
+ * present in pi's agent-dir files. Ids and location tokens only — never values.
+ * See change: update-pi-core-1-1-adopt-apis.
+ */
+export interface LegacyProviderIdEntry {
+  legacyId: string;
+  newId: string;
+  /** e.g. `auth.json`, `settings.json:defaultProvider`, `models.json:providers`. */
+  locations: string[];
+}
+
+/** `GET /api/provider-auth/legacy-provider-ids`. Empty list when nothing matched. */
+export interface LegacyProviderIdsResponse {
+  legacyProviderIds: LegacyProviderIdEntry[];
+}
+
+/**
+ * `GET /api/provider-auth/catalogue-ready`. `ready`: a bridge catalogue is held.
+ * `fallback`: not ready, but the server's runtime supplies api-key rows.
+ * Optional so a client tolerates an older server.
+ * See change: fix-provider-catalogue-first-run (D4).
+ */
+export interface CatalogueReadyResponse {
+  ready: boolean;
+  fallback?: boolean;
+}
+
+export interface ProviderAuthStatus {
+  id: string;
+  name: string;
+  flowType: "auth_code" | "device_code" | "api_key";
+  authenticated: boolean;
+  /**
+   * Credential expiry (epoch ms), or `null` for a credential whose provider
+   * never rotates it — e.g. OpenRouter's permanent API key stored as
+   * `{ type: "oauth", refresh: "" }`. The client renders no expiry for either
+   * `null` or `undefined`. See change: delegate-provider-oauth-to-pi-ai (D4).
+   */
+  expires?: number | null;
+  maskedKey?: string;
+  /** Name of the env var pi-ai consults for this provider (api-key rows only). */
+  envVar?: string;
+  /** True when configured via ambient credential chain (AWS profile / GCP ADC). */
+  ambient?: boolean;
+  /**
+   * pi's label for an environment credential (api-key rows), e.g.
+   * `"workload identity federation"`. Shown as the Environment mechanism when
+   * the row has no `envVar`. See change: update-pi-core-1-0-adopt-apis (D7).
+   */
+  authLabel?: string;
+  /**
+   * OAuth rows: `true` for a subscription sign-in, `false` for an account
+   * sign-in (e.g. OpenRouter). Absent from an older server — clients treat
+   * absent as `true`. See change: update-pi-core-1-0-adopt-apis (D8).
+   */
+  subscription?: boolean;
+  /**
+   * Whether *this row's own* credential kind is configured. Deliberately
+   * distinct from `authenticated`: derived per row kind in the server
+   * (`_buildAuthStatus`), so a keyless `-api` twin reads `false` rather than
+   * inheriting its OAuth sibling's state — and an env-var credential reads
+   * `true` even though `authenticated` under-counts it.
+   *
+   * Optional: an older server omits it, so consumers must fall back to
+   * `configured ?? authenticated` rather than filtering on a falsy value,
+   * which would drop every row. See change: redesign-providers-settings-page (D1, D6).
+   */
+  configured?: boolean;
+  /** Where this row's credential is sourced from, when configured. */
+  source?: ProviderSource;
+}
+
+/** Provider ids the dashboard's OAuth registry can drive. */
+export interface ProviderAuthHandlerIdsResponse {
+  ids: string[];
+}
+
+/**
+ * What a live provider sign-in flow is currently waiting on before it can
+ * proceed, in the vocabulary of pi-ai's `AuthPrompt` kinds. `device_code` is
+ * render-only (the flow polls); the other three are answerable through
+ * `POST /api/provider-auth/flow/:flowId/input`.
+ *
+ * Deliberately a tagged union rather than the old two-slot shape: an
+ * `auth_url` event and a `manual_code` prompt arrive back-to-back, so the pane
+ * must be able to show the link AND the paste field at once.
+ * See change: delegate-provider-oauth-to-pi-ai (D2).
+ */
+export type OAuthFlowPending =
+  | {
+      kind: "device_code";
+      userCode: string;
+      verificationUri: string;
+      intervalSeconds?: number;
+      expiresInSeconds?: number;
+    }
+  | { kind: "manual_code"; message: string; placeholder?: string }
+  | { kind: "text"; message: string; placeholder?: string }
+  | {
+      kind: "select";
+      message: string;
+      options: { id: string; label: string; description?: string }[];
+    };
+
+/**
+ * Serializable snapshot of one in-flight OAuth login. Exactly the fields the
+ * UI needs — the server-side flow record additionally holds resolvers, the
+ * abort controller and `preAnswers`, none of which cross this boundary.
+ * See change: delegate-provider-oauth-to-pi-ai (D2, E12).
+ */
+export interface OAuthFlowStatus {
+  flowId: string;
+  provider: string;
+  status: "pending" | "complete" | "error" | "expired";
+  authUrl?: string;
+  message?: string;
+  pending?: OAuthFlowPending;
+  error?: string;
+}
+
+// ── Package Management ──────────────────────────────────────────────
+
+/** A single result from the npm registry search. */
+export interface NpmPackageResult {
+  name: string;
+  description?: string;
+  version: string;
+  keywords: string[];
+  date: string;
+  publisher?: { username: string; email?: string };
+  links?: { npm?: string; homepage?: string; repository?: string };
+  downloads?: { weekly: number; monthly: number };
+  /** Derived from keywords: extension, skill, theme, prompt */
+  types: string[];
+}
+
+export interface NpmSearchResponse {
+  packages: NpmPackageResult[];
+  total: number;
+}
+
+export type NpmSearchApiResponse = ApiResponse<NpmSearchResponse>;
+
+export interface NpmReadmeResponse {
+  readme: string;
+  name: string;
+  version: string;
+}
+
+export type NpmReadmeApiResponse = ApiResponse<NpmReadmeResponse>;
+
+/** An installed pi package as returned by the list endpoint. */
+export interface InstalledPackage {
+  source: string;
+  scope: "user" | "project";
+  filtered: boolean;
+  installedPath?: string;
+  /** Set after check-updates: true if newer version available */
+  updateAvailable?: boolean;
+  /** Version read from `<installedPath>/package.json#version`. Undefined if missing/unreadable. */
+  version?: string;
+  /** Description read from `<installedPath>/package.json#description`. */
+  description?: string;
+  /** Friendly name. From RECOMMENDED_EXTENSIONS displayName when matched, else basename of source. */
+  displayName?: string;
+  /** True when this row matches a RECOMMENDED_EXTENSIONS entry (via sourcesMatch). */
+  isRecommended?: boolean;
+  /** True when isRecommended AND id is in BUNDLED_EXTENSION_IDS AND bundle subtree exists. */
+  isBundled?: boolean;
+  /**
+   * Canonical published spec (`npm:<name>` or a git URL) for a local/git
+   * row that has a resolvable published variant. Two resolution paths:
+   *   - recommended rows → RECOMMENDED_EXTENSIONS manifest source.
+   *   - non-recommended local rows → npm-registry lookup by package.json `name`.
+   * Absent when the row is plain npm, or no published variant resolves.
+   * Drives the second source line + Reset to npm action.
+   * See change: reset-override-to-npm.
+   */
+  publishedVariantSource?: string;
+  /** Latest published version of `publishedVariantSource`, when known (best-effort; undefined offline). */
+  publishedVariantVersion?: string;
+  /**
+   * True on a user-scope row whose path the dashboard recorded as its own
+   * plugin bridge (`dashboardPluginBridges` value or `_dashboardManagedPackages`
+   * key in the same settings file). Display-only: the entry stays in
+   * `packages[]` and keeps loading; the Add-ons page hides it.
+   * See change: addons-hub-declutter.
+   */
+  dashboardManaged?: boolean;
+}
+
+export type InstalledPackagesResponse = ApiResponse<InstalledPackage[]>;
+
+/** Request body for install / remove / update operations. */
+export interface PackageOperationRequest {
+  source: string;
+  scope: "global" | "local";
+  cwd?: string;
+}
+
+/** Response returned immediately (202) when an operation starts. */
+export interface PackageOperationResponse {
+  operationId: string;
+}
+
+export type PackageOperationApiResponse = ApiResponse<PackageOperationResponse>;
+
+/** Result of check-updates. */
+export interface PackageUpdateInfo {
+  source: string;
+  displayName: string;
+  type: "npm" | "git";
+}
+
+export type CheckUpdatesResponse = ApiResponse<PackageUpdateInfo[]>;
+
+// ── Package health (settings.json packages[] rot) ────────────
+// See change: add-package-health-cleanup.
+
+/** Health classification of one `packages[]` entry. */
+export type PackageHealthStatus = "ok" | "stale-npm" | "missing-path" | "duplicate";
+
+/** One classified `packages[]` entry. */
+export interface PackageHealthReport {
+  /** Verbatim `packages[]` source string (object entries → their `source`). */
+  source: string;
+  status: PackageHealthStatus;
+  /** Resolved install dir; undefined for stale-npm / missing-path. */
+  resolvedPath?: string;
+  /** `package.json#name` when readable. */
+  packageName?: string;
+  /** `package.json#version` when readable. */
+  version?: string;
+  /** Stable group id (`dup:<lowercased name>`); set only for `duplicate`. */
+  duplicateGroupId?: string;
+  /** Install dir mtime (ISO-8601) when resolvable. */
+  mtime?: string;
+  /** Human-readable explanation for non-ok statuses. */
+  reason?: string;
+}
+
+/** One group of entries sharing a `package.json#name`. */
+export interface PackageHealthDuplicateGroup {
+  id: string;
+  packageName: string;
+  count: number;
+}
+
+export interface PackageHealthSummary {
+  ok: number;
+  staleNpm: number;
+  missingPath: number;
+  duplicateGroups: PackageHealthDuplicateGroup[];
+}
+
+export interface PackageHealthListResponseData {
+  entries: PackageHealthReport[];
+  summary: PackageHealthSummary;
+}
+
+export type PackageHealthListResponse = ApiResponse<PackageHealthListResponseData>;
+
+/** Body of `POST /api/packages/cleanup`. Each member is a verbatim `packages[]` source. */
+export interface PackageCleanupRequest {
+  drop: string[];
+}
+
+export interface PackageCleanupResponse {
+  before: number;
+  after: number;
+  dropped: string[];
+  /** Absolute path of the pre-mutation backup; empty string when nothing was dropped. */
+  backupPath: string;
+}
+
+// ── Pi core version check ────────────────────────────────────
+
+/** A core pi ecosystem CLI package (not managed by pi's PackageManager). */
+export interface PiCorePackage {
+  name: string;
+  displayName: string;
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  installSource: "global" | "managed";
+}
+
+export interface PiCoreStatus {
+  packages: PiCorePackage[];
+  updatesAvailable: number;
+  lastChecked: string;
+}
+
+export type PiCoreVersionsResponse = ApiResponse<PiCoreStatus>;
+
+/** Request body for POST /api/pi-core/update. Empty packages = update all. */
+export interface PiCoreUpdateRequest {
+  packages?: string[];
+}
+
+/** Result of a single package update. */
+export interface PiCoreUpdateResult {
+  name: string;
+  success: boolean;
+  error?: string;
+}
+
+/** Response from POST /api/pi-core/update (completes synchronously). */
+export interface PiCoreUpdateResponse {
+  results: PiCoreUpdateResult[];
+  sessionsReloaded: number;
+}
+
+export type PiCoreUpdateApiResponse = ApiResponse<PiCoreUpdateResponse>;
+
+// ── Known Servers ─────────────────────────────────────────────
+
+import type { KnownServer } from "./config.js";
+
+/** A known server as listed, with its verified move suggestion when one exists. */
+export interface KnownServerListEntry extends KnownServer {
+  /** Verified new address of the same identity (never persisted). */
+  movedTo?: { host: string; port: number };
+}
+
+export type KnownServersListResponse = ApiResponse<KnownServerListEntry[]> & {
+  /** Caller holds an operator credential (may add/remove/update). */
+  canManage?: boolean;
+};
+
+export interface AddKnownServerRequest {
+  host: string;
+  port: number;
+  label?: string;
+  /** Hint only — persisted solely when the identity challenge proves it. */
+  fingerprint?: string;
+}
+
+/** `POST /api/known-servers` success data when an existing entry was updated. */
+export interface AddKnownServerResult {
+  updated?: boolean;
+}
+
+/** `POST /api/known-servers/accept-move` body. */
+export interface AcceptKnownServerMoveRequest {
+  /** Current stored address of the entry. */
+  host: string;
+  port: number;
+}
+
+/** Server-side reachability of a known server (operator-only probe). */
+export type KnownServerProbeStatus = "reachable" | "name-not-resolved" | "refused" | "timeout" | "error";
+
+export interface KnownServerProbeResult {
+  status: KnownServerProbeStatus;
+}
+
+export interface RemoveKnownServerRequest {
+  host: string;
+  port: number;
+}
+
+export interface DiscoveredServerInfo {
+  host: string;
+  port: number;
+  piPort: number;
+  version: string;
+  pid: number;
+  isLocal: boolean;
+  /** Advertised identity fingerprint (absent on older servers). */
+  fingerprint?: string;
+  /** Advertised display name. */
+  name?: string;
+}
+
+export type DiscoverServersResponse = ApiResponse<DiscoveredServerInfo[]>;
+
+/** Detected network interface for trusted networks UI. */
+export interface NetworkInterface {
+  name: string;
+  address: string;
+  netmask: string;
+  cidr: string;
+  /**
+   * Human-meaningful name (`tailnet`), falling back to the device name.
+   * `utun4` says nothing to the person deciding whom to trust.
+   * See change: warn-unreachable-trusted-networks.
+   */
+  label?: string;
+  /** True for a `/32` NIC (Tailscale, WireGuard, `ppp`) — its own address only. */
+  pointToPoint?: boolean;
+  /**
+   * Trust offers this interface can honestly make. Empty for a `/32` in no
+   * recognised range — inventing one would be a guess, and a wrong trust entry
+   * is worse than none.
+   */
+  suggestions?: import("./bind-reachability.js").TrustSuggestion[];
+}
+
+// ── Recommended extensions ───────────────────────────
+
+export type ListRecommendedExtensionsResponse = ApiResponse<{
+  recommended: EnrichedRecommendedExtension[];
+}>;
+
+// ── Tool registry ────────────────────
+
+import type { Resolution } from "./tool-registry/types.js";
+
+export type { Resolution, Source, TriedEntry } from "./tool-registry/types.js";
+
+export type ListToolsResponse = ApiResponse<{ tools: Resolution[] }>;
+export type GetToolResponse = ApiResponse<Resolution>;
+
+export interface RescanToolsRequest {
+  name?: string;
+}
+
+export interface SetToolOverrideRequest {
+  path: string;
+}
+
+// ── Model Proxy: wire-protocol types ────────────────────────────────
+
+/** OpenAI Chat Completions request shape (subset relevant to the proxy). */
+export interface OpenAIChatCompletionRequest {
+  model: string;
+  messages: OpenAIChatMessage[];
+  stream?: boolean;
+  max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  tools?: OpenAITool[];
+  tool_choice?: string | { type: string; function?: { name: string } };
+  stop?: string | string[];
+}
+
+export interface OpenAIChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string | OpenAIContentPart[];
+  name?: string;
+  tool_calls?: OpenAIToolCall[];
+  tool_call_id?: string;
+}
+
+export interface OpenAIContentPart {
+  type: "text" | "image_url";
+  text?: string;
+  image_url?: { url: string; detail?: string };
+}
+
+export interface OpenAITool {
+  type: "function";
+  function: { name: string; description?: string; parameters?: Record<string, unknown> };
+}
+
+export interface OpenAIToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+export interface OpenAIChatCompletionResponse {
+  id: string;
+  object: "chat.completion";
+  created: number;
+  model: string;
+  choices: {
+    index: number;
+    message: { role: "assistant"; content?: string | null; tool_calls?: OpenAIToolCall[] };
+    finish_reason: string | null;
+  }[];
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
+export interface OpenAIChatCompletionStreamChunk {
+  id: string;
+  object: "chat.completion.chunk";
+  created: number;
+  model: string;
+  choices: {
+    index: number;
+    delta: {
+      role?: "assistant";
+      content?: string | null;
+      reasoning_content?: string | null;
+      tool_calls?: { index: number; id?: string; type?: "function"; function?: { name?: string; arguments?: string } }[];
+    };
+    finish_reason: string | null;
+  }[];
+}
+
+export interface OpenAIModelEntry {
+  id: string;
+  object: "model";
+  created: number;
+  owned_by: string;
+  "x-pi"?: {
+    contextWindow?: number;
+    maxTokens?: number;
+    reasoning?: boolean;
+    cost?: { input?: number; output?: number };
+    input?: string[];
+  };
+}
+
+export interface OpenAIModelsResponse {
+  object: "list";
+  data: OpenAIModelEntry[];
+}
+
+/** Anthropic Messages request shape (subset relevant to the proxy). */
+export interface AnthropicMessagesRequest {
+  model: string;
+  messages: AnthropicMessage[];
+  system?: string | AnthropicContentBlock[];
+  max_tokens: number;
+  stream?: boolean;
+  temperature?: number;
+  top_p?: number;
+  tools?: AnthropicTool[];
+  stop_sequences?: string[];
+}
+
+export interface AnthropicMessage {
+  role: "user" | "assistant";
+  content: string | AnthropicContentBlock[];
+}
+
+export interface AnthropicContentBlock {
+  type: string;
+  text?: string;
+  source?: { type: "base64"; media_type: string; data: string };
+  [key: string]: unknown;
+}
+
+export interface AnthropicTool {
+  name: string;
+  description?: string;
+  input_schema: Record<string, unknown>;
+}
+
+export interface AnthropicMessagesResponse {
+  id: string;
+  type: "message";
+  role: "assistant";
+  content: AnthropicContentBlock[];
+  model: string;
+  stop_reason: string | null;
+  usage: { input_tokens: number; output_tokens: number };
+}
+
+export interface AnthropicMessagesStreamEvent {
+  type: string;
+  message?: AnthropicMessagesResponse;
+  index?: number;
+  content_block?: AnthropicContentBlock;
+  delta?: { type: string; text?: string; partial_json?: string; thinking?: string; [key: string]: unknown };
+  usage?: { output_tokens: number };
+}
+
+// ── Model Proxy: API key management ─────────────────────────────────
+
+export interface ModelProxyApiKeysCreateRequest {
+  label: string;
+  scopes?: string[];
+  expiresAt?: number;
+}
+
+export interface ModelProxyApiKeyEntry {
+  id: string;
+  label: string;
+  createdBy?: string;
+  scopes: string[];
+  createdAt: number;
+  lastUsedAt?: number;
+  expiresAt?: number;
+  revokedAt?: number;
+  hash: string; // redacted to "***" in list responses
+}
+
+export type ModelProxyApiKeysListResponse = ApiResponse<{
+  keys: ModelProxyApiKeyEntry[];
+  revoked: ModelProxyApiKeyEntry[];
+}>;
+
+export type ModelProxyApiKeysCreateResponse = ApiResponse<{
+  id: string;
+  label: string;
+  createdBy?: string;
+  scopes: string[];
+  createdAt: number;
+  expiresAt?: number;
+  key: string; // cleartext, revealed ONCE
+}>;
+
+// ── OpenSpec Change Grouping ────────────────────────────────────────
+// See change: add-openspec-change-grouping (tasks 1.6, 5.x).
+// Endpoints under `/api/openspec/groups[?cwd=…]`.
+
+export type GetOpenSpecGroupsResponse = ApiResponse<OpenSpecGroupsFile>;
+
+export interface CreateOpenSpecGroupRequest {
+  name: string;
+  color?: string;
+}
+export type CreateOpenSpecGroupResponse = ApiResponse<OpenSpecGroup>;
+
+export interface UpdateOpenSpecGroupRequest {
+  name?: string;
+  color?: string;
+  order?: number;
+}
+export type UpdateOpenSpecGroupResponse = ApiResponse<OpenSpecGroup>;
+
+export type DeleteOpenSpecGroupResponse = ApiResponse<void>;
+
+export interface SetOpenSpecGroupAssignmentRequest {
+  changeName: string;
+  /** `null` removes the assignment (change becomes Ungrouped). */
+  groupId: string | null;
+}
+export type SetOpenSpecGroupAssignmentResponse = ApiResponse<void>;
+
+/** PUT `/api/openspec/groups/change-order?cwd=` — persist the manual ordering
+ *  of changes within one group (or the implicit Ungrouped column).
+ *  See change: redesign-openspec-board. */
+export interface SetOpenSpecChangeOrderRequest {
+  /** Target group id, or `OPENSPEC_UNGROUPED_KEY` for Ungrouped. */
+  groupId: string;
+  /** Ordered list of `changeName` for this group. */
+  order: string[];
+}
+export type SetOpenSpecChangeOrderResponse = ApiResponse<void>;
+
+// ── Pi runtime selection ──────────────────────────────────────────────────
+// GET /api/pi/installs · POST /api/pi/runtime.
+// See change: select-pi-runtime-install.
+
+/** One discoverable pi install, with per-consumer usage. */
+export interface PiInstallEntry {
+  key: string;
+  label: string;
+  /** Package directory, or null when this location holds no pi. */
+  pkgDir: string | null;
+  /** File the `pi` (spawn) override would be set to. */
+  spawnEntry: string | null;
+  /** File the `pi-coding-agent` (import) override would be set to. */
+  moduleEntry: string | null;
+  version: string | null;
+  /** False ONLY when a KNOWN version is below the floor. */
+  meetsFloor: boolean;
+  /** True when the version is unreadable, so no floor check was possible. */
+  floorUnknown: boolean;
+  /** The synthesised "currently resolved" row — displayed, never selectable. */
+  readOnly: boolean;
+  usedBy: { spawn: boolean; module: boolean };
+}
+
+/** What one pi consumer currently resolves to. */
+export interface PiConsumerState {
+  path: string | null;
+  pkgDir: string | null;
+  version: string | null;
+  candidateKey: string | null;
+  pinned: boolean;
+}
+
+export interface PiInstallsResponse {
+  installs: PiInstallEntry[];
+  spawn: PiConsumerState;
+  module: PiConsumerState;
+  /** Both consumers resolve to the same install (realpath'd package dir). */
+  inSync: boolean;
+  /** CONSUMER divergence — distinct from `installSetDiverged`. */
+  consumerDiverged: boolean;
+  /** Message naming BOTH versions; null when not diverged. */
+  divergenceMessage: string | null;
+  /** INSTALL-SET divergence — >1 distinct version across enumerated installs. */
+  installSetDiverged: boolean;
+  installSetVersions: string[];
+  /** Compatibility floor used for `meetsFloor`. */
+  floor: string;
+}
+
+/** `null` for a consumer selects Automatic (clears its override). */
+export interface SetPiRuntimeRequest {
+  spawn?: string | null;
+  module?: string | null;
+}
+
+// ── Node runtime family selection ─────────────────────────────────────────
+// See change: add-node-runtime-family-selection.
+
+/** One member of the node/npm/npx family in a coherence report. */
+export interface NodeMemberCoherence {
+  ok: boolean;
+  path: string | null;
+  candidateKey: string | null;
+  handSet: boolean;
+}
+
+/** Coherence half of the node-installs payload. */
+export interface NodeCoherence {
+  /** All RESOLVABLE members share one installation root. */
+  coherent: boolean;
+  members: Record<string, NodeMemberCoherence>;
+  /** Non-null when members resolve into >1 root; names each deviator + root. */
+  mismatch: { deviatingMembers: Array<{ member: string; root: string }> } | null;
+  /** Hand-set members pointing away from the family (pre-write report). */
+  handSetDeviations: Array<{ member: string; currentPath: string }>;
+  /** Migration-adopted candidate (display only — persists nothing). */
+  selectedCandidateKey: string | null;
+}
+
+export interface NodeInstallsResponse {
+  candidates: Array<{
+    key: string;
+    label: string;
+    root: string | null;
+    nodeEntry: string | null;
+    npmEntry: string | null;
+    npxEntry: string | null;
+    version: string | null;
+    /**
+     * Hand-set deviations THIS candidate's write would produce (server
+     * pre-computes planSelection per candidate) — the pre-write confirm
+     * report. See change: add-node-runtime-family-selection.
+     */
+    pendingHandSet: Array<{ member: string; currentPath: string }>;
+  }>;
+  coherence: NodeCoherence;
+}
+
+/** Select by candidate `root` (unique per installation). */
+export interface SelectNodeRuntimeRequest {
+  root: string;
+  /** Hand-set members the user chose to overwrite anyway. */
+  discardHandSet?: string[];
+}
+
+// ── Mermaid AI repair (POST /api/mermaid/repair) ─────────────────────────────
+// See change: add-mermaid-ai-repair.
+
+export interface MermaidRepairRequest {
+  /** The diagram source that failed to render. */
+  code: string;
+  /** The parser/renderer error message. */
+  error: string;
+}
+
+export interface MermaidRepairData {
+  /** Corrected mermaid source (untrusted — the client renders + sanitizes it). */
+  code: string;
+  /** The configured `provider/id` that produced it. */
+  model: string;
+}
+
+export type MermaidRepairErrorCode =
+  | "disabled"
+  | "bad_request"
+  | "too_large"
+  | "busy"
+  | "timeout"
+  | "provider_error"
+  | "unparseable";
+
+export type MermaidRepairResponse =
+  | { success: true; data: MermaidRepairData }
+  | { success: false; error: string; code: MermaidRepairErrorCode };
+
+// ── Add-ons feature catalog (GET /api/addons/catalog, POST /api/addons/:id/toggle) ──
+// See change: addons-hub-feature-catalog.
+
+export type AddonFeatureKind = "core" | "agent-and-dashboard" | "dashboard-only" | "agent-only";
+
+/** Who delivers a feature. Derived, never configured. */
+export type AddonOrigin = "first-party" | "mixed" | "community" | "upstream";
+
+export type AddonFeatureState = "on" | "off" | "partial";
+
+/** Static contents counts of a pi package (tools are runtime-registered and omitted). */
+export interface AddonPackageContents {
+  extensions: number;
+  skills: number;
+  prompts: number;
+  themes: number;
+}
+
+/** One global-scope pi package owned by a feature. */
+export interface AddonPackagePart {
+  source: string;
+  scope: "user" | "project";
+  /** pi package identity (npm name, git URL without ref, resolved path). */
+  identity: string;
+  /** Source family: drives grouping and the first-party/author-label rules. */
+  sourceKind: "npm" | "git" | "local";
+  /** `package.json#name` when readable. */
+  packageName?: string;
+  version?: string;
+  description?: string;
+  installedPath?: string;
+  /** True when the global entry is the all-empty filter form (loads nothing). */
+  entryOff: boolean;
+  publishedVariantSource?: string;
+  publishedVariantVersion?: string;
+  contents: AddonPackageContents;
+}
+
+/** Dashboard-plugin part of a feature. */
+export interface AddonPluginPart {
+  id: string;
+  /** Manifest/config enabled flag. */
+  enabled: boolean;
+  loaded: boolean;
+  error?: string;
+  hasSettings: boolean;
+  missingRequirements: string[];
+  dependsOn: string[];
+}
+
+/** A package a feature references but does not own (claimed by another feature). */
+export interface AddonRequirementRef {
+  name: string;
+  featureId: string;
+}
+
+export interface AddonFeature {
+  /** `core:pi` | `core:dashboard-bridge` | `plugin:<pluginId>` | `pkg:<identity>`. */
+  id: string;
+  displayName: string;
+  description: string;
+  kind: AddonFeatureKind;
+  origin: AddonOrigin;
+  /** Distinct author labels of the non-first-party parts, in part order. */
+  authorLabels: string[];
+  state: AddonFeatureState;
+  plugin?: AddonPluginPart;
+  /** Managed bridge entry path (the plugin's plumbing, never an owned package). */
+  bridge?: { path: string };
+  packages: AddonPackagePart[];
+  requires: AddonRequirementRef[];
+  /** Feature ids of the plugins requiring this `pkg:` feature's package. */
+  requiredBy: string[];
+  /** Folder mode only (`?scope=local&cwd=`); absent on `core:*` features. See change: addons-hub-folder-view. */
+  folderState?: AddonFolderState;
+  /** Folder mode: a restore record exists on this machine for every package turned off here. */
+  restoreRecorded?: boolean;
+  /** Folder mode: agents the feature's packages contribute (pi deltas cannot filter them). */
+  packageAgents?: number;
+  /** Folder mode, `added-here` only: resources that load here vs the packages' total. */
+  loading?: { loaded: number; total: number };
+}
+
+/** Per-feature state in one folder (design D1/D2 of addons-hub-folder-view). */
+export type AddonFolderState =
+  | "inherited"
+  | "added-here"
+  | "off-here"
+  | "partly-off-here"
+  | "off-globally"
+  | "dashboard-only";
+
+/** Loose resources under `<cwd>/.pi` (not delivered by a package). */
+export interface AddonLooseCounts {
+  skills: number;
+  agents: number;
+  prompts: number;
+  extensions: number;
+  themes: number;
+}
+
+export interface AddonFolderInfo {
+  cwd: string;
+  looseCounts: AddonLooseCounts;
+  /** Set when `<cwd>/.pi/settings.json` could not be parsed; no folder state beyond inherited/dashboard-only/off-globally. */
+  settingsError?: string;
+}
+
+export interface AddonCatalogResponse {
+  success: true;
+  features: AddonFeature[];
+  /** Present in folder mode. */
+  folder?: AddonFolderInfo;
+}
+
+export interface AddonToggleRequest {
+  enabled: boolean;
+  /** `local` = this folder only (needs `cwd`); omitted/`global` = the global toggle. */
+  scope?: "local" | "global";
+  cwd?: string;
+  /** Local enable: also remove an `autoload:false` entry the dashboard does not own (user-confirmed). */
+  removeUnowned?: boolean;
+  dryRun?: boolean;
+  /** Digest of a previous dry-run report; the server rejects the toggle when it no longer matches. */
+  confirmToken?: string;
+}
+
+export interface AddonKeptOn {
+  source: string;
+  by: string[];
+}
+
+export interface AddonStillLoadedIn {
+  source: string;
+  folders: string[];
+}
+
+export interface AddonRestoreSkipped {
+  source: string;
+  reason: "edited" | "no-record";
+}
+
+export interface AddonToggleResponse {
+  success: true;
+  restartRequired: boolean;
+  dryRun?: boolean;
+  /** Feature ids turned off/on together with the requested one. */
+  cascaded: string[];
+  /** Sources rewritten into the all-empty filter form (or that would be, on a dry run). */
+  filtered: string[];
+  /** Sources whose recorded entry was put back (or that would be). */
+  restored: string[];
+  keptOn: AddonKeptOn[];
+  /** Plugins requiring a `pkg:` feature that was turned off (feature ids). */
+  requiredBy: string[];
+  restoreSkipped: AddonRestoreSkipped[];
+  stillLoadedIn: AddonStillLoadedIn[];
+  /** Present on a dry run: digest of the report. */
+  confirmToken?: string;
+  /** False only when a compensating write failed. */
+  consistent?: boolean;
+}
+
+/** A project entry a folder re-enable left in place (`notOwned`) and why. */
+export interface AddonFolderNotOwned {
+  source: string;
+  reason: "no-record" | "edited" | "narrowed";
+  /** The entry as found, for the confirmation dialog. */
+  entry: unknown;
+}
+
+/** `POST /api/addons/:id/toggle` with `scope: "local"` success body. */
+export interface AddonFolderToggleResponse {
+  success: true;
+  scope: "local";
+  cwd: string;
+  /** False when nothing was written (everything kept on, already off, nothing to restore). */
+  changed: boolean;
+  /** Sources written as the all-empty delta. */
+  filtered: string[];
+  /** Sources whose recorded entry was put back (or removed because none existed). */
+  restored: string[];
+  /** Sources removed by a confirmed `removeUnowned`. */
+  removed: string[];
+  keptOn: AddonKeptOn[];
+  notOwned: AddonFolderNotOwned[];
+}

@@ -1,0 +1,68 @@
+2026-11-06 — session overview and creation origins
+Branch: feat/autonomous-collaboration-20261106
+Parent: 4cdddff655805d6b4ba1415c2562892494d4a34b
+
+1. Harness and offline supervision — npm test
+ℹ tests 381
+ℹ suites 3
+ℹ pass 381
+ℹ fail 0
+ℹ tests 64
+ℹ suites 0
+ℹ pass 64
+ℹ fail 0
+
+2. Native Dashboard client — npm run test:parallel -- --config vitest.config.ts --root packages/client
+  ResearchAgentCanvas.test.tsx
+  research-projection.test.ts
+  ResearchWorkbenchPanels.test.tsx
+  ResearchWorkflowControls.test.tsx
+ Test Files  4 passed (4)
+      Tests  63 passed (63)
+   Duration  5.50s (transform 3.76s, setup 599ms, import 6.96s, tests 3.87s, environment 2.77s)
+
+3. Native Dashboard server — npm run test:parallel -- --config vitest.config.ts --root packages/server
+  res-workflow-spawn-register.test.ts
+  session-action-handler-spawn.test.ts
+  res-workflow-participants.test.ts
+ Test Files  3 passed (3)
+      Tests  63 passed (63)
+   Duration  3.66s (transform 4.61s, setup 56ms, import 5.79s, tests 318ms, environment 0ms)
+
+4. Production build — NODE_OPTIONS=--max-old-space-size=4096 pnpm run build
+✓ built in 41.95s
+[precompress] 177 files gzipped: 19.90 MB → 5.58 MB (72% saved)
+[team-plugin] app copied to ../team-plugin/dist/app
+
+5. Syntax — npm run check:syntax
+Shell and ESM syntax checks passed. Workflow statement bodies are covered by npm test.
+
+6. TypeScript — node scripts/tsc7.mjs --noEmit
+Baseline: docs/charter-binding-models/evidence/typescript-diagnostics.txt
+Comparison: same file + TS code + message; line and column ignored.
+Baseline 61; current 61; new 0; resolved 0.
+Full repository typecheck still fails on existing diagnostics.
+
+
+7. Canvas layout after card readability fix — node --test tests/research-canvas-layout.test.mjs
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+
+8. Isolated native service and Chromium — scripts/ui-preview/launcher.mjs
+Launcher status: passed
+Started: 2026-11-06T14:50:19.489Z
+Ended: 2026-11-06T14:50:44.459Z
+Client build status: matched
+Checks: 43 passed; 0 failed; unexpected errors: 0
+Default overview zoom: 1 (100%)
+Origins: user-created / agent-derived / unknown
+Legacy source retained through actual rename API and metadata save: true
+Creator text line fully visible inside caption and card bounds: true
+Original research/adoption files preserved: 7
+Browser report retains 27 screenshot names. This directory publishes only the new origin screenshot.
+Source and browser fixtures synthetic; real model requests: 0.
+
+Groups overlap. Counts are not a unique aggregate total.
+Native registration tests use actual event wiring and synthetic bridge messages.

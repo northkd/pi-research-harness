@@ -1,0 +1,1219 @@
+{
+  "roots": [
+    "mammoth",
+    "xlsx",
+    "chardet",
+    "iconv-lite",
+    "mailparser",
+    "isomorphic-dompurify",
+    "asciidoctor"
+  ],
+  "packages": [
+    {
+      "directory": "@asamuzakjp/css-color",
+      "name": "@asamuzakjp/css-color",
+      "version": "5.1.11",
+      "packageSha256": "00882e6a6f3f7ec5399fee097de67f9c8a6b0c6574f1219b5eab821662515a6f"
+    },
+    {
+      "directory": "@asamuzakjp/dom-selector",
+      "name": "@asamuzakjp/dom-selector",
+      "version": "7.1.1",
+      "packageSha256": "c148c39b367e4fe1e754333a0757153d34a57c103d13be1c7b0a91cf6e088e83"
+    },
+    {
+      "directory": "@asamuzakjp/generational-cache",
+      "name": "@asamuzakjp/generational-cache",
+      "version": "1.0.1",
+      "packageSha256": "7b5f903013aa88bc2844e16e958824cde73d1efe4b1f92715ad9e1eeb6b737bf"
+    },
+    {
+      "directory": "@asamuzakjp/nwsapi",
+      "name": "@asamuzakjp/nwsapi",
+      "version": "2.3.9",
+      "packageSha256": "358910888afe62192233ce50e1af4420bd7c92fc1ac2b0c07cbd29a964064847"
+    },
+    {
+      "directory": "@asciidoctor/cli",
+      "name": "@asciidoctor/cli",
+      "version": "4.0.0",
+      "packageSha256": "e9b6773361ce40a42c0e3433f8d670ef31e759781312a4238fe6365b263d1173"
+    },
+    {
+      "directory": "@asciidoctor/core",
+      "name": "@asciidoctor/core",
+      "version": "3.0.4",
+      "packageSha256": "15e0d0f92b540c37f1847e1c38c6ab738f3c2ca13d1d961389ee7ac15147e1f9"
+    },
+    {
+      "directory": "@asciidoctor/opal-runtime",
+      "name": "@asciidoctor/opal-runtime",
+      "version": "3.0.1",
+      "packageSha256": "8461009c09fd16b53946a5ddceba0b8fc8b8482ab0df82e8b51cf0d8999e71d3"
+    },
+    {
+      "directory": "@asciidoctor/opal-runtime/node_modules/balanced-match",
+      "name": "balanced-match",
+      "version": "1.0.2",
+      "packageSha256": "b30c328501dead1870b894ad604405b2284b571c1f12664cdc61d92a2e3397c2"
+    },
+    {
+      "directory": "@asciidoctor/opal-runtime/node_modules/brace-expansion",
+      "name": "brace-expansion",
+      "version": "2.1.7",
+      "packageSha256": "d217a00ed39214d81f5d9999c0c639f147bab438f94589f9a5b96debf57d6e61"
+    },
+    {
+      "directory": "@asciidoctor/opal-runtime/node_modules/glob",
+      "name": "glob",
+      "version": "8.1.0",
+      "packageSha256": "ce70a80b5de5e1b9e6a932f95b54fbae6b5c4204f8f87853a226d70367cf567c"
+    },
+    {
+      "directory": "@asciidoctor/opal-runtime/node_modules/minimatch",
+      "name": "minimatch",
+      "version": "5.1.9",
+      "packageSha256": "dc1b9424c2ec4c845ba05e7402f7d22807f4ac85d31725892fd3dcafaa08f800"
+    },
+    {
+      "directory": "@babel/helper-string-parser",
+      "name": "@babel/helper-string-parser",
+      "version": "7.29.7",
+      "packageSha256": "ecbd1aaffa9ad000d3bc5a526067b89244cb3ec64c738fbae8b64a9e805f401b"
+    },
+    {
+      "directory": "@babel/helper-validator-identifier",
+      "name": "@babel/helper-validator-identifier",
+      "version": "7.29.7",
+      "packageSha256": "1ad6aeced8b186ac259da45fea50ab9d65d3d958f6458c80e3c8013649d1b12d"
+    },
+    {
+      "directory": "@babel/parser",
+      "name": "@babel/parser",
+      "version": "7.29.9",
+      "packageSha256": "fa70cca00587bdb335e8249fa40e9356ed7b7c9a4fc92b1e74245ab1b852cda1"
+    },
+    {
+      "directory": "@babel/types",
+      "name": "@babel/types",
+      "version": "7.29.8",
+      "packageSha256": "f32460a35cc4649d81f10d4bc6dcfa1ade7a47f95df5db4bb4483f34d24b476e"
+    },
+    {
+      "directory": "@bramus/specificity",
+      "name": "@bramus/specificity",
+      "version": "2.4.3",
+      "packageSha256": "84f0345f53fc623668503ac3bb86f71ed5da3957fb15e105908f9e0184cb8b37"
+    },
+    {
+      "directory": "@csstools/color-helpers",
+      "name": "@csstools/color-helpers",
+      "version": "6.1.2",
+      "packageSha256": "d2728c35a2a2c476361c44bf50b29c6f6851ec599c5a68727cb095525435379b"
+    },
+    {
+      "directory": "@csstools/css-calc",
+      "name": "@csstools/css-calc",
+      "version": "3.4.3",
+      "packageSha256": "e5e9bd6d2db488831e6839df231dc5addbbc85bf0ed3ec3f33a436d62e080072"
+    },
+    {
+      "directory": "@csstools/css-color-parser",
+      "name": "@csstools/css-color-parser",
+      "version": "4.2.6",
+      "packageSha256": "8b341647ec1177b3a699bf92c863331a9948f9d609342a488fe5f99e144f4b1c"
+    },
+    {
+      "directory": "@csstools/css-parser-algorithms",
+      "name": "@csstools/css-parser-algorithms",
+      "version": "4.0.2",
+      "packageSha256": "0dc6485eb3dedfd39b1e341d43f5b5768cd4cfeaba0428f95905ccf67127a26d"
+    },
+    {
+      "directory": "@csstools/css-syntax-patches-for-csstree",
+      "name": "@csstools/css-syntax-patches-for-csstree",
+      "version": "1.1.15",
+      "packageSha256": "2daafd7d5af42ec0eb1512d33edc84a2b667a132921722ad621ef56fc13a9bc7"
+    },
+    {
+      "directory": "@csstools/css-tokenizer",
+      "name": "@csstools/css-tokenizer",
+      "version": "4.0.2",
+      "packageSha256": "0b65e9c0944ae5d0e71e97d99a847977dc9afe65fb2cf852871420cff7abdb8f"
+    },
+    {
+      "directory": "@exodus/bytes",
+      "name": "@exodus/bytes",
+      "version": "1.16.0",
+      "packageSha256": "8e95bdcf936995137b1ab89ef3820660d17463168892f8f68181b018c7b6c96d"
+    },
+    {
+      "directory": "@selderee/plugin-htmlparser2",
+      "name": "@selderee/plugin-htmlparser2",
+      "version": "0.12.0",
+      "packageSha256": "d7b92b27f9577a9a7f3873c8c98c7f5bf2b62ab14d7312253aadd7e7ce89577c"
+    },
+    {
+      "directory": "@types/trusted-types",
+      "name": "@types/trusted-types",
+      "version": "2.0.7",
+      "packageSha256": "d94dd03da4746a07038ad9310cffda7070648d0bd3c040a3a3a3f7cd72e9c872"
+    },
+    {
+      "directory": "@xmldom/xmldom",
+      "name": "@xmldom/xmldom",
+      "version": "0.8.15",
+      "packageSha256": "35aecb16da42bf3843ed197db638dff79d178fc23783bfae77070fcfa4d0ae94"
+    },
+    {
+      "directory": "@zone-eu/mailsplit",
+      "name": "@zone-eu/mailsplit",
+      "version": "5.4.14",
+      "packageSha256": "037c3bae9e8a615912882404c305e6e1b8c03d4221c5780abf276331ca73819b"
+    },
+    {
+      "directory": "a-sync-waterfall",
+      "name": "a-sync-waterfall",
+      "version": "1.0.1",
+      "packageSha256": "56323dd1551fb0e66334e43a6a0170eb2810f24551692f346410a1a37be062ba"
+    },
+    {
+      "directory": "acorn",
+      "name": "acorn",
+      "version": "7.4.1",
+      "packageSha256": "dfcd42c47d09aa794214c28476d5b519c157e17d9490eb2c50faee3defd041bc"
+    },
+    {
+      "directory": "ansi-styles",
+      "name": "ansi-styles",
+      "version": "4.3.0",
+      "packageSha256": "d405f010681d53f77691015e98461f8484b2afe6a9edfdd2ddb27b1e8a8e883d"
+    },
+    {
+      "directory": "ansi-styles/node_modules/color-convert",
+      "name": "color-convert",
+      "version": "2.0.1",
+      "packageSha256": "9471d21744ca3137410448da6b3bd7b30ee91d42edce3b82ebcbf84faef74fb4"
+    },
+    {
+      "directory": "argparse",
+      "name": "argparse",
+      "version": "1.0.10",
+      "packageSha256": "48b848e56c31eda738f76fb8573ae1fe0012c4b1ec9d9cfe8783517a142e9531"
+    },
+    {
+      "directory": "asap",
+      "name": "asap",
+      "version": "2.0.6",
+      "packageSha256": "f69d11cfb6add01ac63fce2a47e0b4596d667d8f43d89853ac27aab06a9fcf28"
+    },
+    {
+      "directory": "asciidoctor",
+      "name": "asciidoctor",
+      "version": "3.0.4",
+      "packageSha256": "04ea03642f4a14e0265304ac65bd225a48680fa29da3c490b5c6c65599405b7d"
+    },
+    {
+      "directory": "assert-never",
+      "name": "assert-never",
+      "version": "1.4.0",
+      "packageSha256": "ab906b2a34e8f397a6006e587f5d716d24ebb58cd82eec36cb4e3476c500f78b"
+    },
+    {
+      "directory": "babel-walk",
+      "name": "babel-walk",
+      "version": "3.0.0-canary-5",
+      "packageSha256": "1549b64069d6ae24d7d91a466204624ab1509f12abb7924b6e0b603323d34d87"
+    },
+    {
+      "directory": "base64-js",
+      "name": "base64-js",
+      "version": "1.5.1",
+      "packageSha256": "9758f3ab8c45e07bb9a368e32f9a8b3729623bbf47cbbb205b32d674ab2a91f0"
+    },
+    {
+      "directory": "bidi-js",
+      "name": "bidi-js",
+      "version": "1.1.0",
+      "packageSha256": "975c91119792da92bb7bb99e822cffcae2459ae8a2cca391c3f8696502be2041"
+    },
+    {
+      "directory": "call-bind-apply-helpers",
+      "name": "call-bind-apply-helpers",
+      "version": "1.0.2",
+      "packageSha256": "59639b628c6846f674857c6a613fd47e2e4d2a24036cdf0f7a62ac634f4c8a5f"
+    },
+    {
+      "directory": "call-bound",
+      "name": "call-bound",
+      "version": "1.0.4",
+      "packageSha256": "dcc8abb3c4ad3774234272149020cb36d7b1a3d377a419454d1e7adb368dd9c3"
+    },
+    {
+      "directory": "character-parser",
+      "name": "character-parser",
+      "version": "2.2.0",
+      "packageSha256": "49974b723e98bec9dab8641bca5ee468739c04a0b7fcc501d762924f32f80aba"
+    },
+    {
+      "directory": "chardet",
+      "name": "chardet",
+      "version": "2.2.0",
+      "packageSha256": "fc6a975cf0b407533666f58e4459637fcd5317eeb465e72aba081beb5ae9e9a8"
+    },
+    {
+      "directory": "cliui",
+      "name": "cliui",
+      "version": "7.0.4",
+      "packageSha256": "13987200f4e2f2329e35b45c949f29fc30a58f02e08e76b2a5507a3b6c7ab6bf"
+    },
+    {
+      "directory": "cliui/node_modules/ansi-regex",
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "packageSha256": "8b2dc166f2b74d5098bad38bdd3dd2f4d4775c626199872f5e36dbb48c40931d"
+    },
+    {
+      "directory": "cliui/node_modules/string-width",
+      "name": "string-width",
+      "version": "4.2.3",
+      "packageSha256": "6457a02418f004fe5d3fbbb19c7cbcc1450a8b887ff9a471dc6985ac83a48d36"
+    },
+    {
+      "directory": "cliui/node_modules/strip-ansi",
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "packageSha256": "0130850b9da0584f54cc20d3dab6365c807e9436ac78e016d5009efa99bd0530"
+    },
+    {
+      "directory": "color-name",
+      "name": "color-name",
+      "version": "1.1.4",
+      "packageSha256": "4a557ea373907e4643badb89ff21b3f4b969d20631086d78eab2e03d05c2efa4"
+    },
+    {
+      "directory": "constantinople",
+      "name": "constantinople",
+      "version": "4.0.1",
+      "packageSha256": "7b0cf478d904186f397b8c75c0f8129d0f36bfcde75929880ac0bedb38c76c7f"
+    },
+    {
+      "directory": "core-util-is",
+      "name": "core-util-is",
+      "version": "1.0.3",
+      "packageSha256": "0067bcd4ef1c86da02a45ad770883b39a9d14aa0b00113071609d5fb3dce0bc0"
+    },
+    {
+      "directory": "css-tree",
+      "name": "css-tree",
+      "version": "3.2.1",
+      "packageSha256": "bd734f2de92e7a254bd05970fa83b30f8be9ed73e33577065a1529e59843cfd4"
+    },
+    {
+      "directory": "data-urls",
+      "name": "data-urls",
+      "version": "7.0.0",
+      "packageSha256": "434b07314556233bfb57a58fb833b027d4665cfee2196b223f2d5c4d85c30460"
+    },
+    {
+      "directory": "decimal.js",
+      "name": "decimal.js",
+      "version": "10.6.0",
+      "packageSha256": "d7e3794828ee8bc94818613c9d901a9e7c857e6ffcf027245e661ddfc63d9b72"
+    },
+    {
+      "directory": "deepmerge-ts",
+      "name": "deepmerge-ts",
+      "version": "7.1.6",
+      "packageSha256": "5fac613d2fff708ff6409b1d9e2453679b8adafb5dfe9141df4efa243115d940"
+    },
+    {
+      "directory": "dingbat-to-unicode",
+      "name": "dingbat-to-unicode",
+      "version": "1.0.2",
+      "packageSha256": "83b29019feaf00315f9c90953a2d10db9dc449a048c5a25462c9e6716d0251a2"
+    },
+    {
+      "directory": "doctypes",
+      "name": "doctypes",
+      "version": "1.1.0",
+      "packageSha256": "75c3011d12383ba4daaf2bd220c601da3c9b95205394ebd70b4a1c78814298bb"
+    },
+    {
+      "directory": "dom-serializer",
+      "name": "dom-serializer",
+      "version": "2.0.0",
+      "packageSha256": "098603e7fee62c07fb392e31dae4dc151a3e03c72555ce1f9182011fbf898501"
+    },
+    {
+      "directory": "domelementtype",
+      "name": "domelementtype",
+      "version": "2.3.0",
+      "packageSha256": "4ddf28a1e60ae7ec15f62cda0d72eb06bcae05b3819942d971c841b7cc0b6930"
+    },
+    {
+      "directory": "domhandler",
+      "name": "domhandler",
+      "version": "5.0.3",
+      "packageSha256": "cbb42a446eef285863e04158c7f269e0e7b8e868c1042d6845e996d760f7376c"
+    },
+    {
+      "directory": "dompurify",
+      "name": "dompurify",
+      "version": "3.4.17",
+      "packageSha256": "e6235e2a233d3f5550e2be3bf826a39f4ff5180a710779c1e16dcdf4b9eb20b9"
+    },
+    {
+      "directory": "domutils",
+      "name": "domutils",
+      "version": "3.2.2",
+      "packageSha256": "9a04689cc67f52e9f7323e0dd4d18c8cbe68744c3373ad524d133ddf12bf99ab"
+    },
+    {
+      "directory": "duck",
+      "name": "duck",
+      "version": "0.1.12",
+      "packageSha256": "e0f9cf20de14c69ac18db77a34c2c485f6a677e15b2076b997249e70e0b39eae"
+    },
+    {
+      "directory": "dunder-proto",
+      "name": "dunder-proto",
+      "version": "1.0.1",
+      "packageSha256": "24df71008e4225c858f389dd2728b76cf66b752256d42a38ed7930aacae7fe2b"
+    },
+    {
+      "directory": "ejs",
+      "name": "ejs",
+      "version": "3.1.10",
+      "packageSha256": "073ec25c64c0e8ed42d3387127eeeba44600ebd7741b7a26d019271cd4b42bd8"
+    },
+    {
+      "directory": "emoji-regex",
+      "name": "emoji-regex",
+      "version": "8.0.0",
+      "packageSha256": "7bec29b9ca68f2c4becc60e866c2f9342ecdc89fab39841a818ccd9eda15c148"
+    },
+    {
+      "directory": "encoding-japanese",
+      "name": "encoding-japanese",
+      "version": "2.2.0",
+      "packageSha256": "4161be9d18ea7c4609b7b9ca732945c109f4485e49a3540c765501f46772bc19"
+    },
+    {
+      "directory": "entities",
+      "name": "entities",
+      "version": "4.5.0",
+      "packageSha256": "c92f657f679669a91bc32cd98f0b4812b3f4a9c6f3b3af3022a70cb25b7efc7c"
+    },
+    {
+      "directory": "es-define-property",
+      "name": "es-define-property",
+      "version": "1.0.1",
+      "packageSha256": "3a2cb30dae30a96705dcd9aa2d5fb190cf8200f27badccfa5a81a4374e5708b4"
+    },
+    {
+      "directory": "es-errors",
+      "name": "es-errors",
+      "version": "1.3.0",
+      "packageSha256": "1a0a0bcccc76b915cb64073317312840cf6363e9144b96f406d0059774dd5278"
+    },
+    {
+      "directory": "es-object-atoms",
+      "name": "es-object-atoms",
+      "version": "1.1.2",
+      "packageSha256": "e4b7882975d10c68457945c883e1060d0b058af5b1216215c872263f42e12fc9"
+    },
+    {
+      "directory": "escalade",
+      "name": "escalade",
+      "version": "3.2.0",
+      "packageSha256": "acd22b264ecbea162e320a360dab0ad0f3e5438fa4382288df844fa08b484e73"
+    },
+    {
+      "directory": "filelist",
+      "name": "filelist",
+      "version": "1.0.6",
+      "packageSha256": "eac5bb1401d225696f74ade3e216b771f458690b0bb82de68eac8880f4272a75"
+    },
+    {
+      "directory": "filelist/node_modules/balanced-match",
+      "name": "balanced-match",
+      "version": "1.0.2",
+      "packageSha256": "b30c328501dead1870b894ad604405b2284b571c1f12664cdc61d92a2e3397c2"
+    },
+    {
+      "directory": "filelist/node_modules/brace-expansion",
+      "name": "brace-expansion",
+      "version": "2.1.7",
+      "packageSha256": "d217a00ed39214d81f5d9999c0c639f147bab438f94589f9a5b96debf57d6e61"
+    },
+    {
+      "directory": "filelist/node_modules/minimatch",
+      "name": "minimatch",
+      "version": "5.1.9",
+      "packageSha256": "dc1b9424c2ec4c845ba05e7402f7d22807f4ac85d31725892fd3dcafaa08f800"
+    },
+    {
+      "directory": "fs.realpath",
+      "name": "fs.realpath",
+      "version": "1.0.0",
+      "packageSha256": "2985019b1b3cf5894df9b831816f7b480833931da982489e3a98c346ce7da897"
+    },
+    {
+      "directory": "function-bind",
+      "name": "function-bind",
+      "version": "1.1.2",
+      "packageSha256": "edb1c4faf4148e6e3d74ed8dbac1a1dc359a647ff4207aad4851396dc7a3559a"
+    },
+    {
+      "directory": "get-caller-file",
+      "name": "get-caller-file",
+      "version": "2.0.5",
+      "packageSha256": "680a080d2885c05bc51dde429c80784bfb248ca3ef3685438079c5015721e2ae"
+    },
+    {
+      "directory": "get-intrinsic",
+      "name": "get-intrinsic",
+      "version": "1.3.0",
+      "packageSha256": "45b14763baacc59b0fd7b39e3ad983d5d2aaf7f5ed682f2fce9edb469826c999"
+    },
+    {
+      "directory": "get-proto",
+      "name": "get-proto",
+      "version": "1.0.1",
+      "packageSha256": "73839e012ac7134a632c9d9fc6bdb700ac9ab5553cce39eb789ba2b65663e734"
+    },
+    {
+      "directory": "gopd",
+      "name": "gopd",
+      "version": "1.2.0",
+      "packageSha256": "33ace32dc861f6da9d1fd9d0a44c66e8c6ff3b13358d070683c1c2978ff5f19f"
+    },
+    {
+      "directory": "handlebars",
+      "name": "handlebars",
+      "version": "4.7.10",
+      "packageSha256": "cf06251288836dd2ba6d8d1a83dbe4c8c944556c34e17a3263c86325115d2a3c"
+    },
+    {
+      "directory": "has-symbols",
+      "name": "has-symbols",
+      "version": "1.1.0",
+      "packageSha256": "5190268c0e3308d7446d1f7c036238f329f786938453e6017cb90980b3612e7a"
+    },
+    {
+      "directory": "has-tostringtag",
+      "name": "has-tostringtag",
+      "version": "1.0.2",
+      "packageSha256": "30ab773c52021a6b800ea48f251abeeb1f6e378300f819204dfbb38d6e43f3ad"
+    },
+    {
+      "directory": "hasown",
+      "name": "hasown",
+      "version": "2.0.4",
+      "packageSha256": "40b750c55a8bacf2c5ac316f5299dd44d48acc101c189a00cd59d39376b5eb89"
+    },
+    {
+      "directory": "he",
+      "name": "he",
+      "version": "1.2.0",
+      "packageSha256": "3a776250efb03ffc16e87c251bddf5e0d82fca990059dc7f277a1e99a169b723"
+    },
+    {
+      "directory": "html-encoding-sniffer",
+      "name": "html-encoding-sniffer",
+      "version": "6.0.0",
+      "packageSha256": "076b124776de77e05e0e883fcbb85dafbc0d91a3cb1a8b0ced901c75abbdca56"
+    },
+    {
+      "directory": "html-to-text",
+      "name": "html-to-text",
+      "version": "10.0.0",
+      "packageSha256": "8ac918ef1a0e77a97d6601b8f918b40d73f16218e151c98cc5af4e90136fd988"
+    },
+    {
+      "directory": "htmlparser2",
+      "name": "htmlparser2",
+      "version": "10.1.0",
+      "packageSha256": "8aa0d39ff4c9df2d53b02a0fe434d03a6348353cb1d23ea2b448692687b8c8ab"
+    },
+    {
+      "directory": "htmlparser2/node_modules/entities",
+      "name": "entities",
+      "version": "7.0.1",
+      "packageSha256": "b33b5d3fd4a8e196d3245c10ebb8feb2e076fc8d392f99a1050377d6e2b8b641"
+    },
+    {
+      "directory": "iconv-lite",
+      "name": "iconv-lite",
+      "version": "0.6.3",
+      "packageSha256": "3a9582fd121f841c245d1fcf84ef0b9e41c94b785b8d7eb63f9f5aec9bad0b98"
+    },
+    {
+      "directory": "immediate",
+      "name": "immediate",
+      "version": "3.0.6",
+      "packageSha256": "1e40d711ce5348d237f7a2093d1707ca7c34fc56369f6be10c8e2dc9bcae0a96"
+    },
+    {
+      "directory": "inflight",
+      "name": "inflight",
+      "version": "1.0.6",
+      "packageSha256": "5f2489e13f73e9ebad999134fae8a591f6d8b58e8341ec8e3b33397c4d1ef817"
+    },
+    {
+      "directory": "inherits",
+      "name": "inherits",
+      "version": "2.0.4",
+      "packageSha256": "be645800bc94fd8de29c8ae91690549b316cc437100108aeea7b2f347693cc80"
+    },
+    {
+      "directory": "is-core-module",
+      "name": "is-core-module",
+      "version": "2.17.0",
+      "packageSha256": "81a8a96ac71ffeaa488ec2352e64afd4e669b527e2129086d85164d50f896122"
+    },
+    {
+      "directory": "is-expression",
+      "name": "is-expression",
+      "version": "4.0.0",
+      "packageSha256": "a87a48e8070af76c07b15557619ffbb6975f093121f5636fe69fa2f7f7d3ee81"
+    },
+    {
+      "directory": "is-fullwidth-code-point",
+      "name": "is-fullwidth-code-point",
+      "version": "3.0.0",
+      "packageSha256": "5b48496ca129073ed44a677b777ea3b91366c8bc228bc75fe858749a78ac1a32"
+    },
+    {
+      "directory": "is-potential-custom-element-name",
+      "name": "is-potential-custom-element-name",
+      "version": "1.0.1",
+      "packageSha256": "9b41645708a8d3fdae25ceac23c0b8861be9010c6c9dbb9770d0018e803bd1d9"
+    },
+    {
+      "directory": "is-promise",
+      "name": "is-promise",
+      "version": "2.2.2",
+      "packageSha256": "ebb992f44a73d06d3af839970ae14fa2a5a70a5dad61b527c21a9d89a774a617"
+    },
+    {
+      "directory": "is-regex",
+      "name": "is-regex",
+      "version": "1.2.1",
+      "packageSha256": "b99ff9cb5a079a1d6060bce2d31f06780d4296539a5b57106047a86561cd4db3"
+    },
+    {
+      "directory": "isarray",
+      "name": "isarray",
+      "version": "1.0.0",
+      "packageSha256": "93165ce56e458216c18240cd961a522af5b18e51da06f55d88ac552234455d95"
+    },
+    {
+      "directory": "isomorphic-dompurify",
+      "name": "isomorphic-dompurify",
+      "version": "3.18.0",
+      "packageSha256": "6a669a4c749543021734f9cb2dd9ef9b20cfd15a2298e468a1333169d2504530"
+    },
+    {
+      "directory": "jake",
+      "name": "jake",
+      "version": "10.9.4",
+      "packageSha256": "96fd372f49f294e7ca4bbe3cb578046dd45b3542801b1337ece092363d5d89e3"
+    },
+    {
+      "directory": "jake/node_modules/async",
+      "name": "async",
+      "version": "3.2.6",
+      "packageSha256": "e010fe63aa861e8a60fb8b9d3e7fb5205e3b8d6001ebe3ff95985996abe581a9"
+    },
+    {
+      "directory": "js-stringify",
+      "name": "js-stringify",
+      "version": "1.0.2",
+      "packageSha256": "133b036b739bb71c44008eb9c2bee9fd3169327fff26d2b390c63ccd70f8c3fc"
+    },
+    {
+      "directory": "jsdom",
+      "name": "jsdom",
+      "version": "29.1.1",
+      "packageSha256": "def961b4c0a5fe3c37f68fb2b35fc80707975a1c0ff4f8d39ff5b7106c387e5c"
+    },
+    {
+      "directory": "jsdom/node_modules/lru-cache",
+      "name": "lru-cache",
+      "version": "11.5.3",
+      "packageSha256": "c085d38560434a8915fd1817cd17cee316118078b07f40302b32ef4d8bc760f4"
+    },
+    {
+      "directory": "jstransformer",
+      "name": "jstransformer",
+      "version": "1.0.0",
+      "packageSha256": "47dd1297b10e67e178c2a788856a518fd05a0e0b0919f1f9f12b777dd458c454"
+    },
+    {
+      "directory": "jszip",
+      "name": "jszip",
+      "version": "3.10.2",
+      "packageSha256": "4138415020992b9a832333c64a13bd7e17faa462f7e0c0dd505f824d397f7281"
+    },
+    {
+      "directory": "jszip/node_modules/readable-stream",
+      "name": "readable-stream",
+      "version": "2.3.8",
+      "packageSha256": "67bde829e31cba3f50c77d14a30fa0f2295223b7ffa07f3b84606a5a79bb97f8"
+    },
+    {
+      "directory": "jszip/node_modules/safe-buffer",
+      "name": "safe-buffer",
+      "version": "5.1.2",
+      "packageSha256": "3d8b6d944be9e931a178914afbb3d6b79bfa199c032872b687bed41ed996c747"
+    },
+    {
+      "directory": "jszip/node_modules/string_decoder",
+      "name": "string_decoder",
+      "version": "1.1.1",
+      "packageSha256": "e278ca18803862a6d1b6bedc6a3394159ac86e5c4a162614fef006c79dcda3a2"
+    },
+    {
+      "directory": "leac",
+      "name": "leac",
+      "version": "0.7.0",
+      "packageSha256": "54ab05a7dd2d7d0a37c6d47f7d2f49fb7c34f42363d917eda3a658daa4b5379c"
+    },
+    {
+      "directory": "libbase64",
+      "name": "libbase64",
+      "version": "1.3.0",
+      "packageSha256": "b2d295bd942594bd3a80b1c731345149217cdf95927880fad1c785d55c2a2934"
+    },
+    {
+      "directory": "libmime",
+      "name": "libmime",
+      "version": "5.4.1",
+      "packageSha256": "430ea0b30a0baaa61af6211cda45b760a3ac213fa8783c27ff1f5cdac9c44b90"
+    },
+    {
+      "directory": "libmime/node_modules/iconv-lite",
+      "name": "iconv-lite",
+      "version": "0.7.3",
+      "packageSha256": "f24ad03476d51470a5b069e65b03ef6383d615897ffe2239edf22584ea0e3d03"
+    },
+    {
+      "directory": "libqp",
+      "name": "libqp",
+      "version": "2.1.1",
+      "packageSha256": "12685d615a8d52c72ef75e31ecca511f121fea880a4582a76c173064dda825e5"
+    },
+    {
+      "directory": "lie",
+      "name": "lie",
+      "version": "3.3.0",
+      "packageSha256": "3faafb3b558146534b1849e6d2ed8a9c9c88eff27ef868827d8de17b979cf701"
+    },
+    {
+      "directory": "lop",
+      "name": "lop",
+      "version": "0.4.2",
+      "packageSha256": "129d48bc9b0e9553cf15c03967f4212511ee6437fad95fa2cac0e4dd13a0639a"
+    },
+    {
+      "directory": "mailparser",
+      "name": "mailparser",
+      "version": "3.9.14",
+      "packageSha256": "e190e815d03ae1375f65849c479ef336fc24b76c19fe9ff858b20c82a2d4a079"
+    },
+    {
+      "directory": "mailparser/node_modules/iconv-lite",
+      "name": "iconv-lite",
+      "version": "0.7.3",
+      "packageSha256": "f24ad03476d51470a5b069e65b03ef6383d615897ffe2239edf22584ea0e3d03"
+    },
+    {
+      "directory": "mailparser/node_modules/linkify-it",
+      "name": "linkify-it",
+      "version": "5.0.2",
+      "packageSha256": "492ffef383ead25ddc4a7615129c3c41eafe1a0a10172680a93fbb5039c84204"
+    },
+    {
+      "directory": "mailparser/node_modules/uc.micro",
+      "name": "uc.micro",
+      "version": "2.1.0",
+      "packageSha256": "8b60af5ea73b0bac4d26111a3f5b00844657b998f9a3fd473710d9e33d274250"
+    },
+    {
+      "directory": "mammoth",
+      "name": "mammoth",
+      "version": "1.13.0",
+      "packageSha256": "6f0646cf64afff35003fef06d3d45bc159f2cef8474e2093ee9d786658dbe73a"
+    },
+    {
+      "directory": "math-intrinsics",
+      "name": "math-intrinsics",
+      "version": "1.1.0",
+      "packageSha256": "39d74aa5a354153130706286dd60a2d8409ce0c8f66546eff2edcac0afff17e1"
+    },
+    {
+      "directory": "mdn-data",
+      "name": "mdn-data",
+      "version": "2.27.1",
+      "packageSha256": "4454243524dd13a032e0c70554ef1c51a92033559647edd8d12e6f0c0b992df3"
+    },
+    {
+      "directory": "minimist",
+      "name": "minimist",
+      "version": "1.2.8",
+      "packageSha256": "252881f6a068a3e70386706d88a694b5e8e9e053b6d9f309fd9a329e651bbf81"
+    },
+    {
+      "directory": "neo-async",
+      "name": "neo-async",
+      "version": "2.6.2",
+      "packageSha256": "bdf14e4aab20dbe30f54ecb40d41ff75339327f9a1cf8638931ea16256ceaa6f"
+    },
+    {
+      "directory": "nodemailer",
+      "name": "nodemailer",
+      "version": "9.0.3",
+      "packageSha256": "a0e29b03efa675b17a084f3fd5593d73ceaae7a6bda9c4d7f82daff9c5858c58"
+    },
+    {
+      "directory": "nunjucks",
+      "name": "nunjucks",
+      "version": "3.2.4",
+      "packageSha256": "42f45b16e11abf60de04f3ed4f2ed88563ac381b1ce1c6542eb063260f776caa"
+    },
+    {
+      "directory": "nunjucks/node_modules/commander",
+      "name": "commander",
+      "version": "5.1.0",
+      "packageSha256": "fc803855b7584ea8644cde41b4619efafaa935a72fcb0917ce5a532519556f03"
+    },
+    {
+      "directory": "object-assign",
+      "name": "object-assign",
+      "version": "4.1.1",
+      "packageSha256": "5990bbffa235fc675debd925d50f6c3f48a2b4526d8c9f7555cadec9029d0d7f"
+    },
+    {
+      "directory": "once",
+      "name": "once",
+      "version": "1.4.0",
+      "packageSha256": "33840d74c14c94bfb75c76374765b635531b1eacb88d7f1f2f380c94d0ea1328"
+    },
+    {
+      "directory": "option",
+      "name": "option",
+      "version": "0.2.4",
+      "packageSha256": "f0aefa0a0e9a2f74da23f9a3d71ac471a05b0c6b31c29f72b585dfbaa5bbed84"
+    },
+    {
+      "directory": "pako",
+      "name": "pako",
+      "version": "1.0.11",
+      "packageSha256": "0014f350a6834ed6a2d1211e0a2e3aa471cb426edf63379c785f9647ea2b4e01"
+    },
+    {
+      "directory": "parse5",
+      "name": "parse5",
+      "version": "8.0.1",
+      "packageSha256": "159187fd5c0c0c17456282f4cf7beab91eb46dfc717928522938c947007282b7"
+    },
+    {
+      "directory": "parse5/node_modules/entities",
+      "name": "entities",
+      "version": "8.1.0",
+      "packageSha256": "b6ff1175be0fa103f032d52e42af95d95c674e3cba08d93670cc8944697bcc42"
+    },
+    {
+      "directory": "parseley",
+      "name": "parseley",
+      "version": "0.13.1",
+      "packageSha256": "ca422bce60dbf414aa9a2f77960346466d543332487daf2d4d5559cb46c188fc"
+    },
+    {
+      "directory": "path-parse",
+      "name": "path-parse",
+      "version": "1.0.7",
+      "packageSha256": "9c680ecfd322afe056b4ccbfdb6c7043342276903f017c0a29b77c3926790d13"
+    },
+    {
+      "directory": "peberminta",
+      "name": "peberminta",
+      "version": "0.10.0",
+      "packageSha256": "eef5ac95f8c83d7be63e9719104ebb45243eef9cce3e61bf3719ffe1b054034d"
+    },
+    {
+      "directory": "picocolors",
+      "name": "picocolors",
+      "version": "1.1.1",
+      "packageSha256": "ef2ac226c4811d312e12c64214c453878653e834482125ae475f27cea60de737"
+    },
+    {
+      "directory": "process-nextick-args",
+      "name": "process-nextick-args",
+      "version": "2.0.1",
+      "packageSha256": "6d6d93d057f39bc3173d53e694b61833fd0ce89c1d669156169136d31a968131"
+    },
+    {
+      "directory": "promise",
+      "name": "promise",
+      "version": "7.3.1",
+      "packageSha256": "86c20e9c15f4d9f1fdbde8abe56ffc37ae69deffbf3ffd1ecb88712cd0da79a5"
+    },
+    {
+      "directory": "pug",
+      "name": "pug",
+      "version": "3.0.4",
+      "packageSha256": "f31b3672f89b96f2caac2eab7f72867f188904022c76bbab7f9fac462e14171f"
+    },
+    {
+      "directory": "pug-attrs",
+      "name": "pug-attrs",
+      "version": "3.0.0",
+      "packageSha256": "d064880b628e0ddc37c08af0da95486766c2eb313163c887a21996d5c96dce86"
+    },
+    {
+      "directory": "pug-code-gen",
+      "name": "pug-code-gen",
+      "version": "3.0.4",
+      "packageSha256": "d3ae59d22cb7ae708da8b0391ab0d4f96efd8355f194cb732b230c4e998d964c"
+    },
+    {
+      "directory": "pug-error",
+      "name": "pug-error",
+      "version": "2.1.0",
+      "packageSha256": "6927ab8cdb89570d57b34d5953786ae2b56b89560301d452bc95c7519aa62212"
+    },
+    {
+      "directory": "pug-filters",
+      "name": "pug-filters",
+      "version": "4.0.0",
+      "packageSha256": "88d2560b67ad36dafaaf59bfba4d42aa8aad7e96f181f37e067227b267924037"
+    },
+    {
+      "directory": "pug-lexer",
+      "name": "pug-lexer",
+      "version": "5.0.1",
+      "packageSha256": "c49fbdee905f6f11a937a56b458e041e26bc418c3c29bd8d87603bd165a23944"
+    },
+    {
+      "directory": "pug-linker",
+      "name": "pug-linker",
+      "version": "4.0.0",
+      "packageSha256": "e284fe50d7618ddf9a8a32a6fce649ffc1cd5bec45e01ecf282878599d41db4d"
+    },
+    {
+      "directory": "pug-load",
+      "name": "pug-load",
+      "version": "3.0.0",
+      "packageSha256": "04f9984f732962d8da625959b64c0d8ef4f7e1e5710a08109dd86e730a35dce6"
+    },
+    {
+      "directory": "pug-parser",
+      "name": "pug-parser",
+      "version": "6.0.0",
+      "packageSha256": "b43513e8ce41a63f8cfc55e4dc9ab984f30660038837c734a1af60e0f3395bad"
+    },
+    {
+      "directory": "pug-runtime",
+      "name": "pug-runtime",
+      "version": "3.0.1",
+      "packageSha256": "7ec7b608c7bad13a87cf6def1504d52e9bbb9aa342a79377513c58b9a85407a2"
+    },
+    {
+      "directory": "pug-strip-comments",
+      "name": "pug-strip-comments",
+      "version": "2.0.0",
+      "packageSha256": "e499b0bb59d0755058031cd3a614c9ad196757ec3b36a761673f881592bb8d8f"
+    },
+    {
+      "directory": "pug-walk",
+      "name": "pug-walk",
+      "version": "2.0.0",
+      "packageSha256": "3073874b1942b8fa10554e527a2dd8a25ba98b4bf7352f4c1c26a5c272bc47e2"
+    },
+    {
+      "directory": "punycode",
+      "name": "punycode",
+      "version": "2.3.1",
+      "packageSha256": "e025033bd11110af671fb8eb62f0db8895073ccdca70b596aa94a27eb5bf9acb"
+    },
+    {
+      "directory": "punycode.js",
+      "name": "punycode.js",
+      "version": "2.3.1",
+      "packageSha256": "ce0bcedcc3d00b235770a2c49af74712e10e5dac8d3dda5ed23c433b19720c3c"
+    },
+    {
+      "directory": "require-directory",
+      "name": "require-directory",
+      "version": "2.1.1",
+      "packageSha256": "5690bdddd6eb4abd795fa5319df7552279508df9d562d571e3132ddff3045a71"
+    },
+    {
+      "directory": "require-from-string",
+      "name": "require-from-string",
+      "version": "2.0.2",
+      "packageSha256": "c0002f7d4c7d7e2a885cf0f97226344902417c3a0980f2beca41962d2bc1f6d8"
+    },
+    {
+      "directory": "resolve",
+      "name": "resolve",
+      "version": "1.22.13",
+      "packageSha256": "4e925ace386310ea77e3bb0221bd2caf7d7faea8fc9c9cca5090ed4559c75eab"
+    },
+    {
+      "directory": "safer-buffer",
+      "name": "safer-buffer",
+      "version": "2.1.2",
+      "packageSha256": "4247a3a63c45a6a7ced1557fe4dd9d2a163af4915d594b95e5867b69a53edb52"
+    },
+    {
+      "directory": "saxes",
+      "name": "saxes",
+      "version": "6.0.0",
+      "packageSha256": "32052572b41c2a890ed0854798c48454cc5991dcaafe5fb1718a4253046acfd3"
+    },
+    {
+      "directory": "selderee",
+      "name": "selderee",
+      "version": "0.12.0",
+      "packageSha256": "4bfe1ae988274ea2a25f9cc72ada4e77f3ce181c292e0169520af84bd87666d3"
+    },
+    {
+      "directory": "setimmediate",
+      "name": "setimmediate",
+      "version": "1.0.5",
+      "packageSha256": "56c7968c8062ad56e94b8ddb477e514098e0fa34b060aa86b67232fdb12e184d"
+    },
+    {
+      "directory": "source-map",
+      "name": "source-map",
+      "version": "0.6.1",
+      "packageSha256": "3fdebd9f5c0107bcf7b73e0d17e0147042bcfb74884106e4428afbf17171ef06"
+    },
+    {
+      "directory": "source-map-js",
+      "name": "source-map-js",
+      "version": "1.2.2",
+      "packageSha256": "9f1ea63b1661d0f6e5fcd50b625d86cddd77de870a0019b23262360987b487f5"
+    },
+    {
+      "directory": "sprintf-js",
+      "name": "sprintf-js",
+      "version": "1.0.3",
+      "packageSha256": "f7ed5a0dc9b4c939e92be6acdf3bd83abc3d7e5def9c1307f3c9f53bd7cb2f8c"
+    },
+    {
+      "directory": "supports-preserve-symlinks-flag",
+      "name": "supports-preserve-symlinks-flag",
+      "version": "1.0.0",
+      "packageSha256": "aef0ae2d21ae9181d8702c2063ce0ee274ba1063e5312e4baab5673aa6d4d5db"
+    },
+    {
+      "directory": "symbol-tree",
+      "name": "symbol-tree",
+      "version": "3.2.4",
+      "packageSha256": "962fd6c0ed18cdec3bdb7df4684da775e294078a8302504e8ce04c711e1c37d4"
+    },
+    {
+      "directory": "tlds",
+      "name": "tlds",
+      "version": "1.261.0",
+      "packageSha256": "6cdedcd0e3908ce474b46a21ffac3c8529c4e377c935049b2088ebabd410a901"
+    },
+    {
+      "directory": "tldts",
+      "name": "tldts",
+      "version": "7.4.19",
+      "packageSha256": "635bbb0701521308f9906153fab6a7f68c046d3bcded63f63a16dbdc09792228"
+    },
+    {
+      "directory": "tldts-core",
+      "name": "tldts-core",
+      "version": "7.4.19",
+      "packageSha256": "79d6e47c66009ade86dbc28a5f70179b474bc5e830430e5843179b09e6c44957"
+    },
+    {
+      "directory": "token-stream",
+      "name": "token-stream",
+      "version": "1.0.0",
+      "packageSha256": "0715f6c496a2e1866067d32679bb610687465f6f94724bb1c7bcdc1b50964f08"
+    },
+    {
+      "directory": "tough-cookie",
+      "name": "tough-cookie",
+      "version": "6.0.2",
+      "packageSha256": "a604b86eadd81d8e9c5a5de9571d15036225c20da0d51dd4af80c88e4e54feed"
+    },
+    {
+      "directory": "tr46",
+      "name": "tr46",
+      "version": "6.0.0",
+      "packageSha256": "3cc81081409bea2f0fd4ec18d64c542a18e0ac6f7f970c7f7be4139aaa8d140f"
+    },
+    {
+      "directory": "uglify-js",
+      "name": "uglify-js",
+      "version": "3.19.3",
+      "packageSha256": "4e7908267a1b0dfd5af0004dba63e8392ffc509ae986d5931017a55d7d65167d"
+    },
+    {
+      "directory": "underscore",
+      "name": "underscore",
+      "version": "1.13.8",
+      "packageSha256": "081688728dc50bbdeca2c3929500194892fd7caaf62679e252da3687064f4522"
+    },
+    {
+      "directory": "undici",
+      "name": "undici",
+      "version": "7.30.1",
+      "packageSha256": "0e62f63508558cd8bc44dbf61baee562907ff4bbd147bf837ded998c2bf62a28"
+    },
+    {
+      "directory": "unxhr",
+      "name": "unxhr",
+      "version": "1.2.0",
+      "packageSha256": "aac47c58c5363ed58b319c1b2b1a8d51b716cd00c2822456130608f3189a2a9d"
+    },
+    {
+      "directory": "util-deprecate",
+      "name": "util-deprecate",
+      "version": "1.0.2",
+      "packageSha256": "7bba467f049074957e693fc06672848b040c38fa071b6eed8690f5fbe090a8b2"
+    },
+    {
+      "directory": "void-elements",
+      "name": "void-elements",
+      "version": "3.1.0",
+      "packageSha256": "9cc3503e65c64719269421c1820f11bb66ad5a5f1597ee68e350ed18dd23b98a"
+    },
+    {
+      "directory": "w3c-xmlserializer",
+      "name": "w3c-xmlserializer",
+      "version": "5.0.0",
+      "packageSha256": "56d3dbb5448f88c83cdc77fe3a5074dcb4936f140ed7e5f81a81ac910152acde"
+    },
+    {
+      "directory": "webidl-conversions",
+      "name": "webidl-conversions",
+      "version": "8.0.1",
+      "packageSha256": "2c964d3940c039d74fb1ebb5158969cf737e3e5d548d6620e5fb5258e34cfab7"
+    },
+    {
+      "directory": "whatwg-mimetype",
+      "name": "whatwg-mimetype",
+      "version": "5.0.0",
+      "packageSha256": "8f3f428034995a3424b3e6ebaf7a38899e556337bd1016734149cfb73035a7c6"
+    },
+    {
+      "directory": "whatwg-url",
+      "name": "whatwg-url",
+      "version": "16.0.1",
+      "packageSha256": "8faef05a20e34e19f755c0e685f02e5cf7945c34ad5f45ff2738338ab1fc89b2"
+    },
+    {
+      "directory": "with",
+      "name": "with",
+      "version": "7.0.2",
+      "packageSha256": "30d01a7f84509e2ee075442a2e56ccbee6a9a98c46d86f32659d24b2b34a8609"
+    },
+    {
+      "directory": "wordwrap",
+      "name": "wordwrap",
+      "version": "1.0.0",
+      "packageSha256": "4346d2850babb5ed5b1685510e007adc142384e6468613f32f460db2cfee1297"
+    },
+    {
+      "directory": "wrap-ansi",
+      "name": "wrap-ansi",
+      "version": "7.0.0",
+      "packageSha256": "0b0cf0bf62bd0cc71da2128e3269e63edd566feffdd501aa3692acd6db93c3c9"
+    },
+    {
+      "directory": "wrap-ansi/node_modules/ansi-regex",
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "packageSha256": "8b2dc166f2b74d5098bad38bdd3dd2f4d4775c626199872f5e36dbb48c40931d"
+    },
+    {
+      "directory": "wrap-ansi/node_modules/string-width",
+      "name": "string-width",
+      "version": "4.2.3",
+      "packageSha256": "6457a02418f004fe5d3fbbb19c7cbcc1450a8b887ff9a471dc6985ac83a48d36"
+    },
+    {
+      "directory": "wrap-ansi/node_modules/strip-ansi",
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "packageSha256": "0130850b9da0584f54cc20d3dab6365c807e9436ac78e016d5009efa99bd0530"
+    },
+    {
+      "directory": "wrappy",
+      "name": "wrappy",
+      "version": "1.0.2",
+      "packageSha256": "712ac9c4c3cef8bc79f42cf6075ff18551f4cb768f35158214fd643853ad7abc"
+    },
+    {
+      "directory": "xlsx",
+      "name": "xlsx",
+      "version": "0.20.3",
+      "packageSha256": "bb9458277a69b41a304a89e45f19173ac0d23f2fc296091db49dba3c8b61c546"
+    },
+    {
+      "directory": "xml-name-validator",
+      "name": "xml-name-validator",
+      "version": "5.0.0",
+      "packageSha256": "08d74267200473a56d572d7453324e896d98150077c9af7e9efb73faaf447de6"
+    },
+    {
+      "directory": "xmlbuilder",
+      "name": "xmlbuilder",
+      "version": "10.1.1",
+      "packageSha256": "d4b3e78b4745ddaf746ded56d100c96fce674e80195bf0e943480b164583f01c"
+    },
+    {
+      "directory": "xmlchars",
+      "name": "xmlchars",
+      "version": "2.2.0",
+      "packageSha256": "a91c0b20003ff9399dde1de8c59681f1b6901c6fb1aac71780a3a876dc548583"
+    },
+    {
+      "directory": "y18n",
+      "name": "y18n",
+      "version": "5.0.8",
+      "packageSha256": "f65855d14daaf57947e398e132caa246f93bbf045ff3f8f9627114714729ad29"
+    },
+    {
+      "directory": "yargs",
+      "name": "yargs",
+      "version": "17.3.1",
+      "packageSha256": "bb2e3f18d27c231406c3fba75314cb3e46dde49acbeadcbb34289ee61fd9ecd2"
+    },
+    {
+      "directory": "yargs-parser",
+      "name": "yargs-parser",
+      "version": "21.1.1",
+      "packageSha256": "b6ee1fa4e1881d6f5388a3a52e34c2499a4c01d81615b69f08f12ca35289880b"
+    },
+    {
+      "directory": "yargs/node_modules/ansi-regex",
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "packageSha256": "8b2dc166f2b74d5098bad38bdd3dd2f4d4775c626199872f5e36dbb48c40931d"
+    },
+    {
+      "directory": "yargs/node_modules/string-width",
+      "name": "string-width",
+      "version": "4.2.3",
+      "packageSha256": "6457a02418f004fe5d3fbbb19c7cbcc1450a8b887ff9a471dc6985ac83a48d36"
+    },
+    {
+      "directory": "yargs/node_modules/strip-ansi",
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "packageSha256": "0130850b9da0584f54cc20d3dab6365c807e9436ac78e016d5009efa99bd0530"
+    }
+  ]
+}

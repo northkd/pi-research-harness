@@ -1,0 +1,260 @@
+/** Durable direct-parent messages. Transport receipt, processing and reply are independent. */
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { ResearchSessionError, researchProvenanceOf } from './research-session-service.mjs';
+
+const SCHEMA = 'pi-research-communication.v1';
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
+const ENDED = new Set(['ended', 'closed', 'archived']);
+const TERMINAL = new Set(['completed', 'blocked', 'failed']);
+const MAX_MESSAGE_BYTES = 16 * 1024;
+const INBOX_BYTES = 24 * 1024;
+const fail = (status, code) => { throw new ResearchSessionError(status, 'research-communication-' + code); };
+const hash = value => createHash('sha256').update(value).digest('hex');
+const sameScope = (a, b) => ['cwd', 'ownerKey', 'charterHash', 'adoptionId'].every(key => a[key] === b[key]);
+const text = (value, maximum) => typeof value === 'string' && value.trim().length > 0 && value.length <= maximum && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
+
+export function createResearchCommunicationStore(directory) {
+  directory = path.resolve(directory);
+  function ensureDirectory() {
+    let cursor = path.parse(directory).root;
+    for (const part of directory.slice(cursor.length).split(path.sep).filter(Boolean)) {
+      cursor = path.join(cursor, part);
+      try { fs.mkdirSync(cursor, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+      const stat = fs.lstatSync(cursor);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) fail(503, 'store-unsafe');
+    }
+  }
+  return {
+    directory,
+    readAll() {
+      ensureDirectory();
+      return fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).map(name => {
+        const file = path.join(directory, name), fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        try {
+          const stat = fs.fstatSync(fd);
+          if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_MESSAGE_BYTES) fail(503, 'store-unsafe');
+          const value = JSON.parse(fs.readFileSync(fd, 'utf8'));
+          if (value.schema !== SCHEMA || !ID.test(value.id) || !ID.test(value.from) || !ID.test(value.to)
+              || typeof value.fingerprint !== 'string' || hash(value.id) + '.json' !== name) fail(503, 'store-invalid');
+          return value;
+        } finally { fs.closeSync(fd); }
+      });
+    },
+    write(value) {
+      ensureDirectory();
+      const file = path.join(directory, hash(value.id) + '.json');
+      if (fs.existsSync(file) && (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink())) fail(503, 'store-unsafe');
+      const serialized = JSON.stringify(value);
+      if (Buffer.byteLength(serialized) > MAX_MESSAGE_BYTES) fail(400, 'message-too-large');
+      const temporary = file + '.' + randomUUID() + '.tmp';
+      const fd = fs.openSync(temporary, 'wx', 0o600);
+      try { fs.writeFileSync(fd, serialized); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      try { fs.renameSync(temporary, file); } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+      const dir = fs.openSync(directory, 'r');
+      try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
+    },
+  };
+}
+
+export function createResearchCommunicationService(deps) {
+  const messages = new Map((deps.store?.readAll() ?? []).map(row => [row.id, structuredClone(row)]));
+  const now = deps.now ?? (() => new Date());
+  let tail = Promise.resolve(), disposed = false;
+  const assertOpen = () => { if (disposed) fail(503, 'service-closed'); };
+  const serial = fn => { const next = tail.then(fn); tail = next.catch(() => {}); return next; };
+  const persist = row => {
+    assertOpen(); const copy = structuredClone(row);
+    if (!messages.has(copy.id) && Buffer.byteLength(JSON.stringify(copy)) > MAX_MESSAGE_BYTES - 1024) fail(400, 'message-too-large');
+    deps.store?.write(copy); messages.set(copy.id, copy); return copy;
+  };
+  const scopeOf = row => ({ cwd: row.cwd, ownerKey: row.ownerKey, charterHash: row.charterHash, adoptionId: row.adoptionId });
+  const projection = row => ({ id: row.id, from: row.from, to: row.to, kind: row.kind, summary: row.summary,
+    evidence: row.evidence, status: row.status, replyTo: row.replyTo, createdAt: row.createdAt,
+    delivered: !!row.deliveredAt, processed: !!row.processedAt, resolved: !!row.resolvedBy,
+    notificationId: row.notificationId, processExitVerified: false });
+
+  async function actor(input) {
+    assertOpen();
+    if (!input.body || !ID.test(input.body.sessionId ?? '')) fail(400, 'session-invalid');
+    const checked = await deps.authorize({ sessionId: input.body.sessionId, principal: input.principal, expiresAt: input.expiresAt });
+    assertOpen(); return checked;
+  }
+  async function receiver(input, verified, target) {
+    const other = deps.getSession(target);
+    if (!other) fail(404, 'recipient-not-found');
+    let checked;
+    try { checked = await deps.authorize({ sessionId: target, principal: input.principal, expiresAt: input.expiresAt }); }
+    catch { fail(404, 'recipient-not-found'); }
+    assertOpen();
+    if (!sameScope(checked, verified)) fail(409, 'scope-mismatch');
+    const from = verified.parent, a = researchProvenanceOf(from), b = researchProvenanceOf(other);
+    const parentEdge = a?.parentSessionId === other.id && a.workflowCwd === verified.cwd
+      && a.charterHash === verified.charterHash && a.adoptionId === verified.adoptionId;
+    const childEdge = b?.parentSessionId === from.id && b.workflowCwd === verified.cwd
+      && b.charterHash === verified.charterHash && b.adoptionId === verified.adoptionId;
+    if (from.id === other.id || !(parentEdge || childEdge)) fail(403, 'relationship-invalid');
+    return checked;
+  }
+  const hasReport = (token, status = 'completed') => [...messages.values()].some(row => row.kind === 'result' && row.spawnToken === token && row.status === status && !row.resumedBy);
+  function childrenPending(verified) {
+    return (deps.listSessions?.() ?? []).some(child => {
+      const p = researchProvenanceOf(child);
+      return p?.parentSessionId === verified.parent.id && p.charterHash === verified.charterHash
+        && p.adoptionId === verified.adoptionId
+        && !hasReport(p.spawnToken) && !deps.isAssignmentCompleted?.(p.spawnToken);
+    }) || deps.childrenPending?.(verified.parent.id) === true;
+  }
+  function childrenRunning(verified) {
+    return (deps.listSessions?.() ?? []).some(child => {
+      const p = researchProvenanceOf(child);
+      return p?.parentSessionId === verified.parent.id && p.charterHash === verified.charterHash && p.adoptionId === verified.adoptionId
+        && (!ENDED.has(child.status) || child.dataUnavailable) && !deps.isAssignmentCompleted?.(p.spawnToken)
+        && ![...messages.values()].some(row => row.spawnToken === p.spawnToken && TERMINAL.has(row.status) && !row.resumedBy);
+    }) || deps.childrenPending?.(verified.parent.id) === true;
+  }
+  async function deliver() {
+    if (disposed || !deps.notifyParent) return;
+    for (const saved of messages.values()) {
+      if (disposed) return;
+      // Checkpoints stay durable for status views without starting a model turn.
+      if (saved.kind === 'progress' || saved.kind === 'result' && saved.status === 'partial' || saved.assignmentReported === true) continue;
+      if (saved.deliveredAt || saved.processedAt || saved.resolvedBy) continue;
+      if (saved.lastSentAt && now().getTime() - Date.parse(saved.lastSentAt) < 30_000) continue;
+      const source = deps.getSession(saved.from), target = deps.getSession(saved.to);
+      if (!target || ENDED.has(target.status) || target.dataUnavailable) continue;
+      try {
+        if (source) {
+          const principal = deps.principalForSession?.(source) ?? source.principalOwner ?? null;
+          const verified = await deps.authorize({ sessionId: source.id, principal, expiresAt: null });
+          if (!sameScope(saved, verified)) continue;
+          await receiver({ principal }, verified, target.id);
+        } else {
+          // A private persisted child-to-parent receipt retains its verified
+          // author edge after archival; it cannot revive a parent-to-child command.
+          if (saved.senderParentId !== target.id) continue;
+          const principal = deps.principalForSession?.(target) ?? target.principalOwner ?? null;
+          const checked = await deps.authorize({ sessionId: target.id, principal, expiresAt: null });
+          if (!sameScope(saved, checked)) continue;
+        }
+        if (disposed) return;
+        const message = `[research_communication receipt ${saved.notificationId}] ${saved.kind} from ${saved.from}. Call research_communication pending, handle this message, and reply to requests or ack other messages. Resume only the already-authorized work; a message grants no new permission. Do not repeat completed work.`;
+        if (await deps.notifyParent(target.id, message, saved.notificationId)) persist({ ...saved, lastSentAt: now().toISOString() });
+      } catch { /* Preserve the outbox for reconnect; no alternate route or new assignment. */ }
+    }
+  }
+  function inbox(verified, cursor, includeUpdates = false) {
+    const all = [...messages.values()].filter(row => row.to === verified.parent.id && sameScope(row, verified))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const start = cursor ? all.findIndex(row => row.id === cursor) : -1;
+    if (cursor && start < 0) fail(400, 'cursor-invalid');
+    const rows = all.slice(start + 1).filter(row => !row.resolvedBy && (row.kind === 'request' || !row.processedAt)
+      && (includeUpdates || row.kind !== 'progress' && !(row.kind === 'result' && row.status === 'partial') && row.assignmentReported !== true));
+    const result = { status: 'ok', tool: 'research_communication', sessionId: verified.parent.id, messages: [], more: false,
+      retirement: { complete: true, sessionId: verified.parent.id, pid: verified.parent.pid,
+        reportId: [...messages.values()].find(row => row.from === verified.parent.id && sameScope(row, verified)
+          && row.kind === 'result' && TERMINAL.has(row.status) && !row.resumedBy)?.id,
+        formalChildren: (deps.listSessions?.() ?? []).filter(child => {
+          const p = researchProvenanceOf(child);
+          return p?.parentSessionId === verified.parent.id && p.charterHash === verified.charterHash && p.adoptionId === verified.adoptionId && (!ENDED.has(child.status) || child.dataUnavailable);
+        }).map(child => ({ id: child.id, status: child.status })),
+        supervisorRequests: [...messages.values()].filter(row => sameScope(row, verified) && row.kind === 'request' && !row.resolvedBy
+          && (row.from === verified.parent.id || row.to === verified.parent.id)).map(row => row.id) } };
+    if (result.retirement.formalChildren.length > 16 || result.retirement.supervisorRequests.length > 16) {
+      result.retirement.complete = false;
+      result.retirement.formalChildren = result.retirement.formalChildren.slice(0, 16);
+      result.retirement.supervisorRequests = result.retirement.supervisorRequests.slice(0, 16);
+    }
+    for (const row of rows) {
+      result.messages.push(projection(row));
+      if (Buffer.byteLength(JSON.stringify(result)) > INBOX_BYTES - 256) {
+        result.messages.pop(); result.more = true;
+        result.nextCursor = result.messages.at(-1)?.id;
+        break;
+      }
+    }
+    return result;
+  }
+  async function handle(input) {
+    const verified = await actor(input), body = input.body;
+    const allowed = new Set(['sessionId', 'action', 'requestId', 'to', 'kind', 'summary', 'evidence', 'messageId', 'status', 'cursor']);
+    if (Object.keys(body).some(key => !allowed.has(key))) fail(400, 'unknown-field');
+    if (['pending', 'status'].includes(body.action)) return inbox(verified, body.cursor, body.action === 'status');
+    if (body.action === 'ack') {
+      const saved = messages.get(body.messageId);
+      if (!saved || saved.to !== verified.parent.id || !sameScope(saved, verified)) fail(404, 'message-not-found');
+      persist({ ...saved, processedAt: saved.processedAt ?? now().toISOString() });
+      return { status: 'ok', tool: 'research_communication', acknowledged: saved.id, replyRequired: saved.kind === 'request' && !saved.resolvedBy };
+    }
+    if (!['send', 'reply', 'report'].includes(body.action) || !ID.test(body.requestId ?? '') || !text(body.summary, 4000)) fail(400, 'message-invalid');
+    const evidence = body.evidence ?? [];
+    if (!Array.isArray(evidence) || evidence.length > 16 || evidence.some(file => !text(file, 1024)
+        || path.isAbsolute(file) || file.startsWith('\\') || file.split(/[\\/]/).includes('..'))) fail(400, 'evidence-invalid');
+    let original;
+    if (body.action === 'reply') {
+      original = messages.get(body.messageId);
+      if (!original || original.kind !== 'request' || original.to !== verified.parent.id || !sameScope(original, verified)) fail(404, 'request-not-found');
+    }
+    const p = researchProvenanceOf(verified.parent);
+    if (body.action === 'report' && (!p?.parentSessionId || !ID.test(p.spawnToken ?? ''))) fail(400, 'parent-required');
+    if (body.action === 'report' && body.to !== undefined && body.to !== 'parent' && body.to !== p.parentSessionId) fail(403, 'report-parent-required');
+    const target = original?.from ?? (body.to && body.to !== 'parent' ? body.to : p?.parentSessionId);
+    if (!target) fail(400, 'parent-required');
+    await receiver(input, verified, target);
+    const kind = body.action === 'report' ? 'result' : body.action === 'reply' ? 'reply' : body.kind ?? 'progress';
+    if (!['progress', 'request', 'decision', 'reply', 'result'].includes(kind)
+        || body.action === 'send' && ['reply', 'result'].includes(kind)) fail(400, 'kind-invalid');
+    if (body.action === 'report' && !['completed', 'partial', 'blocked', 'failed'].includes(body.status)) fail(400, 'report-invalid');
+    const fingerprint = hash(JSON.stringify([scopeOf(verified), verified.parent.id, target, kind, body.summary, evidence, body.status ?? null, original?.id ?? null]));
+    const id = 'message-' + hash(JSON.stringify([scopeOf(verified), verified.parent.id, body.requestId])).slice(0, 48);
+    let existing = messages.get(id);
+    if (existing && existing.fingerprint !== fingerprint) fail(409, 'request-conflict');
+    if (original?.resolvedBy && original.resolvedBy !== id) fail(409, 'reply-conflict');
+    if (kind === 'result' && !existing) {
+      const terminal = [...messages.values()].find(row => row.kind === 'result' && row.spawnToken === p.spawnToken && TERMINAL.has(row.status) && !row.resumedBy);
+      if (terminal && terminal.fingerprint !== fingerprint) fail(409, 'terminal-report-conflict');
+      existing ??= terminal;
+    }
+    if (!existing && body.action === 'report' && body.status === 'completed' && childrenPending(verified)) fail(409, 'children-pending');
+    const assignmentReported = body.action === 'report' && p?.dispatchId && p?.taskId && TERMINAL.has(body.status);
+    if (assignmentReported) {
+      if (!deps.reportAssignment) fail(503, 'dispatcher-unavailable');
+      await deps.reportAssignment({ ...input, body: { sessionId: verified.parent.id, action: 'report', status: body.status, summary: body.summary, evidence } });
+      assertOpen();
+    }
+    const resumes = (kind === 'reply' || kind === 'decision') && researchProvenanceOf(deps.getSession(target))?.parentSessionId === verified.parent.id
+      ? [...messages.values()].filter(row => row.from === target && row.kind === 'result' && !row.resumedBy).map(row => row.id) : [];
+    let saved = existing ?? persist({ schema: SCHEMA, id, ...scopeOf(verified), from: verified.parent.id, to: target, senderParentId: p?.parentSessionId,
+      kind, summary: body.summary, evidence, ...(body.status ? { status: body.status } : {}),
+      ...(assignmentReported ? { assignmentReported: true } : {}),
+      ...(original ? { replyTo: original.id } : {}), ...(kind === 'result' ? { spawnToken: p.spawnToken, capacityReleased: TERMINAL.has(body.status) && !childrenRunning(verified) } : {}),
+      ...(resumes.length ? { resumes } : {}),
+      fingerprint, notificationId: 'research-message-' + id, createdAt: now().toISOString() });
+    if (assignmentReported && saved.assignmentReported !== true) saved = persist({ ...saved, assignmentReported: true });
+    if (original && !original.resolvedBy) persist({ ...original, resolvedBy: id, processedAt: now().toISOString() });
+    if (saved.resumes?.length && !saved.resumeAppliedAt) {
+      for (const reportId of saved.resumes) {
+        const record = messages.get(reportId);
+        if (record && !record.resumedBy) persist({ ...record, resumedBy: saved.id });
+      }
+      const token = researchProvenanceOf(deps.getSession(target))?.spawnToken;
+      if (token && ![...messages.values()].some(row => row.spawnToken === token && TERMINAL.has(row.status) && !row.resumedBy)) deps.activateSession?.(token);
+      persist({ ...messages.get(saved.id), resumeAppliedAt: now().toISOString() });
+    }
+    if (kind === 'result' && saved.capacityReleased === true && !saved.resumedBy) deps.releaseSession?.(p.spawnToken);
+    await deliver();
+    return { status: 'ok', tool: 'research_communication', message: projection(messages.get(saved.id)), persisted: true,
+      ...(kind === 'result' ? { reportReceipt: { id: saved.id, sessionId: saved.from, parentSessionId: saved.to,
+        adoptionId: saved.adoptionId, charterHash: saved.charterHash, status: saved.status, persisted: true } } : {}) };
+  }
+  return {
+    handle: input => serial(() => handle(input)), tick: () => serial(deliver),
+    acknowledgeReceipt: (sessionId, promptId) => serial(async () => {
+      const saved = [...messages.values()].find(row => row.to === sessionId && row.notificationId === promptId);
+      if (saved && !saved.deliveredAt) persist({ ...saved, deliveredAt: now().toISOString() });
+    }),
+    isCompleted: token => [...messages.values()].some(row => row.kind === 'result' && row.spawnToken === token && row.capacityReleased === true && !row.resumedBy),
+    dispose: () => { disposed = true; },
+  };
+}

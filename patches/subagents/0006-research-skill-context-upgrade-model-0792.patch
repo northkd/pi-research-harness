@@ -1,0 +1,159 @@
+--- a/src/runs/shared/subagent-prompt-runtime.js
++++ b/src/runs/shared/subagent-prompt-runtime.js
+@@ -1,4 +1,5 @@
+ import { createHash } from "node:crypto";
++import { prepareForkSkillContext } from "./research-skill-context.mjs";
+ import * as fs from "node:fs";
+ import * as path from "node:path";
+ import { declarationsEqual, getCurrentSystemMessage, getCurrentTools } from "@earendil-works/pi-ai";
+@@ -232,9 +233,9 @@
+ export function registerSubagentPromptBoundary(pi, config) {
+     if (!rewritesChildPrompt(config))
+         return;
+-    // A returned prompt replaces the whole system prompt of every request. A fork must send its
+-    // parent's prompt unchanged to reuse its prompt cache, so its boundary goes in its task
+-    // message instead (see projectForkRequest).
++    // A returned prompt replaces the whole system prompt of every request. A fork keeps its
++    // inherited prefix layout and puts its boundary in its task message instead. The fork
++    // projection separately applies inheritSkills:false (see projectForkRequest).
+     if (config.forkCacheKey)
+         return;
+     pi.on("before_agent_start", (event) => {
+@@ -307,7 +308,9 @@
+     const parent = getCurrentSystemMessage(input.parent);
+     const child = getCurrentSystemMessage(input.child);
+     const parts = [
+-        "The system prompt and tool list of this conversation are the parent session's, sent unchanged so this request reuses the parent's prompt cache. The instructions below are yours and take precedence over the parent's role.",
++        input.inheritedSkillsFiltered
++            ? "This conversation retains the parent session's context and tool declarations, with its inherited skill catalog omitted. The instructions below are yours and take precedence over the parent's role."
++            : "The system prompt and tool list of this conversation are the parent session's, sent unchanged so this request reuses the parent's prompt cache. The instructions below are yours and take precedence over the parent's role.",
+         `Tools you can call: ${getCurrentTools(input.child).map((tool) => tool.name).join(", ") || "none"}. Any other declared tool belongs to the parent session and fails if called.`,
+     ];
+     const ownPrompt = promptText(getCurrentSystemMessage(input.own));
+@@ -335,10 +338,12 @@
+  * role, tool list and boundary) and its own tools changed that prefix right after the tools, so
+  * every fork re-read the parent's whole conversation without the prompt cache.
+  *
+- * A fork's request now starts exactly as its parent's last one did:
+- * - The system messages it inherited (`inherited`, older than `forkedAt`) are sent as they are,
+- *   and the child's own ones are dropped. When a `context` handler made Pi collapse the request
+- *   into one leading system message, that message is rebuilt from `inherited`.
++ * A fork's request preserves the parent's prefix, except that inheritSkills:false removes
++ * its inherited structured skill catalogs. That exception changes the prefix and can reduce
++ * parent prompt-cache reuse; skill scope takes precedence over that cache optimization.
++ * - The other inherited system sections (`inherited`, older than `forkedAt`) stay unchanged,
++ *   and the child's own system messages are dropped. When a `context` handler made Pi collapse
++ *   the request into one leading system message, that message is rebuilt from `inherited`.
+  * - Every tool the parent declared stays declared, with the parent's definition. A tool only the
+  *   child has, or one the child defines differently under the parent's name (a `structured_output`
+  *   with its own schema, for example), is declared by one system message at the fork point, so the
+@@ -351,6 +356,9 @@
+  * sent, with the boundary added as a section.
+  */
+ export function projectForkRequest(messages, inherited, forkedAt, options = {}) {
++    const skillContext = prepareForkSkillContext(messages, inherited, forkedAt, options.inheritSkills);
++    messages = skillContext.messages;
++    inherited = skillContext.inherited;
+     const own = (message) => !writtenBefore(message, forkedAt);
+     if (inherited.length === 0 || !messages.some((message) => !isSystemMessage(message) && !own(message))) {
+         if (!options.boundary)
+@@ -359,7 +367,7 @@
+         const section = { role: "system", content: "", sections: { subagent_boundary: `<subagent_boundary>\n${options.boundary}\n</subagent_boundary>` }, timestamp: forkedAt };
+         return at === -1 ? [...messages, section] : [...messages.slice(0, at), section, ...messages.slice(at)];
+     }
+-    const instructions = forkInstructions({ parent: inherited, child: messages, own: messages.filter((message) => isSystemMessage(message) && own(message)), boundary: options.boundary });
++    const instructions = forkInstructions({ parent: inherited, child: messages, own: messages.filter((message) => isSystemMessage(message) && own(message)), boundary: options.boundary, inheritedSkillsFiltered: skillContext.inheritedSkillsFiltered });
+     const parentTools = new Map(getCurrentTools(inherited).map((tool) => [tool.name, tool]));
+     const childTools = getCurrentTools(messages).filter((tool) => {
+         const parentTool = parentTools.get(tool.name);
+@@ -731,7 +739,7 @@
+             const fork = readInherited(ctx);
+             if (!fork)
+                 return undefined;
+-            const messages = projectForkRequest(event.messages, fork.system, fork.forkedAt, { boundary });
++            const messages = projectForkRequest(event.messages, fork.system, fork.forkedAt, { boundary, inheritSkills: config.inheritSkills });
+             return messages === event.messages ? undefined : { messages };
+         });
+     onRuntimeEvent("context", (event, ctx) => {
+--- a/src/runs/shared/subagent-prompt-runtime.d.ts
++++ b/src/runs/shared/subagent-prompt-runtime.d.ts
+@@ -41,10 +41,12 @@
+  * role, tool list and boundary) and its own tools changed that prefix right after the tools, so
+  * every fork re-read the parent's whole conversation without the prompt cache.
+  *
+- * A fork's request now starts exactly as its parent's last one did:
+- * - The system messages it inherited (`inherited`, older than `forkedAt`) are sent as they are,
+- *   and the child's own ones are dropped. When a `context` handler made Pi collapse the request
+- *   into one leading system message, that message is rebuilt from `inherited`.
++ * A fork's request preserves the parent's prefix, except that inheritSkills:false removes
++ * its inherited structured skill catalogs. That exception changes the prefix and can reduce
++ * parent prompt-cache reuse; skill scope takes precedence over that cache optimization.
++ * - The other inherited system sections (`inherited`, older than `forkedAt`) stay unchanged,
++ *   and the child's own system messages are dropped. When a `context` handler made Pi collapse
++ *   the request into one leading system message, that message is rebuilt from `inherited`.
+  * - Every tool the parent declared stays declared, with the parent's definition. A tool only the
+  *   child has, or one the child defines differently under the parent's name (a `structured_output`
+  *   with its own schema, for example), is declared by one system message at the fork point, so the
+@@ -60,6 +62,7 @@
+     role: string;
+ }>(messages: T[], inherited: readonly T[], forkedAt: number, options?: {
+     boundary?: string;
++    inheritSkills?: boolean;
+ }): T[];
+ /**
+  * Pi sends the session id in a session-affinity header to Anthropic-style endpoints that ask for
+--- /dev/null
++++ b/src/runs/shared/research-skill-context.mjs
+@@ -0,0 +1,52 @@
++/**
++ * Apply the child's skill-inheritance policy to the provider-facing fork projection.
++ * Pi 1.3 stores generated catalogs in the independently replaceable `skills` section.
++ * Copy only that section away; the saved parent transcript and all other context stay
++ * intact. Opaque prompt content is deliberately not parsed or truncated here.
++ */
++export function prepareForkSkillContext(messages, inherited, forkedAt, inheritSkills) {
++  const unchanged = {messages, inherited, inheritedSkillsFiltered: false};
++  if (inheritSkills !== false || !Number.isFinite(forkedAt)) return unchanged;
++
++  const isInherited = message => message.role === 'system'
++    && typeof message.timestamp === 'number' && message.timestamp < forkedAt;
++  const sentInherited = messages.filter(isInherited);
++  const uncollapsed = sentInherited.length === inherited.length
++    && sentInherited.every((message, index) => JSON.stringify(message) === JSON.stringify(inherited[index]));
++  const parentCatalogs = new Set(inherited
++    .filter(message => message.role === 'system' && Object.hasOwn(message.sections ?? {}, 'skills'))
++    .map(message => message.sections.skills));
++
++  const withoutSkills = message => {
++    if (message.role !== 'system' || !Object.hasOwn(message.sections ?? {}, 'skills')) return message;
++    const sections = {...message.sections};
++    delete sections.skills;
++    return {...message, sections};
++  };
++  const copyChanges = (source, transform) => {
++    let result;
++    for (let index = 0; index < source.length; index++) {
++      const next = transform(source[index]);
++      if (next !== source[index]) {
++        result ??= source.slice();
++        result[index] = next;
++      }
++    }
++    return result ?? source;
++  };
++
++  const filteredInherited = copyChanges(inherited, withoutSkills);
++  const filteredMessages = copyChanges(messages, message => {
++    if (!isInherited(message)) return message;
++    // getCurrentSystemMessage keeps the FIRST system timestamp when it collapses
++    // deltas. The collapsed head can therefore contain a child's selected catalog
++    // with a parent's timestamp. Only remove a known parent value in that case.
++    if (!uncollapsed && !parentCatalogs.has(message.sections?.skills)) return message;
++    return withoutSkills(message);
++  });
++  return {
++    messages: filteredMessages,
++    inherited: filteredInherited,
++    inheritedSkillsFiltered: filteredMessages !== messages || filteredInherited !== inherited,
++  };
++}

@@ -1,0 +1,92 @@
+[
+  {
+    "file": "communication-receipts.test.mjs",
+    "exit": 0,
+    "tests": 2,
+    "pass": 2,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "communication-tool.test.mjs",
+    "exit": 0,
+    "tests": 13,
+    "pass": 13,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "composition.test.mjs",
+    "exit": 0,
+    "tests": 9,
+    "pass": 9,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "direct-session-handoff.test.mjs",
+    "exit": 0,
+    "tests": 13,
+    "pass": 13,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "dispatch-completion.test.mjs",
+    "exit": 0,
+    "tests": 9,
+    "pass": 9,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "dispatch-recovery.test.mjs",
+    "exit": 0,
+    "tests": 10,
+    "pass": 10,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "projection.test.mjs",
+    "exit": 0,
+    "tests": 10,
+    "pass": 10,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "research-communication.test.mjs",
+    "exit": 0,
+    "tests": 20,
+    "pass": 20,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "research-session-history-cap.test.mjs",
+    "exit": 0,
+    "tests": 16,
+    "pass": 16,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  },
+  {
+    "file": "retirement.test.mjs",
+    "exit": 0,
+    "tests": 11,
+    "pass": 11,
+    "fail": 0,
+    "skipped": 0,
+    "errors": []
+  }
+]

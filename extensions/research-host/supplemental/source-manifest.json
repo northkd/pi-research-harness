@@ -1,0 +1,707 @@
+{
+  "generatedAt": "2026-11-23T08:54:38.060Z",
+  "modules": [
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/speed-monitor/src/server/stats.ts",
+      "destination": "billing/server/stats.js",
+      "sourceSha256": "24ea5187174bac58bf0ede67905bc15140093660d3137f806080a561c86bdb50",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/speed-monitor/src/server/deepseek-pricing.ts",
+      "destination": "billing/server/deepseek-pricing.js",
+      "sourceSha256": "14e6c93ec92adda80870ce5714a4b6a3c7aee81ca14cbd7d29139821ad8579c1",
+      "modified": false
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/speed-monitor/src/billing-period.ts",
+      "destination": "billing/billing-period.js",
+      "sourceSha256": "7d869d125aaf560f521f668afa6287a76dd979786514f0c2ac9f5eabeddd28c3",
+      "modified": false
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/goal-store.ts",
+      "destination": "goal/server/goal-store.js",
+      "sourceSha256": "e9790837fd221210ce6656d0b9570080b481b427c6f9126e86c05c6ba5b805ed",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/goal-supervisor.ts",
+      "destination": "goal/server/goal-supervisor.js",
+      "sourceSha256": "7cfcd47d929ae346524ad6b50d488be5b8de03c746cfae031bfd4553e419096d",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/goal-status-projector.ts",
+      "destination": "goal/server/goal-status-projector.js",
+      "sourceSha256": "361733a41e68e86b030e0f1b0ac37c6703263af184940ab19cdc431ea86b7556",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/goal-session-primer.ts",
+      "destination": "goal/server/goal-session-primer.js",
+      "sourceSha256": "0cf1baf67a5a91b33e5a74c534dfcd7d118ee8ec87ec4c8d02a511acd70b87b1",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/decorate-goals-spend.ts",
+      "destination": "goal/server/decorate-goals-spend.js",
+      "sourceSha256": "f0bd93c2a300fccf674f13249802d36564186bb9878a4e88db68e8af084f2598",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/goal-budget-guard.ts",
+      "destination": "goal/server/goal-budget-guard.js",
+      "sourceSha256": "4559dd1faca0b457717d5326948c00fed59c58e20d9b0578b0f30d209d30865a",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/goal-verdict-accumulator.ts",
+      "destination": "goal/server/goal-verdict-accumulator.js",
+      "sourceSha256": "b4703683a120c4019e0daf67096cda94b38b272bd763514c9274c8f378f014a8",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/probe.ts",
+      "destination": "goal/server/probe.js",
+      "sourceSha256": "3bd41766251e717785b7d0c7bc53fad147f231745f53709cfeaaed890b67f91a",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/routes.ts",
+      "destination": "goal/server/routes.js",
+      "sourceSha256": "7bd0b633423ca6c8f9f4e4640f2377c3f028386ad080ffb0790e6c837b4b77d8",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/server/index.ts",
+      "destination": "goal/server/index.js",
+      "sourceSha256": "ed7ffca43c5af1e9c6c0e1c40fa191919dff1d1ed578af2793b8fffc47f23549",
+      "modified": true
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/goal/src/shared/goal-types.ts",
+      "destination": "goal/shared/goal-types.js",
+      "sourceSha256": "03df816ef47b3a696dca0cb94a98883d545062a0736f49b8e68a72e39246f5b1",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/adoc-chunker.ts",
+      "destination": "kb-engine/dist/adoc-chunker.js",
+      "sourceSha256": "15cb1158faff86af49be080fd809be1f08bd0f1b52cc336c85e79b339dc5dcdd",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/archive-guard.ts",
+      "destination": "kb-engine/dist/archive-guard.js",
+      "sourceSha256": "8841e942c228551ab7c7c2c7821bf28726c605e8b637a9ec8de516d9781247d4",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/chunker.ts",
+      "destination": "kb-engine/dist/chunker.js",
+      "sourceSha256": "de0993c5394a144351f07a2ea2c727a2e7dac16949e8c8041bef910b95fd082e",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/cli.ts",
+      "destination": "kb-engine/dist/cli.js",
+      "sourceSha256": "ff8b6c5166262f08de9fde98a7eb12643d13044269ae1f8c046f42c515301632",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/config.ts",
+      "destination": "kb-engine/dist/config.js",
+      "sourceSha256": "c40566a3ac9da55861920568a86c4024c73803ae8cb3fdc87309fd169481d510",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/dox-row.ts",
+      "destination": "kb-engine/dist/dox-row.js",
+      "sourceSha256": "2a493aa92852dbcd5e810361dfc69a6b8448b31df0512fa6151943c9c097bb78",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/dox-triage.ts",
+      "destination": "kb-engine/dist/dox-triage.js",
+      "sourceSha256": "08306f88beb6481ddf25e1442b70801d2aacb4c4e2c8dafb195071563df04dc7",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/dox.ts",
+      "destination": "kb-engine/dist/dox.js",
+      "sourceSha256": "9276dc128242d824b0f461db15d55e92a42e0052c49022662640d759ca1022a9",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/eval.ts",
+      "destination": "kb-engine/dist/eval.js",
+      "sourceSha256": "8685cc99bcd4e2d63d7a1bbb3bc1ed5b7aef637a16f20de28a82a3bc2257598f",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/frontmatter.ts",
+      "destination": "kb-engine/dist/frontmatter.js",
+      "sourceSha256": "22635c1154bcd13625c688a2d0be23984656b5a723ca9711dc023660cdd546e3",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/commits.ts",
+      "destination": "kb-engine/dist/git-scope/commits.js",
+      "sourceSha256": "da0081d6f5946736be8966d50258a2833214a0e600f6fbfbc9462a81ac1cac29",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/deps.ts",
+      "destination": "kb-engine/dist/git-scope/deps.js",
+      "sourceSha256": "203bc0bedf41166ed9790f40e6401a099fb61fe654ec823ab3feb689b763812f",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/forge/cli.ts",
+      "destination": "kb-engine/dist/git-scope/forge/cli.js",
+      "sourceSha256": "6484e5f7919567efe8b09dedb37c3faf4c27183563f49eda7cf2c06d5da16c6d",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/forge/gitea.ts",
+      "destination": "kb-engine/dist/git-scope/forge/gitea.js",
+      "sourceSha256": "062a82903e47423ab3a8739e3c41beab58bc35cf7548cc35f7347e34a697491f",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/forge/github.ts",
+      "destination": "kb-engine/dist/git-scope/forge/github.js",
+      "sourceSha256": "9d458f8927a3054dd817a244f30f98e30b12b1bf42a034e1129a62edb1421973",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/forge/gitlab.ts",
+      "destination": "kb-engine/dist/git-scope/forge/gitlab.js",
+      "sourceSha256": "c191b07007fdf5489ffec6ffd1785c9e088cf61545fc56e4ef822451257eadd5",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/forge/index.ts",
+      "destination": "kb-engine/dist/git-scope/forge/index.js",
+      "sourceSha256": "08397deb2c8156d46310f8a35545e846805aee07d21fb93f6443766b52e07411",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/forge/types.ts",
+      "destination": "kb-engine/dist/git-scope/forge/types.js",
+      "sourceSha256": "78cc0e98bdb32779d93a850a43a13c0ab52e24da2cd06e083be3ec644f160fc2",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/index.ts",
+      "destination": "kb-engine/dist/git-scope/index.js",
+      "sourceSha256": "0229ff43dbf831e1b2013f69e7c30f3a7375bacc283e1ecca03dfba8f99fdc58",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/lease.ts",
+      "destination": "kb-engine/dist/git-scope/lease.js",
+      "sourceSha256": "dcfe2892fa31e713435089f91669f36b2ee6c6519134d3cc4f99feeef6f931e6",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/links.ts",
+      "destination": "kb-engine/dist/git-scope/links.js",
+      "sourceSha256": "e11beaba45e3ef3934b624fc36d45aa05026b8f721d77ca65f1f3d02d458a66a",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/repo.ts",
+      "destination": "kb-engine/dist/git-scope/repo.js",
+      "sourceSha256": "ca509214da24b022901573505551a89b69b191b8b8d1be38942800ad102da821",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/scope.ts",
+      "destination": "kb-engine/dist/git-scope/scope.js",
+      "sourceSha256": "92fc2324b3ffdc8f530afe7863fcd728b44d740e51eaa7cd4409fe21eb4e04d6",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/store.ts",
+      "destination": "kb-engine/dist/git-scope/store.js",
+      "sourceSha256": "42cdbe2bf1a2da930ec91570c1c9c1aa8b3879a01689ca4dde98e734a63235fb",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/git-scope/sync.ts",
+      "destination": "kb-engine/dist/git-scope/sync.js",
+      "sourceSha256": "81d612d053c3d1d23a325b207f622346e551faefcbd38bfb543dcdd404618a97",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/gitignore.ts",
+      "destination": "kb-engine/dist/gitignore.js",
+      "sourceSha256": "57295d9c693a325afdb4433918b099c8dc1823eb98bc40e48df40ba7e6e47656",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/index-gate.ts",
+      "destination": "kb-engine/dist/index-gate.js",
+      "sourceSha256": "e7d40b99802d3f8d4c0e97540aa88b0e0d48d166c42653b25ba3d5898d45dc01",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/index-run.ts",
+      "destination": "kb-engine/dist/index-run.js",
+      "sourceSha256": "a32e71f850380f3803f578bb644a161b31d75caf8a4878ec7a30fd66b8ea58d5",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/index.ts",
+      "destination": "kb-engine/dist/index.js",
+      "sourceSha256": "4f28a8dbce63fb5a66c1b79e3fe1d545248a29e70efcea4aac5a7c3ed11acf6a",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/indexer.ts",
+      "destination": "kb-engine/dist/indexer.js",
+      "sourceSha256": "6ed21e54bcb9c2cfe682d82345b56f4261e686855222b51a6043c6a88ae6fbb2",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/init.ts",
+      "destination": "kb-engine/dist/init.js",
+      "sourceSha256": "6e6422278a62472b37036f0669d85aec333e30f51bca5a5f1674a92c61d22eee",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/migrate-file-index.ts",
+      "destination": "kb-engine/dist/migrate-file-index.js",
+      "sourceSha256": "f7248c391cc3ff15eea496f1b15f3d7549c964d631d337c920e1c6903e2c92f1",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/migrate-runner.ts",
+      "destination": "kb-engine/dist/migrate-runner.js",
+      "sourceSha256": "5e9669332238811b27cdb31f94e77ea33459d93fe11fd3a9fc47e11f7066adbf",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/net-guard.ts",
+      "destination": "kb-engine/dist/net-guard.js",
+      "sourceSha256": "2f517aa7849dcd945af4b75bce81dc67be448224a1a322b4223f869a6a2327d2",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/render.ts",
+      "destination": "kb-engine/dist/render.js",
+      "sourceSha256": "11839b705c6b74ea8de9f8a4b3e08b44d73f19b1e00629c2aa9476d27e06714b",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/search-opts.ts",
+      "destination": "kb-engine/dist/search-opts.js",
+      "sourceSha256": "59f61ecba2be94d5d6dc32dcb68f83cc6dc3baff5bf7b69566b1687148830ae4",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/seed.ts",
+      "destination": "kb-engine/dist/seed.js",
+      "sourceSha256": "b7831fb1dff596e1da0deca379cf5647f4c1f18dad8b228836caa62527818ff9",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/sources.ts",
+      "destination": "kb-engine/dist/sources.js",
+      "sourceSha256": "34162cd9d01d2c257b67b098d1a9610d7f048fd0ebf9a535b3aca687875a8fbf",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/sqlite-store.ts",
+      "destination": "kb-engine/dist/sqlite-store.js",
+      "sourceSha256": "1efff8fc72d0dca7c220216c836d2a20c1e73cd3480243ae33d67b0e9c2757ee",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/staleness.ts",
+      "destination": "kb-engine/dist/staleness.js",
+      "sourceSha256": "46cc2ff4826595069d887d69d4af2d203cef8449b0ef4debe09c265ecd4f1064",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/trust.ts",
+      "destination": "kb-engine/dist/trust.js",
+      "sourceSha256": "7463ea85a3d8479de3e89853a3f291403e54d45197a927897146f8eaf7b162b2",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/types.ts",
+      "destination": "kb-engine/dist/types.js",
+      "sourceSha256": "c1aa9ece556aff78d719cc737199989a5562afade1a020496e27ab993875a6ab",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-kb/src/verdict.ts",
+      "destination": "kb-engine/dist/verdict.js",
+      "sourceSha256": "d92379944b925598674ebb2b6eb6cfa5f04153ae584073bc13316b625434376b",
+      "modified": false
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/kb/src/server/job-registry.ts",
+      "destination": "kb/job-registry.js",
+      "sourceSha256": "4476bc274db338009512f128bb710273c63ed941409e9d38dc59b5339f88e4e2",
+      "modified": false
+    },
+    {
+      "source": "/example/operator/.pi/dashboard/plugins/kb/src/server/kb-routes.ts",
+      "destination": "kb/kb-routes.js",
+      "sourceSha256": "743f619875d6a60e606edf0e47bdf9657a7e81831872fefdfebd8f7da60f110b",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/bridge/index.ts",
+      "destination": "automation/bridge/index.js",
+      "sourceSha256": "1899dca080517dcf71c42b2661f17dd47fa455cdb241f13f9c9ac66f1b962939",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/i18n.ts",
+      "destination": "automation/i18n.js",
+      "sourceSha256": "879eeddca20346c7699b53f1b2c972033141ccb0fd1de214adb7e568d2cea703",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/action-registry.ts",
+      "destination": "automation/server/action-registry.js",
+      "sourceSha256": "e0b7afedfbdcbed28f1d9429d8f44fc2666a1560a88e0ce1237e69c602a1e614",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/automation-schema.ts",
+      "destination": "automation/server/automation-schema.js",
+      "sourceSha256": "b873af7b49739c86163e0d92337ef1797634e35df1f96d47638d7cb1bb1e1dfe",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/automation-watcher.ts",
+      "destination": "automation/server/automation-watcher.js",
+      "sourceSha256": "981683e2ac14015b4fb2e13921f7e78558079434a18e35b25647541c13b762ac",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/automation-writer.ts",
+      "destination": "automation/server/automation-writer.js",
+      "sourceSha256": "d452f23a18d2dccb6c917a7d98baf91372661ef17f20b41e6fc15f166f860bfe",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/cron.ts",
+      "destination": "automation/server/cron.js",
+      "sourceSha256": "28f71525168fa5981e0e67605cf2e02366b29176ee06bd839350ac263c320e9a",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/engine.ts",
+      "destination": "automation/server/engine.js",
+      "sourceSha256": "b598a114c7aa3d9eb07ea1548ce123415cd29b9a5411890a6b666d1c2b34c84c",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/file-trigger.ts",
+      "destination": "automation/server/file-trigger.js",
+      "sourceSha256": "5edbfb12293938a737d3beed9e9f98272d28cfb9aa34501b18f33ff860b442db",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/folder-scope-contributions.ts",
+      "destination": "automation/server/folder-scope-contributions.js",
+      "sourceSha256": "1c51efd897c55f6840ffb4dce86ca9e29e4646e7dfc781af6582f3603a837e70",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/folder-work-source.ts",
+      "destination": "automation/server/folder-work-source.js",
+      "sourceSha256": "36b6be069ea79b50b729638d20df5903bb81efe94b8be029e4a67f42aa12b55b",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/index.ts",
+      "destination": "automation/server/index.js",
+      "sourceSha256": "101cab595cea3d2b8e3cbb38f6fc30ab526b07de22d611cd1a95ea6124a264f2",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/interpolate.ts",
+      "destination": "automation/server/interpolate.js",
+      "sourceSha256": "a4d9b6113ad9b15d935d929c4805072db48bd8f8bfa6999503748ed85af45600",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/model-resolver.ts",
+      "destination": "automation/server/model-resolver.js",
+      "sourceSha256": "e6e20364f68d0e13241f00a38e8fda4ed590ad9adf746cf01821a3f67cf8826c",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/resolve-children.ts",
+      "destination": "automation/server/resolve-children.js",
+      "sourceSha256": "354f4e5e87fdcef8844f75266b162ec60751af227fb61c46ae8349c6022daa07",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/role-usage.ts",
+      "destination": "automation/server/role-usage.js",
+      "sourceSha256": "7a574dee5f44338c5062b6523ed0b043563f1f389d493206032b259b6172eb93",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/routes.ts",
+      "destination": "automation/server/routes.js",
+      "sourceSha256": "6480a3d9a4c0c82f4b0a3c84e93ae2731d6df1fb408d2e5d5e399eda66dbe2ac",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/run-store.ts",
+      "destination": "automation/server/run-store.js",
+      "sourceSha256": "5ebe8a96881e0c6e96bce3da9e4d2bb6e4be5883696e79f776fd1a89d396a6e2",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/runner.ts",
+      "destination": "automation/server/runner.js",
+      "sourceSha256": "465d00e3bddaeea57103ad4fa0f66d8aed65f34f0a6be44d8f93b0219e5f606b",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/scanner.ts",
+      "destination": "automation/server/scanner.js",
+      "sourceSha256": "fae25f9fe2eb8d12829372f00258d1037a268524ba8753b1b1f346195b40d414",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/schedule-batch-trigger.ts",
+      "destination": "automation/server/schedule-batch-trigger.js",
+      "sourceSha256": "61c2ecc95feb40dc32294721de58032b3b0726bc9ecf7b2cd75656b8cd3c03ea",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/schedule-trigger.ts",
+      "destination": "automation/server/schedule-trigger.js",
+      "sourceSha256": "ce68ca4831ce203b55491c62ae05665f15b678c46d7b0052c808707dfe6cdfe9",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/scheduler.ts",
+      "destination": "automation/server/scheduler.js",
+      "sourceSha256": "3ae69a0ad5788f09169add3e4a2ea7f6192063893d9a8e4cb1a7486e589c50b3",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/trigger-registry.ts",
+      "destination": "automation/server/trigger-registry.js",
+      "sourceSha256": "85dfb82a210e2e71d8c4f6df74fb381a7db374ac6f23228aa534a8012499a985",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/work-source-contributions.ts",
+      "destination": "automation/server/work-source-contributions.js",
+      "sourceSha256": "7293bb4b1492d84989cb0e36cdb6fdfb7642547cae5044ad1645aee91ff42a52",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/server/work-source-registry.ts",
+      "destination": "automation/server/work-source-registry.js",
+      "sourceSha256": "07656ca9c61b5d9a8417fa43c1b4aec452758bc70ce7f7e4098e1a8a4abf70e8",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/shared/automation-types.ts",
+      "destination": "automation/shared/automation-types.js",
+      "sourceSha256": "0de77539a7bd34d7b04f326664624e98c99b1bae7b45a596563d39555b13a33b",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/shared/cron.ts",
+      "destination": "automation/shared/cron.js",
+      "sourceSha256": "7a14b8d2a919df1f3726d7e82d5d6cfb179ab68bc3ccbfa8e3d10e6f41eb56a8",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-automation-plugin/src/shared/work-source.ts",
+      "destination": "automation/shared/work-source.js",
+      "sourceSha256": "a48f59bf885148deb8875f978ca2b806bbc8fd46c5d5867d28169656141c81d6",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/bridge/flow-files-reporter.ts",
+      "destination": "flows/bridge/flow-files-reporter.js",
+      "sourceSha256": "46e22dae50591cfd466a7c079244a60d7802049247640e1b1e08931f58ab7688",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/bridge/flow-question-adapter.ts",
+      "destination": "flows/bridge/flow-question-adapter.js",
+      "sourceSha256": "5afea081092a035eeaba03de9ca11feee7edd528b41d247ab76c1ee39880cf3d",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/bridge/index.ts",
+      "destination": "flows/bridge/index.js",
+      "sourceSha256": "b1c1a2a72cc8b67598179f8c8120416f99a39b5353cee6a9279d8a035404e963",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/flow-files-contract.ts",
+      "destination": "flows/flow-files-contract.js",
+      "sourceSha256": "b75990a4b14fd2b604684382137b2bfcac2c78f5dd57e6e9dbe0cccdd6c6ef0d",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/flow-reducer.ts",
+      "destination": "flows/flow-reducer.js",
+      "sourceSha256": "e177125b5052ddc94f49d973066faf464916cf559cf5dff20df3a1c12340e899",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/i18n.ts",
+      "destination": "flows/i18n.js",
+      "sourceSha256": "26ada8f48e1cbee315045531c48267a034fba2e643168a9c154bf579dc8b2a60",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/reducer.ts",
+      "destination": "flows/reducer.js",
+      "sourceSha256": "08582fc557b3be9a6aad01c6a4a70abee2b33c613d2c6498583f418e0be12b21",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/server/automation-actions.ts",
+      "destination": "flows/server/automation-actions.js",
+      "sourceSha256": "ba863ec1e9ba1e26d24134b69fd8a4e24f57e0e592770659895d06b01ad3c9d9",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/server/flow-files.ts",
+      "destination": "flows/server/flow-files.js",
+      "sourceSha256": "99eda59a5221afae4d83f12e098c892cf23028d021d27c6f051050935acc36d6",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/server/flow-inputs.ts",
+      "destination": "flows/server/flow-inputs.js",
+      "sourceSha256": "18849e012243def8ea07133b57a00d1ef3eaef1d24c494bce0bcee29fe52dd43",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/server/index.ts",
+      "destination": "flows/server/index.js",
+      "sourceSha256": "5b6f1b337de898ca8e645412d8e480e969a24c80ab6a7f0276d0e2d5717b317b",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/server/render-actions.ts",
+      "destination": "flows/server/render-actions.js",
+      "sourceSha256": "d7ae8d7155bda2b8b9fd80a837c12224fc2ea84f4d083bbec83a2a83fc24c423",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-plugin/src/server/state-store.ts",
+      "destination": "flows/server/state-store.js",
+      "sourceSha256": "41643cacca942c17a62ca2224aa70a0dcee8ca9dabd8b1e177073030de2535ec",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/role-schema.ts",
+      "destination": "shared/role-schema.js",
+      "sourceSha256": "5b111559bbba2740c17aa517f1727331fc681176d194a5bb5a060fd3d5fdf38a",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/role-config-disk.ts",
+      "destination": "shared/role-config-disk.js",
+      "sourceSha256": "bdd741b1b318e9c0e03e0033be1cd2bac9b0e1cf7dbf5904ddfda9157157216e",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/protocol.ts",
+      "destination": "shared/protocol.js",
+      "sourceSha256": "f40489857156624c3831ee5f1fb25b4306a5ee5662f5066614d7fa6bdabf5ff9",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/pi-package-resolver.ts",
+      "destination": "shared/pi-package-resolver.js",
+      "sourceSha256": "02b629a2f8c1bdad852fddae5d2f9e6c1d7ce1ccff2cd201ffe1f8bc39045848",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/npm.ts",
+      "destination": "shared/platform/npm.js",
+      "sourceSha256": "23e6c39980909804615239d94974f56008eda29b47a54e79a8ba83a2c061109e",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/runner.ts",
+      "destination": "shared/platform/runner.js",
+      "sourceSha256": "f2ac4799495d2256523652e79f95a5b2878f0c682da6edcc9f6c16bf291f416f",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/binary-lookup.ts",
+      "destination": "shared/platform/binary-lookup.js",
+      "sourceSha256": "092da72bc15776ec5947f1a28e27c17727dcbe27c8ead6951022a7c7e8993b06",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/managed-paths.ts",
+      "destination": "shared/managed-paths.js",
+      "sourceSha256": "1f2ae08c04dc7a284ae6ade1e5eef1c3f1cbb38993ca286e36056b85cdac6363",
+      "modified": true
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/ensure-windows-path.ts",
+      "destination": "shared/platform/ensure-windows-path.js",
+      "sourceSha256": "69fe5a1cdc8c3a31262bf820f1702865d2dc3491f26e340a70b6e4c2bb7f90c3",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/env-path-key.ts",
+      "destination": "shared/platform/env-path-key.js",
+      "sourceSha256": "a4b34c99a45c0ac2486abb50fc761baffc685f88d4164eb25bd08ffaa1f99390",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/exec.ts",
+      "destination": "shared/platform/exec.js",
+      "sourceSha256": "5d080f8556b25b78f840e0dac2b22545ebace9ffb1adb4796e95ed8ac3416d3e",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/git-source.ts",
+      "destination": "shared/platform/git-source.js",
+      "sourceSha256": "e29aa5f21d701a5c35ca70d8442cc47ecb5cabfa22bf4cb5781bb64269e1952e",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/select-git-source.ts",
+      "destination": "shared/platform/select-git-source.js",
+      "sourceSha256": "46de79d2b13bd37a65299c243984ac78712f27d2c268e651744f948dd3819a4f",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-shared/src/platform/ensure-bundled-git.ts",
+      "destination": "shared/platform/ensure-bundled-git.js",
+      "sourceSha256": "d077e08f71debfba7811539c3d5fe45547ffa66121407c9b00e7ac53ccd10ea3",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-anthropic-bridge-plugin/src/peer-probe.ts",
+      "destination": "anthropic/peer-probe.js",
+      "sourceSha256": "3aedc9724ef73e77ef19f04be00a9b0a306df9c762a2df194cdcddebd7051e78",
+      "modified": false
+    },
+    {
+      "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-flows-anthropic-bridge-plugin/src/bridge/index.ts",
+      "destination": "anthropic/bridge/index.js",
+      "sourceSha256": "8420b1508518f097b62465af804b1e373e2cc142331479847b2f35c7c29c7aeb",
+      "modified": true
+    }
+  ]
+}

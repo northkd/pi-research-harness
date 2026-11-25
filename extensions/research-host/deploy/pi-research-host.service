@@ -1,0 +1,18 @@
+[Unit]
+Description=Pi Research session and scheduling host
+ConditionPathExists=%h/.pi/research-host/config.json
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/pi-research
+ExecStart=/usr/bin/node %h/.local/share/pi-research/research-host/server.mjs
+Environment=PI_RESEARCH_HOST_DIR=%h/.pi/research-host
+Restart=on-failure
+RestartSec=3
+UMask=0077
+# A normal host restart must leave established keepers in charge of native Pi.
+KillMode=process
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

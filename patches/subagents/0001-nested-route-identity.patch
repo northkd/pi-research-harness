@@ -1,0 +1,12 @@
+--- a/src/runs/foreground/subagent-executor.js
++++ b/src/runs/foreground/subagent-executor.js
+@@ -7035,7 +7035,8 @@
+                 return runFanoutErrorResult(error, foregroundMode);
+             return buildRequestedModeError(effectiveParams, error instanceof Error ? error.message : String(error));
+         }
+-        const nestedRoute = inheritedNestedRouteValue ?? createNestedRoute(runId);
++        // Restore/status locates async descendants by the public async run id.
++        const nestedRoute = inheritedNestedRouteValue ?? createNestedRoute(effectiveAsync ? asyncRunId : runId);
+         const artifactConfig = omitUndefinedProperties({
+             ...DEFAULT_ARTIFACT_CONFIG,
+             enabled: effectiveParams.artifacts !== false,

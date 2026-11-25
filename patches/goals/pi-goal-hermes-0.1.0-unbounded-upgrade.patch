@@ -1,0 +1,243 @@
+--- a/continuation-prompt.ts
++++ b/continuation-prompt.ts
+@@ -9,7 +9,7 @@
+ 
+ export function makeContinuationPrompt(state: PiLocalGoalState): string {
+ 	const context = `Continue from the current conversation and saved progress. Read the latest task records and work on the remaining deliverables.
+-Do not rerun completed stages, discard accepted outputs, or reset loop turns, scientific attempt limits, failure history, or spending budgets.
++Do not rerun completed stages, discard accepted outputs, or reset used turns, failure history, or usage accounting. The project does not impose research request, turn, attempt, or spending caps; the user controls the research budget.
+ The existing goal and prior authorization remain in force. A user Resume requests continuation within that scope; do not ask again merely to continue already authorized work. Ask only for genuinely missing information or a new decision outside that scope.
+ Goal completion requires the requested deliverables. Blocked work pauses the loop instead of becoming done; readiness to start is not completion.
+ 
+--- a/event-renderer.ts
++++ b/event-renderer.ts
+@@ -15,7 +15,7 @@
+ 	goal: string;
+ 	status: string;
+ 	turnsUsed: number;
+-	maxTurns: number;
++	maxTurns: number | null;
+ 	lastVerdict: string | null;
+ 	lastReason: string | null;
+ 	pausedReason: string | null;
+@@ -47,7 +47,7 @@
+ 		case "goal-set":
+ 			return `Goal set: ${state.goal}`;
+ 		case "goal-continuing":
+-			return `Goal continuing (${state.turnsUsed}/${state.maxTurns} turns)`;
++			return `Goal continuing (${state.turnsUsed} turns used)`;
+ 		case "goal-achieved":
+ 			return `Goal achieved: ${state.goal}`;
+ 		case "goal-paused":
+@@ -85,7 +85,7 @@
+ 	const lines: string[] = [`${icon} ${label}`];
+ 
+ 	lines.push(theme.fg("dim", `  Objective: ${details.goal}`));
+-	lines.push(theme.fg("dim", `  Progress: ${details.turnsUsed}/${details.maxTurns} turns`));
++	lines.push(theme.fg("dim", `  Usage: ${details.turnsUsed} turns`));
+ 
+ 	if (details.lastVerdict) {
+ 		lines.push(theme.fg("dim", `  Verdict: ${details.lastVerdict}`));
+@@ -124,7 +124,7 @@
+ 		case "goal-set":
+ 			return "Goal set";
+ 		case "goal-continuing":
+-			return `Goal continuing (${details.turnsUsed}/${details.maxTurns})`;
++			return `Goal continuing (${details.turnsUsed} turns used)`;
+ 		case "goal-achieved":
+ 			return "Goal achieved";
+ 		case "goal-paused":
+--- a/goal-manager.ts
++++ b/goal-manager.ts
+@@ -17,6 +17,7 @@
+ 	isCurrentGoal: () => boolean,
+ ): Promise<EvaluateWithJudgeResult> {
+ 	const startedAt = state.updatedAt;
++	state.maxTurns = null;
+ 	state.turnsUsed += 1;
+ 
+ 	const verdict = await new JudgeService().evaluate(
+@@ -70,14 +71,6 @@
+ 		return { shouldContinue: false };
+ 	}
+ 
+-	if (state.turnsUsed >= state.maxTurns) {
+-		state.status = "paused";
+-		state.pausedReason = "maxTurns budget exhausted";
+-		state.updatedAt = Date.now();
+-		persist(pi, ctx, state);
+-		return { shouldContinue: false };
+-	}
+-
+ 	state.status = "active";
+ 	state.pausedReason = null;
+ 	state.updatedAt = Date.now();
+--- a/goal-state.ts
++++ b/goal-state.ts
+@@ -2,7 +2,8 @@
+ import type { CustomEntry, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+ 
+ export const GOAL_CUSTOM_TYPE = "pi-goal-hermes:state";
+-export const DEFAULT_MAX_TURNS = 20;
++// null is an unbounded policy, not a large synthetic turn allowance.
++export const DEFAULT_MAX_TURNS = null;
+ 
+ export type PiLocalGoalStatus = "active" | "paused" | "done" | "cleared";
+ export type PiLocalGoalVerdict = "done" | "continue" | "blocked";
+@@ -12,7 +13,7 @@
+ 	goal: string;
+ 	status: PiLocalGoalStatus;
+ 	turnsUsed: number;
+-	maxTurns: number;
++	maxTurns: number | null;
+ 	lastVerdict: PiLocalGoalVerdict | null;
+ 	lastReason: string | null;
+ 	pausedReason: string | null;
+@@ -26,7 +27,7 @@
+ 	goal: PiLocalGoalState;
+ }
+ 
+-export function createPiLocalGoalState(goal: string, maxTurns: number = DEFAULT_MAX_TURNS): PiLocalGoalState {
++export function createPiLocalGoalState(goal: string, _legacyMaxTurns: number | null = DEFAULT_MAX_TURNS): PiLocalGoalState {
+ 	const now = Date.now();
+ 
+ 	return {
+@@ -34,7 +35,7 @@
+ 		goal,
+ 		status: "active",
+ 		turnsUsed: 0,
+-		maxTurns,
++		maxTurns: null,
+ 		lastVerdict: null,
+ 		lastReason: null,
+ 		pausedReason: null,
+@@ -66,7 +67,9 @@
+ 		const data = entry.data;
+ 		if (!isRecord(data) || !isPiLocalGoalState(data.goal)) continue;
+ 		if (data.goal.status === "cleared") return null;
+-		return data.goal;
++		// Preserve the stored history and used turns; legacy caps are no longer
++		// execution policy. Resume still requires the user's existing goal scope.
++		return { ...data.goal, maxTurns: null, subgoals: [...data.goal.subgoals] };
+ 	}
+ 
+ 	return null;
+@@ -91,7 +94,9 @@
+ 		typeof value.goal === "string" &&
+ 		hasValidStatus &&
+ 		typeof value.turnsUsed === "number" &&
+-		typeof value.maxTurns === "number" &&
++		// Keep the previous numeric read contract: even obsolete non-integer caps
++		// must not make restoration fall back to an older, unrelated goal.
++		(value.maxTurns === null || typeof value.maxTurns === "number") &&
+ 		hasValidVerdict &&
+ 		(value.lastReason === null || typeof value.lastReason === "string") &&
+ 		(value.pausedReason === null || typeof value.pausedReason === "string") &&
+--- a/index.ts
++++ b/index.ts
+@@ -14,39 +14,27 @@
+ 	let lastAssistantErrorMessage: string | null = null;
+ 	const continuationState: ContinuationState = { queued: false };
+ 	let currentContext: ExtensionContext | null = null;
+-	let pendingBudget: { objective: string; maxTurns: number } | null = null;
+ 	const normalized = (text: string) => text.replace(/\s+/g, " ").trim();
+ 
+-	// The Dashboard configures only the turn cap, using a session-scoped bus
+-	// event. Acknowledge synchronously; configuration never starts a turn.
++	// Compatibility reply for old dashboards. Research quotas are disabled;
++	// acknowledge the effective policy without changing scope or starting work.
+ 	pi.events.on("pi-goal-hermes:turn-budget", (value: unknown) => {
+ 		const data = value as { requestId?: unknown; objective?: unknown; maxTurns?: unknown; engineGoalId?: unknown; forNewGoal?: unknown } | null;
+ 		const reply = (accepted: boolean, error?: string) => pi.events.emit("dashboard:plugin-message", {
+ 			pluginId: "goal", messageType: "goal_budget_ack",
+-			payload: { requestId: data?.requestId, accepted, error, objective: data?.objective, maxTurns: data?.maxTurns,
++			payload: { requestId: data?.requestId, accepted, error, objective: data?.objective, maxTurns: null, budgetEnforced: false,
+ 				engineGoalId: goal?.id, turnsUsed: goal?.turnsUsed, pending: data?.forNewGoal === true },
+ 		});
+ 		if (!data || typeof data.requestId !== "string" || typeof data.objective !== "string" || !normalized(data.objective)
+-			|| typeof data.maxTurns !== "number" || !Number.isSafeInteger(data.maxTurns) || data.maxTurns <= 0) {
++			|| !(data.maxTurns === null || (typeof data.maxTurns === "number" && Number.isSafeInteger(data.maxTurns) && data.maxTurns >= 0))) {
+ 			reply(false, "invalid turn budget"); return;
+ 		}
+ 		if (data.forNewGoal === true) {
+-			pendingBudget = { objective: normalized(data.objective), maxTurns: data.maxTurns };
+ 			reply(true); return;
+ 		}
+ 		if (!goal || goal.status === "cleared" || !currentContext || normalized(goal.goal) !== normalized(data.objective)
+ 			|| (typeof data.engineGoalId === "string" && data.engineGoalId !== goal.id)) {
+ 			reply(false, "goal identity changed"); return;
+-		}
+-		if (goal.maxTurns !== data.maxTurns || (goal.status === "active" && goal.turnsUsed >= data.maxTurns)) {
+-			goal.maxTurns = data.maxTurns;
+-			if (goal.status === "active" && goal.turnsUsed >= goal.maxTurns) {
+-				goal.status = "paused"; goal.pausedReason = "maxTurns budget exhausted";
+-			}
+-			goal.updatedAt = Date.now();
+-			persist(pi, currentContext, goal);
+-			updateFooterStatus(currentContext);
+-			if (goal.status === "paused") emitGoalEvent(pi, "goal-paused", goal);
+ 		}
+ 		reply(true);
+ 	});
+@@ -74,7 +62,6 @@
+ 	}
+ 
+ 	pi.on("session_start", (event, ctx) => {
+-		if (currentContext) pendingBudget = null;
+ 		currentContext = ctx;
+ 		goal = latestStateFromSession(ctx);
+ 		if (!goal) return;
+@@ -246,7 +233,7 @@
+ 		const lines = [
+ 			`Goal: ${goal.goal}`,
+ 			`Status: ${goal.status}`,
+-			`Progress: ${goal.turnsUsed}/${goal.maxTurns} turns`,
++			`Usage: ${goal.turnsUsed} turns`,
+ 			"Policy: blocked pauses; resume preserves used turns and reopens the same goal.",
+ 		];
+ 		if (goal.lastVerdict) {
+@@ -282,16 +269,6 @@
+ 		}
+ 		if (goal.status === "active") {
+ 			ctx.ui.notify("Goal is already active.", "info");
+-			return;
+-		}
+-		if (goal.turnsUsed >= goal.maxTurns) {
+-			goal.status = "paused";
+-			goal.pausedReason = "maxTurns budget exhausted";
+-			goal.updatedAt = Date.now();
+-			persist(pi, ctx, goal);
+-			emitGoalEvent(pi, "goal-paused", goal);
+-			ctx.ui.notify("Goal paused: turn budget exhausted; resume does not reset the budget.", "warning");
+-			updateFooterStatus(ctx);
+ 			return;
+ 		}
+ 		goal.consecutiveParseFailures = 0;
+@@ -343,9 +320,7 @@
+ 		if (goal && goal.status === "active") {
+ 			ctx.ui.notify(`Replacing active goal: "${goal.goal}"`, "info");
+ 		}
+-		const maxTurns = pendingBudget?.objective === normalized(text) ? pendingBudget.maxTurns : undefined;
+-		pendingBudget = null;
+-		goal = createPiLocalGoalState(text, maxTurns);
++		goal = createPiLocalGoalState(text);
+ 		persist(pi, ctx, goal);
+ 		emitGoalEvent(pi, "goal-set", goal);
+ 		ctx.ui.notify(`Goal set: ${text}`, "info");
+--- a/judge-service.ts
++++ b/judge-service.ts
+@@ -1,4 +1,4 @@
+-import { streamSimple, type AssistantMessage, type Model, type UserMessage } from "@earendil-works/pi-ai";
++import type { AssistantMessage, Model, UserMessage } from "@earendil-works/pi-ai";
+ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+ 
+ export const JUDGE_SYSTEM_PROMPT = `You are a strict judge evaluating whether an autonomous agent completed the user's stated task and every additional criterion.
+@@ -65,7 +65,7 @@
+ 		const startMs = Date.now();
+ 
+ 		try {
+-			const stream = streamSimple(
++			const stream = ctx.modelRegistry.streamSimple(
+ 				model,
+ 				{
+ 					systemPrompt: JUDGE_SYSTEM_PROMPT,

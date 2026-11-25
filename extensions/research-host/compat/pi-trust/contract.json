@@ -1,0 +1,50 @@
+{
+  "schema": "pi-research-host.pi-trust-compatibility.v1",
+  "factory": "createPiTrustMirror",
+  "nativeRegistration": "registerPiTrust(pi), synchronously before the native extension's first await",
+  "nativeHook": "project_trust",
+  "result": { "trusted": "yes", "remember": false },
+  "nativeHookOrdering": "The installed Pi invokes global extension handlers before trust-store/default resolution and before session_start",
+  "configuration": {
+    "stateDirectoryEnvironment": "PI_RESEARCH_HOST_DIR",
+    "stateDirectoryDefault": "~/.pi/research-host",
+    "file": "config.json",
+    "settingsField": "piTrustMirror",
+    "snapshotPathField": "piTrustMirrorSnapshotFile",
+    "snapshotDefaultRelativePath": "legacy/pi-trust-mirror.json",
+    "agentDirectory": "PI_CODING_AGENT_DIR, then config.agentDir, then ~/.pi/agent",
+    "activationEnvironment": "PI_RESEARCH_HOST_TRUST_ACTIVATION=1",
+    "activationCapture": "Consumed and removed at synchronous extension activation; earliest cwd retained across reloads",
+    "headlessCondition": "Actual process argv contains --mode rpc"
+  },
+  "preservedState": {
+    "snapshot": "pi-trust-mirror.json",
+    "choices": "pi-trust-overrides.json",
+    "nativeTrust": "Native trust.json remains owned and written by Pi; this compatibility layer only reads it",
+    "sources": ["worktreeInit", "workflow", "pinned", "folderWorkspaces", "accessGrants"]
+  },
+  "hostCallbacks": {
+    "grantSourceChanged": "() => trust.refresh(), only after an actual persistent source mutation",
+    "orderedGrant": "trust.grant(sourceKind, folder, piTrustChoice, writeSource)",
+    "orderedRevoke": "trust.revoke(sourceKind, folder, writeSource)",
+    "sourceGetters": ["listPinned", "listWorkspaceFolders", "listWorktreeTrust", "listPersistedGrants"]
+  },
+  "verifiedProductionReadOnly": {
+    "snapshotEntries": 8,
+    "sources": { "pinned": 5, "accessGrants": 3 },
+    "choiceOverrides": 3,
+    "worktreeTrustFilePresent": false,
+    "entriesExactlyMatchRecomputedSourceEvaluation": true,
+    "allRecordedIdentitiesStillCovered": true,
+    "snapshotAndOverridesBytesUnchanged": true
+  },
+  "verifiedInstalledNative": {
+    "version": "1.3.0",
+    "resolvedPackage": "@earendil-works/pi-coding-agent",
+    "actualResolverImportedByTests": "dist/core/project-trust.js",
+    "actualStoreImportedByTests": "dist/core/trust-manager.js",
+    "mirrorAllowsOverNeverDefault": true,
+    "recordedFalseWins": true,
+    "nativeTrustBytesUnchanged": true
+  }
+}

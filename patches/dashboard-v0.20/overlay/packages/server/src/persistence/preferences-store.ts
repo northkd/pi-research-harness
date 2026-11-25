@@ -1,0 +1,1188 @@
+/**
+ * Global UI preferences store — JSON-backed with debounced writes.
+ * Stores cross-session state: pinned directories, session ordering, and
+ * folder-workspaces (named, collapsible containers grouping folders).
+ *
+ * Workspace membership is authoritative and orthogonal to pinning — see
+ * change: folder-workspaces. A folder may live in `pinnedDirectories`
+ * AND a workspace's `folders[]` independently; the two lists do not
+ * deduplicate against each other.
+ *
+ * Replaces `state-store.ts` (hidden state moved to per-session `.meta.json`).
+ */
+
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import type { Workspace } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import {
+  CARD_SECTIONS_MAX_FOLDERS,
+  CARD_SECTIONS_MAX_KEYS,
+  type CardSectionPrefs,
+  cardSectionFolderKey,
+  type FocusProfile,
+  type FocusState,
+  isValidFolderPath,
+  isValidSectionId,
+  sanitizeFocusProfile,
+  validateFocusProfile,
+} from "@blackbelt-technology/pi-dashboard-shared/card-sections.js";
+import { CONFIG_DIR } from "@blackbelt-technology/pi-dashboard-shared/config.js";
+import type { DisplayPrefs, PartialDisplayPrefs } from "@blackbelt-technology/pi-dashboard-shared/display-prefs.js";
+import {
+  mergeCustomEventGroupPrefs,
+  migrateLegacyCustomEntryFallback,
+} from "@blackbelt-technology/pi-dashboard-shared/display-prefs.js";
+import type { LiveServerTarget } from "@blackbelt-technology/pi-dashboard-shared/live-server.js";
+import { normalizePath } from "@blackbelt-technology/pi-dashboard-shared/platform/paths.js";
+import {
+  type GroupByMode,
+  type GroupByPrefs,
+  isGroupByMode,
+  isLaneId,
+  type LaneId,
+  laneCollapseKey,
+  parseLaneCollapseKey,
+} from "@blackbelt-technology/pi-dashboard-shared/session-group-by.js";
+import { inferPlatform, pathKey } from "@blackbelt-technology/pi-dashboard-shared/session-group-path.js";
+import { safeRealpathSync } from "../resolve-path.js";
+import { readJsonFile, writeJsonFile } from "./json-store.js";
+
+export const PREFERENCES_FILE = path.join(CONFIG_DIR, "preferences.json");
+
+/**
+ * Every store method that mutates the workspace collection. The notification
+ * wiring contract — a mutator missing from this list is a defect (see
+ * `discoverWorkspaceMutators` and the completeness guard test).
+ * See change: add-chat-gateway-team-controls.
+ */
+export const WORKSPACE_MUTATOR_NAMES: readonly string[] = [
+  "createWorkspace",
+  "renameWorkspace",
+  "deleteWorkspace",
+  "setWorkspaceCollapsed",
+  "addFolderToWorkspace",
+  "removeFolderFromWorkspace",
+  "moveFolderToWorkspace",
+  "reorderWorkspaceFolders",
+  "reorderWorkspaces",
+];
+
+/**
+ * Discover workspace-mutating methods from a store's public surface. Heuristic
+ * on purpose: it makes a NEWLY added `*Workspace*` mutator show up here even
+ * when nobody updated `WORKSPACE_MUTATOR_NAMES`, so the guard test fails
+ * instead of the seam silently missing that mutation. `getWorkspaces` (read)
+ * and `onWorkspacesChanged` (subscription) are excluded.
+ */
+export function discoverWorkspaceMutators(methodNames: string[]): string[] {
+  return methodNames.filter(
+    (n) => /workspace/i.test(n) && !/^get/i.test(n) && n !== "onWorkspacesChanged",
+  );
+}
+
+const NAME_MAX = 80;
+
+interface PreferencesData {
+  sessionOrder: Record<string, string[]>;
+  pinnedDirectories: string[];
+  /**
+   * User-curated favorite model labels (`"provider/id"`). Insertion-ordered,
+   * deduped. Absent in legacy files → defaults to `[]`.
+   * See change: enrich-model-selector-capabilities-favorites.
+   */
+  favoriteModels?: string[];
+  workspaces?: Workspace[];
+  /**
+   * Global chat-display preferences. `undefined` means "never seeded" —
+   * the first-launch modal SHALL prompt the user to choose a preset.
+   * See change: configurable-chat-display.
+   */
+  displayPrefs?: DisplayPrefs;
+  /**
+   * Per-cwd signature of the workflow set at the time the dashboard last ran
+   * `openspec update` for that cwd. Used to compute profile staleness.
+   * Absence => never updated via dashboard ("unknown").
+   * See change: add-openspec-profile-settings.
+   */
+  openspecUpdateSignatures?: Record<string, string>;
+  /**
+   * Opt-in: after a successful worktree spawn, auto-run the trusted
+   * `worktreeInit` hook (no manual Initialize click). Absent/legacy files →
+   * `false`. Untrusted hooks never auto-run regardless of this flag.
+   * See change: auto-init-worktree-on-spawn.
+   */
+  autoInitWorktreeOnSpawn?: boolean;
+  /**
+   * Global toggle for automatic session topic-naming by the bridge. Defaults
+   * to `true` when absent. Relayed to bridges via config push; the bridge
+   * attempts naming only when this is true. See change: add-auto-session-naming.
+   */
+  autoNameSessions?: boolean;
+  /**
+   * First-run marker for `PI_DASHBOARD_PIN_DIRS` seeding. Set true the first
+   * time the store loads; gates env-driven pin seeding so it never re-seeds
+   * after the user has edited pins via the UI (even after unpinning all).
+   * See change: docker-packaging.
+   */
+  pinSeeded?: boolean;
+  /**
+   * User-curated live-server-preview allowlist (loopback dev-server targets).
+   * Absent in legacy files → `[]`. See change: improve-content-editor (§6).
+   */
+  liveServers?: LiveServerTarget[];
+  /**
+   * Canonicalized folder-group keys the user collapsed. Absence means the
+   * folder renders expanded. Stored `pathKey`-folded, NOT realpath-resolved
+   * (the browser cannot resolve symlinks). Never pruned against the loaded
+   * session set — a folder group may be rendered from a worktree main path,
+   * a zero-session pin, an ended-only stub, or a workspace membership, none
+   * of which appear among the sessions' working directories.
+   * Absent/legacy/corrupt → `[]`. See change: persist-folder-collapse-server-side.
+   */
+  collapsedFolders?: string[];
+  /**
+   * Accordion pinned-open folders; same canonical key + never-pruned rule as
+   * `collapsedFolders`, mutually exclusive with it. Absent/corrupt → `[]`.
+   * See change: add-focus-mode-and-card-block-toggles.
+   */
+  expandedFolders?: string[];
+  /**
+   * Session-list grouping (change: session-list-group-by). All optional.
+   * `defaultGroupBy` absent ⇒ `none`. `folderGroupBy` keys and the folder
+   * half of `collapsedLanes` (`<pathKey>::<laneId>`) are `pathKey`-folded like
+   * `collapsedFolders` — never realpath'd, never pruned. Invalid values are
+   * dropped on load.
+   */
+  defaultGroupBy?: GroupByMode;
+  folderGroupBy?: Record<string, GroupByMode>;
+  collapsedLanes?: string[];
+  /**
+   * Session-card section visibility: sparse global defaults + per-folder
+   * overrides keyed by `cardSectionFolderKey` (`pathKey`-folded, never
+   * realpath'd). Absent/corrupt → `{}` (all visible). Capped per design D4.
+   * See change: configurable-session-card-sections.
+   */
+  cardSections?: CardSectionPrefs;
+}
+
+export interface PreferencesStore {
+  getSessionOrder(): Record<string, string[]>;
+  setSessionOrder(order: Record<string, string[]>): void;
+  getPinnedDirectories(): string[];
+  setPinnedDirectories(dirs: string[]): void;
+  pinDirectory(dirPath: string): void;
+  unpinDirectory(dirPath: string): void;
+  reorderPinnedDirs(dirs: string[]): void;
+  // ── collapsed folders (persist-folder-collapse-server-side) ──────
+  getCollapsedFolders(): string[];
+  /**
+   * Set one folder group's collapsed state. `dirPath` is canonicalized with
+   * the shared `pathKey` rule, deriving the platform via
+   * `inferPlatform([dirPath, ...existing collapsedFolders])` — NOT
+   * `process.platform` (which folds case on macOS server-side only and
+   * re-breaks the client/server key match) and NOT `canonicalize()` (the
+   * client cannot resolve symlinks). Returns `true` only on a real mutation,
+   * so the gateway broadcasts only on change.
+   */
+  setFolderCollapsed(dirPath: string, collapsed: boolean): boolean;
+  /** Pinned-open folders (accordion). Pinning clears collapsed and vice versa. */
+  getExpandedFolders(): string[];
+  setExpandedFolder(dirPath: string, expanded: boolean): boolean;
+  // ── focus mode (add-focus-mode-and-card-block-toggles) ───────────
+  setFocusEnabled(enabled: boolean): boolean;
+  /** `null` resets to the built-in profile. Invalid/over-cap → false, no mutation. */
+  setFocusProfile(profile: FocusProfile | null): boolean;
+  // ── session-list grouping (session-list-group-by) ────────────────
+  /** Aggregate snapshot (copies). */
+  getGroupByPrefs(): GroupByPrefs;
+  /** `mode === null` removes the override. Invalid mode → false, no write. True only on real change. */
+  setFolderGroupBy(dirPath: string, mode: GroupByMode | null): boolean;
+  /** Invalid or unchanged → false, no write. */
+  setDefaultGroupBy(mode: GroupByMode): boolean;
+  /** Invalid lane or no-op → false, no write. */
+  setLaneCollapsed(dirPath: string, lane: LaneId, collapsed: boolean): boolean;
+  // ── card sections (configurable-session-card-sections) ──────────
+  /** Deep-copied snapshot; `{}` when nothing is set. */
+  getCardSections(): CardSectionPrefs;
+  /**
+   * Set one section's visibility. `dirPath` undefined → global default;
+   * `visible: null` → inherit (deletes the key; an emptied folder is
+   * removed). Rejects invalid id / path / value and over-cap writes without
+   * mutation. Returns `true` only on a real mutation.
+   */
+  setCardSectionVisibility(dirPath: string | undefined, section: string, visible: boolean | null): boolean;
+  /** Drop every override for one folder. Returns `true` only on mutation. */
+  resetFolderCardSections(dirPath: string): boolean;
+  // ── favorite models (enrich-model-selector-capabilities-favorites) ──
+  getFavoriteModels(): string[];
+  setFavoriteModels(labels: string[]): void;
+  /** Append label if absent (dedupe). No-op when already present. */
+  addFavoriteModel(label: string): void;
+  /** Remove label if present. No-op when absent. */
+  removeFavoriteModel(label: string): void;
+  // ── folder-workspaces ────────────────────────────────────────────
+  getWorkspaces(): Workspace[];
+  /** Returns the created workspace, or null on invalid name. */
+  createWorkspace(name: string): Workspace | null;
+  /** Returns true on mutation, false on unknown id / invalid name. */
+  renameWorkspace(id: string, name: string): boolean;
+  /** Returns true on mutation, false on unknown id. */
+  deleteWorkspace(id: string): boolean;
+  /** Returns true on mutation, false on unknown id or no-op (same value). */
+  setWorkspaceCollapsed(id: string, collapsed: boolean): boolean;
+  /**
+   * Adds `path` to workspace `id`. Single-membership invariant: removes
+   * the canonicalized path from every other workspace first. Returns
+   * true on mutation, false on unknown id or already-member (no-op).
+   */
+  addFolderToWorkspace(id: string, dirPath: string): boolean;
+  /** Returns true on mutation, false on unknown id or not-member. */
+  removeFolderFromWorkspace(id: string, dirPath: string): boolean;
+  /**
+   * Moves `dirPath` into workspace `toWorkspaceId`, or — when
+   * `toWorkspaceId` is `null` — ejects it from every workspace.
+   *
+   * Validate-before-mutate: the target is resolved BEFORE any detach, so an
+   * unknown id leaves the folder where it was (returns false, no mutation).
+   * Same-workspace moves are rejected (`reorder_workspace_folders` owns
+   * repositioning). `index` is clamped to `[0, folders.length]`; omitted =
+   * append. Ignored when `toWorkspaceId` is null. Path is canonicalized
+   * internally. Returns true only on a real mutation.
+   *
+   * See change: drag-folders-across-workspaces.
+   */
+  moveFolderToWorkspace(
+    dirPath: string,
+    toWorkspaceId: string | null,
+    index?: number,
+  ): boolean;
+  /**
+   * Replaces a workspace's folder order. Rejected if `paths` does not
+   * equal the current member set (after canonicalization). Returns true
+   * on mutation, false otherwise.
+   */
+  reorderWorkspaceFolders(id: string, paths: string[]): boolean;
+  /** Reorders workspaces. Rejected if `ids` doesn't equal current id set. */
+  reorderWorkspaces(ids: string[]): boolean;
+  /**
+   * Subscribe to workspace mutations. Fired from every workspace mutator —
+   * a coalescable hint to re-read `getWorkspaces()`, never a diff. Returns an
+   * unsubscribe fn. See change: add-chat-gateway-team-controls.
+   */
+  onWorkspacesChanged(handler: () => void): () => void;
+  /**
+   * Subscribe to pinned-directory mutations (pin / unpin / replace / reorder),
+   * notified synchronously after the in-memory change. Feeds the pi-trust mirror
+   * snapshot. Returns unsubscribe. See change: mirror-dashboard-trust-to-pi.
+   */
+  onPinsChanged?(handler: () => void): () => void;
+  // ── configurable-chat-display ──────────────────────────────
+  /** Returns `undefined` when display prefs have never been seeded. */
+  getDisplayPrefs(): DisplayPrefs | undefined;
+  /**
+   * Deep-merges `partial` over current display prefs and persists.
+   * `toolCalls` is merged field-by-field. When no prefs exist yet,
+   * uses the values from `partial` for top-level fields and from
+   * `partial.toolCalls` (if any) for the nested record.
+   */
+  setDisplayPrefs(partial: PartialDisplayPrefs): DisplayPrefs;
+  // ── add-openspec-profile-settings ──────────────────────────
+  /** Returns the recorded workflow-set signature for `cwd`, or undefined. */
+  getOpenSpecUpdateSignature(cwd: string): string | undefined;
+  /** Records the workflow-set signature for `cwd` (after a dashboard-run update). */
+  setOpenSpecUpdateSignature(cwd: string, signature: string): void;
+  // ── auto-init-worktree-on-spawn ────────────────────────────
+  /** Returns the opt-in auto-init-on-spawn flag. Absent → `false`. */
+  getAutoInitWorktreeOnSpawn(): boolean;
+  /** Persists the opt-in auto-init-on-spawn flag. */
+  setAutoInitWorktreeOnSpawn(value: boolean): void;
+  // ── add-auto-session-naming ────────────────────────────────
+  /** Returns the auto-session-naming toggle. Absent → `true` (default ON). */
+  getAutoNameSessions(): boolean;
+  /** Persists the auto-session-naming toggle. */
+  setAutoNameSessions(value: boolean): void;
+  // ── live-server-preview (improve-content-editor §6) ────────
+  /** Returns the persisted live-server allowlist. Absent → `[]`. */
+  getLiveServers(): LiveServerTarget[];
+  /** Replaces the live-server allowlist. */
+  setLiveServers(targets: LiveServerTarget[]): void;
+  flush(): void;
+  dispose(): void;
+}
+
+const DEBOUNCE_MS = 1000;
+
+function canonicalize(p: string): string {
+  // IMPORTANT: wrap normalizePath in an arrow so Array.prototype.map's
+  // (element, index, array) signature does not leak `index: number` into
+  // its 2nd `platform` parameter. See preferences-store git blame.
+  return safeRealpathSync(normalizePath(p));
+}
+
+function dedupePreserveOrder(arr: string[]): string[] {
+  return [...new Set(arr)];
+}
+
+function setEquals(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = new Set(a);
+  for (const x of b) if (!sa.has(x)) return false;
+  return true;
+}
+
+function sanitizeName(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const trimmed = input.trim();
+  if (trimmed.length === 0 || trimmed.length > NAME_MAX) return null;
+  return trimmed;
+}
+
+/**
+ * Legacy backfill: files predating `reasoningAutoCollapseMs` /
+ * `keepReasoningOpenUntilTurnEnds` load with the field absent. Single chokepoint
+ * guaranteeing the client always receives a number (default 30000) and a boolean
+ * (default false). See changes: reasoning-auto-collapse-timer,
+ * keep-reasoning-open-until-turn-ends.
+ */
+function backfillDisplayPrefs(
+  prefs: DisplayPrefs | undefined,
+  customEventGroupDefaults: Record<string, boolean> = {},
+): DisplayPrefs | undefined {
+  if (!prefs) return prefs;
+  let out = prefs;
+  if (typeof out.reasoningAutoCollapseMs !== "number") {
+    out = { ...out, reasoningAutoCollapseMs: 30000 };
+  }
+  if (typeof out.keepReasoningOpenUntilTurnEnds !== "boolean") {
+    out = { ...out, keepReasoningOpenUntilTurnEnds: false };
+  }
+  if (typeof out.toolGroupDefaultCollapsed !== "boolean") {
+    out = { ...out, toolGroupDefaultCollapsed: false };
+  }
+  // Legacy prefs predating the change-summary block default it ON, matching
+  // the standard/everything presets. See change: add-change-summary-table.
+  if (typeof out.changeSummaryTable !== "boolean") {
+    out = { ...out, changeSummaryTable: true };
+  }
+  // Legacy prefs predating the reserved process line default it OFF, matching
+  // the simple/standard presets. See change: stable-process-line.
+  if (typeof out.reserveProcessLineAtIdle !== "boolean") {
+    out = { ...out, reserveProcessLineAtIdle: false };
+  }
+  // Legacy prefs predating out-of-cwd session diffs default it OFF (opt-in;
+  // suppresses out-of-cwd rows). See change: opt-in-out-of-cwd-session-diffs.
+  if (typeof out.showOutOfCwdSessionDiffs !== "boolean") {
+    out = { ...out, showOutOfCwdSessionDiffs: false };
+  }
+  // Legacy prefs predating the notify gate default it to "all" — today's
+  // behavior, so an upgrade hides nothing the user had not asked to hide.
+  // See change: gate-notify-rows-by-level.
+  if (typeof out.notifyMinLevel !== "string") {
+    out = { ...out, notifyMinLevel: "all" };
+  }
+  // Legacy prefs predating the two render-inline-reasoning-and-custom-entries
+  // fields resolve to the preset defaults: inline flow OFF (today's capped
+  // reasoning body), custom-entry fallback ON (the bug being fixed is
+  // invisibility). See change: render-inline-reasoning-and-custom-entries.
+  if (typeof out.reasoningInlineFlow !== "boolean") {
+    out = { ...out, reasoningInlineFlow: false };
+  }
+  // Legacy prefs predating chat motion default it ON, matching the presets.
+  // See change: add-fluid-chat-motion.
+  if (typeof out.chatMotion !== "boolean") {
+    out = { ...out, chatMotion: true };
+  }
+  // Custom event groups (add-custom-event-group-filters): migrate the removed
+  // single `customEntryFallback` switch onto the `other` group (idempotent,
+  // design D7), then seed every configured group so a gate is never
+  // `undefined` — a legacy file without the field resolves each group to its
+  // configured default, and a group added to the file after seeding gets its
+  // default on the next (restart-to-apply) load.
+  out = migrateLegacyCustomEntryFallback(out);
+  const existingGroups =
+    typeof out.customEventGroups === "object" && out.customEventGroups !== null
+      ? out.customEventGroups
+      : {};
+  out = { ...out, customEventGroups: { ...customEventGroupDefaults, ...existingGroups } };
+  return out;
+}
+
+function normalizeWorkspaceOnLoad(ws: Workspace): Workspace {
+  const folders = dedupePreserveOrder((ws.folders ?? []).map((p) => canonicalize(p)));
+  return {
+    id: typeof ws.id === "string" && ws.id.length > 0 ? ws.id : `ws_${randomUUID()}`,
+    name: typeof ws.name === "string" ? ws.name : "",
+    collapsed: Boolean(ws.collapsed),
+    folders,
+  };
+}
+
+type SectionMap = Map<string, boolean>;
+
+/** Valid-id, boolean-valued entries only; capped at `CARD_SECTIONS_MAX_KEYS`. */
+function sanitizeSectionMap(raw: unknown): SectionMap {
+  const out: SectionMap = new Map();
+  if (!isPlainObject(raw)) return out;
+  for (const [id, v] of Object.entries(raw)) {
+    if (out.size >= CARD_SECTIONS_MAX_KEYS) break;
+    if (isValidSectionId(id) && typeof v === "boolean") out.set(id, v);
+  }
+  return out;
+}
+
+/**
+ * Load-time sanitization of `cardSections`: drops invalid ids / non-boolean
+ * values / non-absolute folder keys / empty folder maps, re-folds folder keys
+ * (merging spellings), and applies the caps. Corrupt input → empty.
+ */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Fold one raw folder entry into `folders` (merging spellings, honouring caps). */
+function addLoadedFolder(folders: Map<string, SectionMap>, p: string, raw: unknown): void {
+  if (!isValidFolderPath(p)) return;
+  const map = sanitizeSectionMap(raw);
+  if (map.size === 0) return;
+  const key = cardSectionFolderKey(p);
+  const existing = folders.get(key);
+  if (!existing) {
+    if (folders.size < CARD_SECTIONS_MAX_FOLDERS) folders.set(key, map);
+    return;
+  }
+  for (const [id, v] of map) if (existing.size < CARD_SECTIONS_MAX_KEYS) existing.set(id, v);
+}
+
+function loadCardSections(raw: unknown): { global: SectionMap; folders: Map<string, SectionMap> } {
+  const folders = new Map<string, SectionMap>();
+  if (!isPlainObject(raw)) return { global: new Map(), folders };
+  if (isPlainObject(raw.folders)) {
+    for (const [p, m] of Object.entries(raw.folders)) addLoadedFolder(folders, p, m);
+  }
+  return { global: sanitizeSectionMap(raw.global), folders };
+}
+
+function cardSectionsSnapshot(
+  global: SectionMap,
+  folders: Map<string, SectionMap>,
+  focus?: FocusState,
+): CardSectionPrefs {
+  const out: CardSectionPrefs = {};
+  if (global.size > 0) out.global = Object.fromEntries(global);
+  if (folders.size > 0) {
+    out.folders = Object.fromEntries([...folders].map(([k, m]) => [k, Object.fromEntries(m)]));
+  }
+  if (focus && (focus.enabled || focus.profile)) {
+    const f: FocusState = {};
+    if (focus.enabled) f.enabled = true;
+    if (focus.profile) f.profile = structuredClone(focus.profile);
+    out.focus = f;
+  }
+  return out;
+}
+
+export function createPreferencesStore(
+  filePath: string = PREFERENCES_FILE,
+  deps: {
+    /**
+     * Configured custom-event-group defaults (group id → default visibility),
+     * read from the groups file at composition time. Seeds `backfillDisplayPrefs`
+     * and the `setDisplayPrefs` base literal so no group gate is ever `undefined`.
+     * See change: add-custom-event-group-filters.
+     */
+    customEventGroupDefaults?: Record<string, boolean>;
+  } = {},
+): PreferencesStore {
+  // Resolved once per process — the groups file is restart-to-apply (design D6).
+  const seededCustomEventGroupDefaults: Record<string, boolean> = {
+    ...(deps.customEventGroupDefaults ?? {}),
+  };
+  const data: PreferencesData = readJsonFile<PreferencesData>(filePath, {
+    sessionOrder: {},
+    pinnedDirectories: [],
+    workspaces: [],
+  });
+  let sessionOrder: Record<string, string[]> = data.sessionOrder ?? {};
+  // Normalize + resolve symlinks in stored pinned paths on load. Normalize
+  // FIRST so cosmetic drift (trailing separator, mixed separators,
+  // drive-letter case on Windows) collapses before realpath — then
+  // realpath handles symlinks. Order matters: realpath can fail for
+  // not-yet-existing paths, so we keep its best-effort fallback.
+  // See change: platform-path-normalization.
+  const rawPinned = data.pinnedDirectories ?? [];
+  let pinnedDirectories: string[] = rawPinned
+    .map((p) => normalizePath(p))
+    .map((p) => safeRealpathSync(p));
+  pinnedDirectories = dedupePreserveOrder(pinnedDirectories);
+
+  // First-run pin seeding from PI_DASHBOARD_PIN_DIRS (docker-packaging).
+  // Seed only when never seeded before AND no pins are persisted, so UI
+  // edits (including unpinning all) always win. The `pinSeeded` marker is
+  // persisted on first load so subsequent runs ignore the env entirely.
+  let pinSeeded: boolean = data.pinSeeded === true;
+  if (!pinSeeded) {
+    if (rawPinned.length === 0) {
+      const seed = (process.env.PI_DASHBOARD_PIN_DIRS ?? "")
+        .split(path.delimiter)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((p) => safeRealpathSync(normalizePath(p)));
+      if (seed.length > 0) {
+        pinnedDirectories = dedupePreserveOrder(seed);
+      }
+    }
+    pinSeeded = true;
+  }
+
+  const rawWorkspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+  let workspaces: Workspace[] = rawWorkspaces.map(normalizeWorkspaceOnLoad);
+  let displayPrefs: DisplayPrefs | undefined = backfillDisplayPrefs(
+    data.displayPrefs
+      ? migrateLegacyCustomEntryFallback(data.displayPrefs, deps.customEventGroupDefaults)
+      : data.displayPrefs,
+    deps.customEventGroupDefaults,
+  );
+  // The load-time migration + seeding must be DURABLE on the load that
+  // performs it — "the legacy field does not survive" and "second boot is a
+  // no-op" are only true if the migrated prefs reach disk. The debounced
+  // dirty flag below deliberately excludes displayPrefs (a modern file
+  // round-trips identically → no write), so persist only when the JSON
+  // content actually changed.
+  const prefsChangedOnLoad =
+    JSON.stringify(data.displayPrefs ?? null) !== JSON.stringify(displayPrefs ?? null);
+  let openspecUpdateSignatures: Record<string, string> = data.openspecUpdateSignatures ?? {};
+  // Opt-in auto-init flag. Absent/non-boolean → false (today's behavior).
+  let autoInitWorktreeOnSpawn: boolean = data.autoInitWorktreeOnSpawn === true;
+  // Auto-naming toggle. Absent/non-false → true (default ON).
+  let autoNameSessions: boolean = data.autoNameSessions !== false;
+  let liveServers: LiveServerTarget[] = Array.isArray(data.liveServers) ? data.liveServers : [];
+  // Collapsed folder keys: `pathKey`-folded on load (both write AND read
+  // canonicalize), NEVER realpath-resolved — see the invariant in design D3.
+  // Corrupt input (a string, not an array) falls back to `[]` without
+  // failing the whole-file load.
+  const rawCollapsed = Array.isArray(data.collapsedFolders)
+    ? data.collapsedFolders.filter((p): p is string => typeof p === "string")
+    : [];
+  const collapsedPlatform = inferPlatform(rawCollapsed);
+  const collapsedFolders: string[] = dedupePreserveOrder(
+    rawCollapsed.map((p) => pathKey(p, collapsedPlatform)),
+  );
+  // Session-list grouping prefs (session-list-group-by). Same pathKey-fold
+  // rule as collapsedFolders; invalid entries dropped; corrupt containers → defaults.
+  let defaultGroupBy: GroupByMode = isGroupByMode(data.defaultGroupBy) ? data.defaultGroupBy : "none";
+  const rawFolderGroupBy =
+    data.folderGroupBy && typeof data.folderGroupBy === "object" && !Array.isArray(data.folderGroupBy)
+      ? (data.folderGroupBy as Record<string, unknown>)
+      : {};
+  const rawLanes = Array.isArray(data.collapsedLanes)
+    ? data.collapsedLanes.filter((e): e is string => typeof e === "string")
+    : [];
+  const groupPlatform = inferPlatform([
+    ...rawCollapsed,
+    ...Object.keys(rawFolderGroupBy),
+    ...rawLanes.map((e) => parseLaneCollapseKey(e)?.folderKey ?? ""),
+  ].filter(Boolean));
+  const folderGroupBy: Record<string, GroupByMode> = {};
+  for (const [k, v] of Object.entries(rawFolderGroupBy)) {
+    if (isGroupByMode(v)) folderGroupBy[pathKey(k, groupPlatform)] = v;
+  }
+  const collapsedLanes: string[] = dedupePreserveOrder(
+    rawLanes.flatMap((e) => {
+      const parsed = parseLaneCollapseKey(e);
+      return parsed ? [laneCollapseKey(pathKey(parsed.folderKey, groupPlatform), parsed.lane)] : [];
+    }),
+  );
+  /** Canonical folder key for a grouping write — platform inferred from every stored key. */
+  function groupFolderKey(dirPath: string): string {
+    const platform = inferPlatform([
+      dirPath,
+      ...collapsedFolders,
+      ...Object.keys(folderGroupBy),
+      ...collapsedLanes.map((e) => parseLaneCollapseKey(e)?.folderKey ?? ""),
+    ].filter(Boolean));
+    return pathKey(dirPath, platform);
+  }
+  // Session-card section visibility (configurable-session-card-sections).
+  const loadedCardSections = loadCardSections(data.cardSections);
+  const rawFocus = isPlainObject(data.cardSections) ? data.cardSections.focus : undefined;
+  let focusState: FocusState = isPlainObject(rawFocus)
+    ? { enabled: rawFocus.enabled === true, profile: sanitizeFocusProfile(rawFocus.profile) }
+    : { enabled: false };
+  const rawExpanded = Array.isArray(data.expandedFolders)
+    ? data.expandedFolders.filter((p): p is string => typeof p === "string")
+    : [];
+  const expandedFolders: string[] = dedupePreserveOrder(
+    rawExpanded.map((p) => pathKey(p, inferPlatform(rawExpanded))),
+  ).filter((k) => !collapsedFolders.includes(k));
+  const cardSectionsGlobal = loadedCardSections.global;
+  const cardSectionsFolders = loadedCardSections.folders;
+  const cardSectionsChangedOnLoad =
+    data.cardSections !== undefined &&
+    JSON.stringify(data.cardSections) !==
+      JSON.stringify(cardSectionsSnapshot(cardSectionsGlobal, cardSectionsFolders, focusState));
+  // Favorite model labels — deduped, insertion-ordered. Default [] for legacy files.
+  let favoriteModels: string[] = dedupePreserveOrder(
+    Array.isArray(data.favoriteModels) ? data.favoriteModels.filter((l) => typeof l === "string") : [],
+  );
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let dirty =
+    // Load-time displayPrefs migration/seeding (custom-entry-fallback) must
+    // reach disk on THIS load — see the prefsChangedOnLoad comment above.
+    prefsChangedOnLoad ||
+    cardSectionsChangedOnLoad ||
+    expandedFolders.length !== rawExpanded.length ||
+    data.pinSeeded !== true ||
+    pinnedDirectories.length !== rawPinned.length ||
+    pinnedDirectories.some((p, i) => p !== rawPinned[i]) ||
+    workspaces.length !== rawWorkspaces.length ||
+    workspaces.some((ws, i) => {
+      const raw = rawWorkspaces[i];
+      if (!raw) return true;
+      const rf = (raw.folders ?? []) as string[];
+      return ws.folders.length !== rf.length || ws.folders.some((f, j) => f !== rf[j]);
+    }) ||
+    collapsedFolders.length !== rawCollapsed.length ||
+    collapsedFolders.some((p, i) => p !== rawCollapsed[i]);
+
+  /** Inherit: drop the key; an emptied folder map is removed. `key` undefined = global. */
+  function deleteCardSection(key: string | undefined, section: string): boolean {
+    const map = key === undefined ? cardSectionsGlobal : cardSectionsFolders.get(key);
+    if (!map?.delete(section)) return false;
+    if (key !== undefined && map.size === 0) cardSectionsFolders.delete(key);
+    return true;
+  }
+
+  /** Explicit value; rejects over-cap writes (new folder / new key) without mutation. */
+  function putCardSection(key: string | undefined, section: string, visible: boolean): boolean {
+    let map = key === undefined ? cardSectionsGlobal : cardSectionsFolders.get(key);
+    if (map?.get(section) === visible) return false;
+    if (!map) {
+      if (cardSectionsFolders.size >= CARD_SECTIONS_MAX_FOLDERS) return false;
+      map = new Map();
+      cardSectionsFolders.set(key as string, map);
+    } else if (!map.has(section) && map.size >= CARD_SECTIONS_MAX_KEYS) {
+      return false;
+    }
+    map.set(section, visible);
+    return true;
+  }
+
+  function cardSectionsForDisk(): CardSectionPrefs | undefined {
+    const snap = cardSectionsSnapshot(cardSectionsGlobal, cardSectionsFolders, focusState);
+    return snap.global || snap.folders || snap.focus ? snap : undefined;
+  }
+
+  function scheduleSave(): void {
+    dirty = true;
+    if (debounceTimer) return;
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      if (dirty) {
+        dirty = false;
+        writeJsonFile(filePath, { sessionOrder, pinnedDirectories, favoriteModels, workspaces, displayPrefs, openspecUpdateSignatures, autoInitWorktreeOnSpawn, autoNameSessions, pinSeeded, liveServers, collapsedFolders, expandedFolders, defaultGroupBy, folderGroupBy, collapsedLanes, cardSections: cardSectionsForDisk() } satisfies PreferencesData);
+      }
+    }, DEBOUNCE_MS);
+  }
+
+  function flushNow(): void {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+    if (dirty) {
+      dirty = false;
+      writeJsonFile(filePath, { sessionOrder, pinnedDirectories, favoriteModels, workspaces, displayPrefs, openspecUpdateSignatures, autoInitWorktreeOnSpawn, autoNameSessions, pinSeeded, liveServers, collapsedFolders, expandedFolders, defaultGroupBy, folderGroupBy, collapsedLanes, cardSections: cardSectionsForDisk() } satisfies PreferencesData);
+    }
+  }
+
+  if (dirty) scheduleSave();
+
+  function findWs(id: string): Workspace | undefined {
+    return workspaces.find((w) => w.id === id);
+  }
+
+  // Workspace seam (change: add-chat-gateway-team-controls). Notified from
+  // every mutator below after a successful mutation — NOT from the browser
+  // broadcast, so correctness does not depend on any transport.
+  const workspaceListeners = new Set<() => void>();
+  const pinListeners = new Set<() => void>();
+  function notifyPins(): void {
+    for (const handler of [...pinListeners]) {
+      try {
+        handler();
+      } catch (err) {
+        console.error("[preferences-store] onPinsChanged handler threw", err);
+      }
+    }
+  }
+
+  function notifyWorkspaces(): void {
+    // Per-subscriber isolation: a throwing handler must neither block other
+    // subscribers nor fail the workspace mutation (spec plugin-workspace-seam).
+    for (const handler of [...workspaceListeners]) {
+      try {
+        handler();
+      } catch (err) {
+        console.error("[preferences-store] onWorkspacesChanged handler threw", err);
+      }
+    }
+  }
+
+  return {
+    getSessionOrder(): Record<string, string[]> {
+      return sessionOrder;
+    },
+
+    setSessionOrder(order: Record<string, string[]>): void {
+      sessionOrder = order;
+      scheduleSave();
+    },
+
+    getLiveServers(): LiveServerTarget[] {
+      return [...liveServers];
+    },
+
+    setLiveServers(targets: LiveServerTarget[]): void {
+      liveServers = [...targets];
+      scheduleSave();
+    },
+
+    getPinnedDirectories(): string[] {
+      return [...pinnedDirectories];
+    },
+
+    setPinnedDirectories(dirs: string[]): void {
+      pinnedDirectories = [...dirs];
+      scheduleSave();
+      notifyPins();
+    },
+
+    pinDirectory(dirPath: string): void {
+      if (pinnedDirectories.includes(dirPath)) return;
+      pinnedDirectories.push(dirPath);
+      scheduleSave();
+      notifyPins();
+    },
+
+    unpinDirectory(dirPath: string): void {
+      const idx = pinnedDirectories.indexOf(dirPath);
+      if (idx === -1) return;
+      pinnedDirectories.splice(idx, 1);
+      scheduleSave();
+      notifyPins();
+    },
+
+    reorderPinnedDirs(dirs: string[]): void {
+      pinnedDirectories = [...dirs];
+      scheduleSave();
+      notifyPins();
+    },
+
+    onPinsChanged(handler: () => void): () => void {
+      pinListeners.add(handler);
+      return () => {
+        pinListeners.delete(handler);
+      };
+    },
+
+    getCollapsedFolders(): string[] {
+      return [...collapsedFolders];
+    },
+
+    setFolderCollapsed(dirPath: string, collapsed: boolean): boolean {
+      const platform = inferPlatform([dirPath, ...collapsedFolders]);
+      const key = pathKey(dirPath, platform);
+      const idx = collapsedFolders.indexOf(key);
+      if (collapsed) {
+        if (idx !== -1) return false;
+        collapsedFolders.push(key);
+        // Collapse un-pins (never both lists). See change: add-focus-mode-and-card-block-toggles.
+        const ei = expandedFolders.indexOf(key);
+        if (ei !== -1) expandedFolders.splice(ei, 1);
+        scheduleSave();
+        return true;
+      }
+      if (idx === -1) return false;
+      collapsedFolders.splice(idx, 1);
+      scheduleSave();
+      return true;
+    },
+
+    getExpandedFolders(): string[] {
+      return [...expandedFolders];
+    },
+
+    setExpandedFolder(dirPath: string, expanded: boolean): boolean {
+      if (typeof dirPath !== "string" || dirPath.length === 0 || typeof expanded !== "boolean") return false;
+      const key = pathKey(dirPath, inferPlatform([dirPath, ...expandedFolders, ...collapsedFolders]));
+      const idx = expandedFolders.indexOf(key);
+      if (expanded) {
+        const ci = collapsedFolders.indexOf(key);
+        if (ci !== -1) collapsedFolders.splice(ci, 1);
+        if (idx !== -1 && ci === -1) return false;
+        if (idx === -1) expandedFolders.push(key);
+        scheduleSave();
+        return true;
+      }
+      if (idx === -1) return false;
+      expandedFolders.splice(idx, 1);
+      scheduleSave();
+      return true;
+    },
+
+    // ── focus mode (add-focus-mode-and-card-block-toggles) ──
+
+    setFocusEnabled(enabled: boolean): boolean {
+      if (typeof enabled !== "boolean" || (focusState.enabled === true) === enabled) return false;
+      focusState = { ...focusState, enabled };
+      scheduleSave();
+      return true;
+    },
+
+    setFocusProfile(profile: FocusProfile | null): boolean {
+      const validated = profile === null ? undefined : validateFocusProfile(profile);
+      if (profile !== null && !validated) return false;
+      const next = validated ?? undefined;
+      if (JSON.stringify(next) === JSON.stringify(focusState.profile)) return false;
+      focusState = { ...focusState, profile: next };
+      scheduleSave();
+      return true;
+    },
+
+    // ── card sections (configurable-session-card-sections) ──
+
+    getCardSections(): CardSectionPrefs {
+      return cardSectionsSnapshot(cardSectionsGlobal, cardSectionsFolders, focusState);
+    },
+
+    setCardSectionVisibility(dirPath: string | undefined, section: string, visible: boolean | null): boolean {
+      if (!isValidSectionId(section)) return false;
+      if (visible !== null && typeof visible !== "boolean") return false;
+      if (dirPath !== undefined && !isValidFolderPath(dirPath)) return false;
+      const key = dirPath === undefined ? undefined : cardSectionFolderKey(dirPath);
+      const changed =
+        visible === null ? deleteCardSection(key, section) : putCardSection(key, section, visible);
+      if (changed) scheduleSave();
+      return changed;
+    },
+
+    resetFolderCardSections(dirPath: string): boolean {
+      if (!isValidFolderPath(dirPath)) return false;
+      if (!cardSectionsFolders.delete(cardSectionFolderKey(dirPath))) return false;
+      scheduleSave();
+      return true;
+    },
+
+    // ── session-list grouping (session-list-group-by) ───────
+
+    getGroupByPrefs(): GroupByPrefs {
+      return { defaultGroupBy, folderGroupBy: { ...folderGroupBy }, collapsedLanes: [...collapsedLanes] };
+    },
+
+    setFolderGroupBy(dirPath: string, mode: GroupByMode | null): boolean {
+      if (mode !== null && !isGroupByMode(mode)) return false;
+      const key = groupFolderKey(dirPath);
+      if (mode === null) {
+        if (!(key in folderGroupBy)) return false;
+        delete folderGroupBy[key];
+      } else {
+        if (folderGroupBy[key] === mode) return false;
+        folderGroupBy[key] = mode;
+      }
+      scheduleSave();
+      return true;
+    },
+
+    setDefaultGroupBy(mode: GroupByMode): boolean {
+      if (!isGroupByMode(mode) || mode === defaultGroupBy) return false;
+      defaultGroupBy = mode;
+      scheduleSave();
+      return true;
+    },
+
+    setLaneCollapsed(dirPath: string, lane: LaneId, collapsed: boolean): boolean {
+      if (!isLaneId(lane)) return false;
+      const entry = laneCollapseKey(groupFolderKey(dirPath), lane);
+      const idx = collapsedLanes.indexOf(entry);
+      if (collapsed) {
+        if (idx !== -1) return false;
+        collapsedLanes.push(entry);
+      } else {
+        if (idx === -1) return false;
+        collapsedLanes.splice(idx, 1);
+      }
+      scheduleSave();
+      return true;
+    },
+
+    // ── favorite models ─────────────────────────────────────
+
+    getFavoriteModels(): string[] {
+      return [...favoriteModels];
+    },
+
+    setFavoriteModels(labels: string[]): void {
+      favoriteModels = dedupePreserveOrder(labels);
+      scheduleSave();
+    },
+
+    addFavoriteModel(label: string): void {
+      if (favoriteModels.includes(label)) return;
+      favoriteModels.push(label);
+      scheduleSave();
+    },
+
+    removeFavoriteModel(label: string): void {
+      const idx = favoriteModels.indexOf(label);
+      if (idx === -1) return;
+      favoriteModels.splice(idx, 1);
+      scheduleSave();
+    },
+
+    // ── folder-workspaces ───────────────────────────────────────────
+
+    getWorkspaces(): Workspace[] {
+      // Deep-ish clone so callers can't mutate internal state.
+      return workspaces.map((w) => ({ ...w, folders: [...w.folders] }));
+    },
+
+    onWorkspacesChanged(handler: () => void): () => void {
+      workspaceListeners.add(handler);
+      return () => {
+        workspaceListeners.delete(handler);
+      };
+    },
+
+    createWorkspace(name: string): Workspace | null {
+      const clean = sanitizeName(name);
+      if (clean === null) return null;
+      const ws: Workspace = {
+        id: `ws_${randomUUID()}`,
+        name: clean,
+        collapsed: false,
+        folders: [],
+      };
+      workspaces.push(ws);
+      scheduleSave();
+      notifyWorkspaces();
+      return { ...ws, folders: [...ws.folders] };
+    },
+
+    renameWorkspace(id: string, name: string): boolean {
+      const clean = sanitizeName(name);
+      if (clean === null) return false;
+      const ws = findWs(id);
+      if (!ws) return false;
+      if (ws.name === clean) return false;
+      ws.name = clean;
+      scheduleSave();
+      notifyWorkspaces();
+      return true;
+    },
+
+    deleteWorkspace(id: string): boolean {
+      const idx = workspaces.findIndex((w) => w.id === id);
+      if (idx === -1) return false;
+      workspaces.splice(idx, 1);
+      scheduleSave();
+      notifyWorkspaces();
+      return true;
+    },
+
+    setWorkspaceCollapsed(id: string, collapsed: boolean): boolean {
+      const ws = findWs(id);
+      if (!ws) return false;
+      if (ws.collapsed === collapsed) return false;
+      ws.collapsed = collapsed;
+      scheduleSave();
+      notifyWorkspaces();
+      return true;
+    },
+
+    addFolderToWorkspace(id: string, dirPath: string): boolean {
+      const ws = findWs(id);
+      if (!ws) return false;
+      const canon = canonicalize(dirPath);
+      if (ws.folders.includes(canon)) return false;
+      // Single-membership invariant: detach from every OTHER workspace
+      // first. Idempotent — no-op if not currently in any other workspace.
+      for (const other of workspaces) {
+        if (other.id === id) continue;
+        const i = other.folders.indexOf(canon);
+        if (i !== -1) other.folders.splice(i, 1);
+      }
+      ws.folders.push(canon);
+      scheduleSave();
+      notifyWorkspaces();
+      return true;
+    },
+
+    removeFolderFromWorkspace(id: string, dirPath: string): boolean {
+      const ws = findWs(id);
+      if (!ws) return false;
+      const canon = canonicalize(dirPath);
+      const i = ws.folders.indexOf(canon);
+      if (i === -1) return false;
+      ws.folders.splice(i, 1);
+      scheduleSave();
+      notifyWorkspaces();
+      return true;
+    },
+
+    moveFolderToWorkspace(
+      dirPath: string,
+      toWorkspaceId: string | null,
+      index?: number,
+    ): boolean {
+      const canon = canonicalize(dirPath);
+      const detach = () => {
+        for (const other of workspaces) {
+          const i = other.folders.indexOf(canon);
+          if (i !== -1) other.folders.splice(i, 1);
+        }
+      };
+      if (toWorkspaceId !== null) {
+        // Resolve the target FIRST — a stale id must not leave the folder
+        // detached from every workspace.
+        const ws = findWs(toWorkspaceId);
+        if (!ws) return false;
+        if (ws.folders.includes(canon)) return false;
+        detach();
+        const at = Math.min(Math.max(index ?? ws.folders.length, 0), ws.folders.length);
+        ws.folders.splice(at, 0, canon);
+      } else {
+        if (!workspaces.some((w) => w.folders.includes(canon))) return false;
+        detach();
+      }
+      scheduleSave();
+      notifyWorkspaces();
+      return true;
+    },
+
+    reorderWorkspaceFolders(id: string, paths: string[]): boolean {
+      const ws = findWs(id);
+      if (!ws) return false;
+      const canon = paths.map((p) => canonicalize(p));
+      // Reject if the supplied set != current set.
+      if (!setEquals(canon, ws.folders)) return false;
+      // Reject duplicates within the new order.
+      if (new Set(canon).size !== canon.length) return false;
+      ws.folders = canon;
+      scheduleSave();
+      notifyWorkspaces();
+      return true;
+    },
+
+    getDisplayPrefs(): DisplayPrefs | undefined {
+      return displayPrefs ? { ...displayPrefs, toolCalls: { ...displayPrefs.toolCalls } } : undefined;
+    },
+
+    getOpenSpecUpdateSignature(cwd: string): string | undefined {
+      return openspecUpdateSignatures[cwd];
+    },
+
+    setOpenSpecUpdateSignature(cwd: string, signature: string): void {
+      if (openspecUpdateSignatures[cwd] === signature) return;
+      openspecUpdateSignatures = { ...openspecUpdateSignatures, [cwd]: signature };
+      scheduleSave();
+    },
+
+    getAutoInitWorktreeOnSpawn(): boolean {
+      return autoInitWorktreeOnSpawn;
+    },
+
+    setAutoInitWorktreeOnSpawn(value: boolean): void {
+      const next = value === true;
+      if (autoInitWorktreeOnSpawn === next) return;
+      autoInitWorktreeOnSpawn = next;
+      scheduleSave();
+    },
+
+    getAutoNameSessions(): boolean {
+      return autoNameSessions;
+    },
+
+    setAutoNameSessions(value: boolean): void {
+      const next = value !== false;
+      if (autoNameSessions === next) return;
+      autoNameSessions = next;
+      scheduleSave();
+    },
+
+    setDisplayPrefs(partial: PartialDisplayPrefs): DisplayPrefs {
+      const base: DisplayPrefs = displayPrefs ?? {
+        tokenStatsBar: false,
+        contextUsageBar: false,
+        reasoning: false,
+        toolResults: false,
+        turnMetadata: false,
+        debugTools: false,
+        toolCalls: { read: false, bash: false, edit: false, agent: false, generic: false },
+        reasoningAutoCollapseMs: 30000,
+        keepReasoningOpenUntilTurnEnds: false,
+        toolGroupDefaultCollapsed: false,
+        changeSummaryTable: false,
+        reserveProcessLineAtIdle: false,
+        showOutOfCwdSessionDiffs: false,
+        notifyMinLevel: "all",
+        reasoningInlineFlow: false,
+        // Documented exception to the all-`false` base: the default is ON.
+        // See change: add-fluid-chat-motion.
+        chatMotion: true,
+        customEventGroups: { ...seededCustomEventGroupDefaults },
+      };
+      const merged: DisplayPrefs = {
+        tokenStatsBar: partial.tokenStatsBar ?? base.tokenStatsBar,
+        contextUsageBar: partial.contextUsageBar ?? base.contextUsageBar,
+        reasoning: partial.reasoning ?? base.reasoning,
+        toolResults: partial.toolResults ?? base.toolResults,
+        turnMetadata: partial.turnMetadata ?? base.turnMetadata,
+        debugTools: partial.debugTools ?? base.debugTools,
+        toolCalls: { ...base.toolCalls, ...(partial.toolCalls ?? {}) },
+        reasoningAutoCollapseMs: partial.reasoningAutoCollapseMs ?? base.reasoningAutoCollapseMs,
+        keepReasoningOpenUntilTurnEnds:
+          partial.keepReasoningOpenUntilTurnEnds ?? base.keepReasoningOpenUntilTurnEnds,
+        toolGroupDefaultCollapsed:
+          partial.toolGroupDefaultCollapsed ?? base.toolGroupDefaultCollapsed,
+        changeSummaryTable: partial.changeSummaryTable ?? base.changeSummaryTable,
+        reserveProcessLineAtIdle:
+          partial.reserveProcessLineAtIdle ?? base.reserveProcessLineAtIdle,
+        showOutOfCwdSessionDiffs:
+          partial.showOutOfCwdSessionDiffs ?? base.showOutOfCwdSessionDiffs,
+        notifyMinLevel: partial.notifyMinLevel ?? base.notifyMinLevel,
+        reasoningInlineFlow: partial.reasoningInlineFlow ?? base.reasoningInlineFlow,
+        chatMotion: partial.chatMotion ?? base.chatMotion,
+        customEventGroups: mergeCustomEventGroupPrefs(base.customEventGroups, partial.customEventGroups),
+      };
+      displayPrefs = merged;
+      scheduleSave();
+      return {
+        ...merged,
+        toolCalls: { ...merged.toolCalls },
+        customEventGroups: { ...merged.customEventGroups },
+      };
+    },
+
+    reorderWorkspaces(ids: string[]): boolean {
+      const currentIds = workspaces.map((w) => w.id);
+      if (!setEquals(ids, currentIds)) return false;
+      if (new Set(ids).size !== ids.length) return false;
+      const byId = new Map(workspaces.map((w) => [w.id, w] as const));
+      workspaces = ids.map((id) => byId.get(id)!).filter(Boolean) as Workspace[];
+      scheduleSave();
+      notifyWorkspaces();
+      return true;
+    },
+
+    flush(): void {
+      flushNow();
+    },
+
+    dispose(): void {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+    },
+  };
+}

@@ -1,0 +1,23 @@
+[Unit]
+Description=Pi research idle stage reviewer (silent, opt-in)
+Documentation=file:%h/pi-research-harness/docs/IDLE-STAGE-REVIEW.md
+After=network.target
+
+[Service]
+Type=simple
+# Replace @REPO@ with the checked-out harness path before installing this unit.
+ExecStart=/usr/bin/env node @REPO@/extensions/research-loop/scripts/run-stage-review.mjs --config %h/.config/pi-research/idle-stage-review.json
+EnvironmentFile=-%h/.config/pi-research/idle-stage-review.env
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=20
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/pi-research-idle-stage-review
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,69 @@
+{
+  "schema": "pi-research-host.file-compatibility.v1",
+  "routes": [
+    "GET /api/file",
+    "GET /api/file/tree",
+    "GET /api/file/raw",
+    "GET /api/file/digest",
+    "GET /api/file/md-read",
+    "GET /api/file/md-candidates",
+    "GET /api/file/render",
+    "GET /api/file/rendered-pdf",
+    "GET /api/file/sheet",
+    "GET /api/file/eml",
+    "GET /api/file/eml-attachment",
+    "POST /api/file/write",
+    "GET /api/file/exists",
+    "POST /api/file/resolve-mention",
+    "GET /api/browse",
+    "GET /api/browse/flags",
+    "POST /api/browse/mkdir",
+    "POST /api/browse/create-project",
+    "GET /api/pinned-dirs",
+    "GET /api/sessions/:sessionId/attachments/:attachmentId"
+  ],
+  "verified": [
+    "Native session-scoped attachment original recovery with the previous base64-string SHA-256 identity",
+    "Host-owned old attachment root mapping without rewriting history",
+    "Shared deployed file-kind, repository checkout admission and writable-document extension guard",
+    "Exact mtime conflict checks, per-target concurrent-save serialization and private-mode preservation",
+    "Raw bytes with single and suffix byte ranges",
+    "Canonical paths, no symlink reads, project-owner admission and global local-operator document scope",
+    "Actual CSV/XLSX structured parsing with the deployed encoding and row-limit implementation",
+    "Actual MIME email parsing with DOMPurify HTML sanitization and exact attachment bytes",
+    "Actual DOCX HTML fallback with the deployed Mammoth converter and image limits",
+    "Actual AsciiDoc secure conversion with HTML sanitization and source repair",
+    "PDF converter facade and private generation-bound cache, verified with a synthetic converter boundary",
+    "Default document facade output admission, read-only source mount and no inherited API-key forwarding, verified with an offline runner",
+    "Original first-run project create-or-reuse semantics, machine-readable validation reasons and local-operator scope",
+    "Live injected pinned-directory order and named-principal ownership filtering without implicit file grants"
+  ],
+  "limits": {
+    "textAndWriteBytes": 268435456,
+    "rawResponseBytes": 268435456,
+    "directoryEntries": 10000,
+    "attachmentDecodedBytes": 33554432,
+    "attachmentSourceRecordBytes": 67108864,
+    "asciiDocSourceBytes": 10485760
+  },
+  "productionBaseline": {
+    "officeRoutes": "Core routes are registered independently of optional plugins",
+    "defaultDocumentImage": "pi-doc-engine:latest",
+    "defaultDocumentImageObservation": "Host-scoped read-only inspect reported No such image",
+    "docxFallback": "Local HTML conversion is available and tested",
+    "pptxWithoutEngine": "Original success=false result is retained",
+    "binaryEditorClaim": "craft-web/wordcraft is installed with defaultEnabled=false; current config has no override",
+    "diagramEndpoint": "Core POST /api/diagram/render exists; no configured or permitted Kroki endpoint was observed",
+    "filesystemGrantStore": "Read-only default-store inspection found version 1 and 36 persisted project grants; their admission is not yet consumed by this compatibility layer",
+    "viewerDependencyPackages": 201,
+    "viewerDependencies": "node_modules contains the copied installed dependency closure and is required at runtime"
+  },
+  "remainingOperations": [
+    "PDF generation requires the separately provisioned local document-engine image; its availability exceeds the observed production baseline",
+    "Opt-in WordCraft binary editor write handlers and browser app provisioning, disabled in the production baseline",
+    "Persistent external-filesystem grant creation and interactive grant prompts",
+    "System open and reveal commands",
+    "POST /api/diagram/render requires a configured Kroki endpoint; its original unconfigured state returns unavailable",
+    "Full raw files above the bounded response cap require client byte-range reads"
+  ]
+}

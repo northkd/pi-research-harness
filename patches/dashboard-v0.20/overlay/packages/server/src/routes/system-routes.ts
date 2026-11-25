@@ -1,0 +1,1703 @@
+/**
+ * System REST API routes: config, health, shutdown, tunnel.
+ */
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { getHeapStatistics } from "node:v8";
+import { 
+  discoverPlugins,fixturePluginsEnabled, 
+  getPluginStatusStore,} from "@blackbelt-technology/dashboard-plugin-runtime/server";
+import type { ServerToBrowserMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import type { BridgeLoadSource, PluginStatus } from "@blackbelt-technology/pi-dashboard-shared/dashboard-plugin/plugin-status.js";
+import { parseLaunchSource } from "@blackbelt-technology/pi-dashboard-shared/dashboard-starter.js";
+import { ELECTRON_RESTART_EXIT_CODE, restartsViaElectron } from "@blackbelt-technology/pi-dashboard-shared/electron-restart.js";
+import { whichSync } from "@blackbelt-technology/pi-dashboard-shared/platform/binary-lookup.js";
+import { getGitSourceReadout } from "@blackbelt-technology/pi-dashboard-shared/platform/git-source.js";
+import { resolveNativeTsLoader } from "@blackbelt-technology/pi-dashboard-shared/platform/ts-loader-select.mjs";
+import { classifyBridgeSource } from "@blackbelt-technology/pi-dashboard-shared/plugin-bridge-register.js";
+import { RESTART_QUIESCE_MS } from "@blackbelt-technology/pi-dashboard-shared/recovery-timing.js";
+import type { NetworkInterface, PiMirrorResult, ReservedNameResult } from "@blackbelt-technology/pi-dashboard-shared/rest-api.js";
+import type { ApiResponse } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import type { FastifyInstance } from "fastify";
+import type { AccessGrantHealth } from "../access/access-health.js";
+import {
+  computeBindReachability,
+  getLastBindReachability,
+  safeComputeBindReachability,
+  sameReachability,
+} from "../auth/bind-reachability-service.js";
+import { canDiscloseAccessPosture, localhostGuard, loopbackCoveringEntries } from "../auth/localhost-guard.js";
+import { networkOnlySnapshot } from "../auth/network-trust-telemetry.js";
+import { getRegistryError } from "../auth/provider-auth-registry.js";
+import { effectiveTrustMode } from "../auth/trust-mode.js";
+import { deleteAuthProvider, readConfigRedacted, writeConfigPartial } from "../config-api.js";
+import type { DirectoryService } from "../directory-service.js";
+import {
+  type ClientBuildSnapshot,
+  readClientBuildSnapshot,
+  runtimePluginRegistryHash,
+} from "../lib/client-dist.js";
+import { bootParentPid, computeBootParentAlive, readLivePpid } from "../lifecycle/boot-parent-liveness.js";
+import { ensureInstanceId, instanceIdHealthFields } from "../lifecycle/instance-id.js";
+import { computeEffectiveLaunchSource } from "../lifecycle/launch-source-effective.js";
+import type { EventLoopSpikeMetrics } from "../metrics/eventloop-spike-metrics.js";
+import type { HydrationMetrics } from "../metrics/hydration-metrics.js";
+import { getModelProxyStatus } from "../model-proxy/registry-singleton.js";
+import { type DroppedFrameStats, EMPTY_DROPPED_FRAME_STATS, EMPTY_SOCKET_BUFFER_OCCUPANCY, type SocketBufferOccupancy } from "../pairing/browser-gateway.js";
+import { recordExitIntent } from "../persistence/boot-state.js";
+import { EMPTY_STORE_RETENTION, EMPTY_TRIM_STATS, type StoreRetention, type TrimStats } from "../persistence/memory-event-store.js";
+import type { MetaPersistence } from "../persistence/meta-persistence.js";
+import type { PreferencesStore } from "../persistence/preferences-store.js";
+import type { PiGateway } from "../pi/pi-gateway.js";
+import {
+  consumerDivergenceMessage,
+  piRuntimeSnapshot,
+} from "../pi/pi-runtime.js";
+import {
+  type BootstrapCompatibility,
+  computeCompatibility,
+  readCurrentPiVersion,
+  readPiCompatibility,
+} from "../pi/pi-version-skew.js";
+import { mirrorDefaultsToPi } from "../pi-agent-settings.js";
+import { EMPTY_KEEPER_LOG_STATS, type KeeperLogStats } from "../rpc-keeper/keeper-manager.js";
+import type { ServerConfig } from "../server.js";
+import { serverHeapTelemetry } from "../server-heap-telemetry.js";
+import { projectAcmeConfigured } from "../tls/sources/acme/config-projection.js";
+import { touchesTlsOrPorts, validateTlsConfigWrite } from "../tls/tls-config-validation.js";
+import type { TlsListener } from "../tls/tls-listener.js";
+import type { SessionManager } from "../session/memory-session-manager.js";
+import { heapFallbackStatus } from "../spawn-process/heap-args.js";
+import { spawnRestart } from "../spawn-process/restart-helper.js";
+import { readSpawnFailures } from "../spawn-process/spawn-failure-log.js";
+import { systemOpenCapability } from "../system-open-capability.js";
+import { connectedProviderIds, connectGateway, createTunnel, deleteTunnel, disconnectResolvedProviders, ensureReservedName, gatewayProviderStatus, getProviderReadiness, getTunnelStatus, getTunnelUrl, getZrokLastError, releaseShare } from "../tunnel/tunnel.js";
+import { acceptTargetFor, blockEvents } from "../tunnel/tunnel-block-events.js";
+import { collectEndpoints, liveReadinessEndpoints } from "../tunnel/tunnel-endpoints.js";
+import { runEnrollStep } from "../tunnel/tunnel-enroll.js";
+import { startTunnelWatchdog, stopTunnelWatchdog } from "../tunnel/tunnel-watchdog.js";
+import { reserveNameAsync } from "../tunnel-providers/zrok.js";
+import { buildNetworkInterfaceList } from "./network-interfaces.js";
+
+/** Heartbeat poll-cost counters summed on /api/health. See change: optimize-polling-hot-paths. */
+const POLL_COST_KEYS = [
+  "pollProcScanRuns", "pollProcScanSpawns", "pollProcScanMs",
+  "pollGitProbesTick", "pollGitProbesTool", "pollGitProbesWatch", "pollGitProbesRefresh",
+  "pollGitSpawns", "pollGitMs", "pollGitWatchersAttached",
+] as const;
+
+import {
+  deriveLocalIdentity,
+  ensureRuntimeRequest,
+  getRuntimeOverlayDir,
+  readRuntimeRequest,
+  readRuntimeState,
+} from "@blackbelt-technology/pi-dashboard-shared/runtime-overlay/state.js";
+import { createRuntimeHealthProvider, redactRuntimeHealth } from "../runtime-overlay/runtime-health.js";
+import type { NetworkGuard } from "./route-deps.js";
+
+/**
+ * `/api/health` → `piRuntime`.
+ *
+ * SECURITY: `/api/health` has NO `preHandler` guard — it is reachable
+ * unauthenticated. This shape therefore carries VERSIONS ONLY and never a
+ * filesystem path; the paths live on the guarded `GET /api/pi/installs`.
+ * Adding a path field here would disclose the operator's install layout to any
+ * caller that can reach the port.
+ *
+ * See change: select-pi-runtime-install (design D5).
+ */
+export interface PiDivergenceHealth {
+  /** The two pi CONSUMERS resolve to different installs. */
+  consumerDiverged: boolean;
+  /** Message naming BOTH versions; null when not diverged. */
+  consumerMessage: string | null;
+  spawnVersion: string | null;
+  moduleVersion: string | null;
+  /** >1 distinct pi version across every enumerated install — a DIFFERENT question. */
+  installSetDiverged: boolean;
+  installSetVersions: string[];
+}
+
+/** Tail of the config-save chain: one save's write + pi mirror at a time. */
+let configSaveTail: Promise<unknown> = Promise.resolve();
+
+/**
+ * Persist a config partial and mirror the Default model / thinking level into
+ * pi's global settings (design D1). SERIALISED per process: save B's write
+ * cannot land between save A's write and A's mirror, so an older mirror can
+ * never overwrite a newer persisted default (a busy mirror of the newer save
+ * would otherwise leave pi on the older value). The mirror never fails the
+ * save — config.json is already written. See change: edit-pi-agent-settings.
+ */
+/**
+ * Run a config read-modify-write on the SAME chain as `PUT /api/config`, so the
+ * per-entry ACME routes can never interleave with another save.
+ * See change: add-acme-dns01-certs (design D5).
+ */
+export function runOnConfigSaveChain<T>(run: () => Promise<T> | T): Promise<T> {
+  const next = configSaveTail.then(run, run);
+  configSaveTail = next.catch(() => {});
+  return next as Promise<T>;
+}
+
+function saveConfigAndMirror(partial: Record<string, any>) {
+  const run = async () => {
+    const result = writeConfigPartial(partial);
+    if (!result.success) return { ok: false as const, error: result.error };
+    const config = await import("@blackbelt-technology/pi-dashboard-shared/config.js");
+    const reloaded = config.loadConfig();
+    const mirrorKeys = (["defaultModel", "defaultThinkingLevel"] as const).filter((k) => partial[k] !== undefined);
+    let piMirror: PiMirrorResult | undefined;
+    if (mirrorKeys.length > 0) {
+      try {
+        piMirror = await mirrorDefaultsToPi(config.loadConfig, mirrorKeys);
+      } catch (err) {
+        piMirror = { ok: false, error: "io" };
+        console.warn("[pi-settings] default-model mirror threw:", err instanceof Error ? err.message : err);
+      }
+      if (!piMirror.ok) console.warn(`[pi-settings] default-model mirror failed: ${piMirror.error}`);
+    }
+    return { ok: true as const, result, reloaded, piMirror };
+  };
+  return runOnConfigSaveChain(run);
+}
+
+/**
+ * Enrich each plugin status with `bridgeLoadedFrom` by classifying the
+ * plugin's resolved bridge path against the live pi settings.json.
+ *
+ * Reads settings.json once per health call; cached `discoverPlugins()`
+ * result keeps the bridge path lookup O(1).
+ *
+ * See change: fix-pi-flows-end-to-end (Group 2, task 2.4).
+ */
+function enrichWithBridgeSource(statuses: PluginStatus[]): PluginStatus[] {
+  let settings: unknown = null;
+  try {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
+    const p = path.join(home, ".pi", "agent", "settings.json");
+    if (fs.existsSync(p)) {
+      const raw = fs.readFileSync(p, "utf-8").trim();
+      if (raw) settings = JSON.parse(raw);
+    }
+  } catch {
+    settings = null;
+  }
+
+  const plugins = discoverPlugins();
+  const bridgePaths = new Map<string, string>();
+  for (const p of plugins) {
+    if (p.bridgeEntryPath) bridgePaths.set(p.manifest.id, p.bridgeEntryPath);
+  }
+
+  return statuses.map((s) => {
+    const bp = bridgePaths.get(s.id);
+    const bridgeLoadedFrom: BridgeLoadSource = bp
+      ? classifyBridgeSource(settings, bp)
+      : "none";
+    return { ...s, bridgeLoadedFrom };
+  });
+}
+
+export function registerSystemRoutes(
+  fastify: FastifyInstance,
+  deps: {
+    sessionManager: SessionManager;
+    preferencesStore: PreferencesStore;
+    metaPersistence: MetaPersistence;
+    config: ServerConfig;
+    networkGuard: NetworkGuard;
+    version?: string;
+    directoryService?: DirectoryService;
+    /** Called after a `PUT /api/config` that touched `vault`, so delivery switches apply live. See change: add-credential-vault. */
+    onVaultConfigChanged?: () => void;
+    /** Optional TLS listener: status in `/api/health.tls`, endpoints, reconcile after a `tls` config write. See change: add-tailscale-cert-tls. */
+    tls?: Pick<TlsListener, "status" | "tlsListenerUrls" | "reconcile">;
+    piGateway?: PiGateway;
+    browserGateway?: {
+      broadcastToAll: (msg: ServerToBrowserMessage) => void;
+      // Per-hop dropped-frame counters for the diagnostics surface.
+      // DERIVED from the gateway's exported type — an inline structural type
+      // would silently rot when the stats gain a field (same rule as the
+      // `TrimStats` derivation below).
+      // See changes: fix-stuck-tool-card-on-dropped-event,
+      // fix-pending-prompt-lost-on-replay (blocking-class split).
+      getDroppedFrameStats?: () => DroppedFrameStats;
+      getNotifyLogStats?: () => { evictedEntries: number; bySession: Record<string, number> };
+      getQuestionStats?: () => unknown;
+      // DERIVED from the gateway's exported type, same rule as above.
+      // See change: fix-backpressure-status-and-subagent-frames.
+      getSocketBufferOccupancy?: () => SocketBufferOccupancy;
+      /** Test-only shed injector; inert without `PI_E2E_FORCE_SHED=1`. */
+      setTestForceShed?: (enabled: boolean) => boolean;
+    };
+    // Shared hydration-timing recorder; `/api/health` reads its snapshot.
+    // See change: instrument-session-hydration-timing.
+    hydrationMetrics?: HydrationMetrics;
+    // Reads {meanMs,p99Ms,maxMs} from the boot event-loop-delay histogram and
+    // resets its window. See change: instrument-session-hydration-timing.
+    readEventLoopDelay?: () => { meanMs: number; p99Ms: number; maxMs: number };
+    // Rolling ring buffer of worst-case event-loop stalls (sampler + per-turn
+    // self-records); `/api/health` reads its snapshot additively.
+    // See change: attribute-openspec-poll-eventloop-stalls.
+    eventLoopSpikes?: EventLoopSpikeMetrics;
+    // Access-grant prompting counters; `/api/health` reads them additively into
+    // `accessGrants`, failure-isolated like every other telemetry read.
+    // See change: add-access-grant-dialog (task 9.3).
+    readAccessGrants?: () => AccessGrantHealth;
+    // Live trusted-network list (top-level ∪ auth.bypassHosts) for the additive
+    // `trustPosture` health field. Falls back to the boot list when unwired.
+    // See change: fix-trusted-network-tunnel-bypass (D3).
+    readTrustedNetworks?: () => string[];
+    // Cumulative tool-result route answers (`202` pending / `410` gone) for the
+    // additive `toolResult` health field. See change: distinguish-tool-result-pending-vs-gone (D6).
+    toolResultStats?: { pending: number; gone: number };
+    // Push config / transport-init errors. Wired only while push is enabled;
+    // served as `push.errors` behind `canDiscloseAccessPosture`.
+    // See change: add-server-push-notifications.
+    readPushErrors?: () => readonly string[];
+    // Store-shed telemetry source; `/api/health` reads getTrimStats() into the
+    // additive `storeTrim` field. See change: instrument-event-store-trim.
+    // DERIVED from the store's exported TrimStats, never restated inline: an
+    // inline structural type still typechecks after the store gains a field
+    // (excess-property checks do not fire on a function return type), so the
+    // wire-shape annotation would silently rot.
+    // See change: collapse-superseded-tool-execution-updates (D9).
+    eventStore?: {
+      getTrimStats?: () => TrimStats;
+      getRetention?: () => StoreRetention;
+    };
+    // Embed-session-lifecycle diagnostics; `/api/health` reads its snapshot
+    // (active/idle ephemeral counts, reaped-by-reason, capacity rejections,
+    // acquire reuse hit/miss). See change: add-embed-session-lifecycle.
+    embedLifecycle?: { snapshot: () => unknown };
+    // Keeper-log disk posture; `/api/health` reads the cached snapshot next
+    // to storeTrim. Failure-isolated at the call site like embedLifecycle —
+    // a throwing snapshot must never 500 the unguarded health hot path.
+    // See change: fix-runaway-keeper-log-growth (D6, task 4.2).
+    keeperLogStats?: { get: () => KeeperLogStats };
+    // The static client directory the server serves assets from (null when
+    // API-only) — the SAME directory `fastifyStatic` is rooted at. The
+    // `/api/health.clientBuild` snapshot is derived from it ONCE at
+    // registration, never per request. See change:
+    // add-served-build-coherence-and-hash-parity (design D3/D4).
+    clientDir?: string | null;
+    // The SAME coherence snapshot the server bootstrap computed for its startup
+    // diagnostic — passed in so the value is computed once (design D3). Absent
+    // (tests) ⇒ derived from `clientDir` at registration.
+    clientBuild?: ClientBuildSnapshot;
+  },
+) {
+  const { sessionManager, preferencesStore, metaPersistence, config, networkGuard, version, directoryService, piGateway, browserGateway, hydrationMetrics, readEventLoopDelay, eventLoopSpikes, eventStore, toolResultStats, embedLifecycle, keeperLogStats, clientDir, readAccessGrants, readTrustedNetworks, readPushErrors } = deps;
+
+  // Served-artifact coherence snapshot (design D4): a startup snapshot, never a
+  // per-request filesystem read (P1).
+  const clientBuild =
+    deps.clientBuild ??
+    readClientBuildSnapshot(clientDir ?? null, (policy) =>
+      runtimePluginRegistryHash(policy === "excluded"),
+    );
+
+  // Hoisted for the same reason as `clientBuild`: `runtimePluginRegistryHash`
+  // calls `findMonorepoRoot()`, which synchronously walks parent directories
+  // with `fs.existsSync`/`readFileSync`. Evaluating it inside the unguarded,
+  // frequently-polled `/api/health` handler made every poll do filesystem I/O.
+  // The plugin set is process-stable (`discoverPlugins` is cached and only the
+  // build-side vite-plugin clears it), so a registration-time snapshot is both
+  // cheaper and equivalent. See change: add-served-build-coherence-and-hash-parity.
+  // Fixture clients are part of a production build only under the opt-in
+  // PI_DASHBOARD_FIXTURE_PLUGINS gate (docker test harness) — the same rule
+  // the vite plugin applied. See change: expose-plugin-credential-and-oauth-seams (D8).
+  const bundleHash = runtimePluginRegistryHash(!config.dev && !fixturePluginsEnabled());
+
+  // Quiesce windows for the bridge `server_restarting` broadcast. See change
+  // `fix-restart-bridge-auto-start-race`. Bridges that receive this message
+  // suppress only the spawn step in `server-auto-start.ts` for `quiesceMs`;
+  // discovery + reconnection still run.
+  const SHUTDOWN_QUIESCE_MS = 60000;
+  const announceRestart = (
+    reason: "restart" | "shutdown",
+    quiesceMs: number,
+    requestId?: string,
+  ) => {
+    // Bridges: suppress the auto-start spawn step during the quiesce window.
+    try {
+      piGateway?.broadcast({ type: "server_restarting", reason, quiesceMs });
+    } catch { /* best-effort — never block exit on a flaky bridge socket */ }
+    // Browsers: correlate a confirm:"ws" restart click via the echoed requestId.
+    // See change: add-async-action-feedback.
+    try {
+      browserGateway?.broadcastToAll({ type: "server_restarting", reason, quiesceMs, requestId });
+    } catch { /* best-effort */ }
+  };
+  const serverStartTime = Date.now();
+
+  // pi-version-skew compatibility surface for `/api/health`. Computed lazily
+  // and cached 30s: the probe does a ToolRegistry resolve + file read, which
+  // must not run on every rapid health poll. `null` when pi is unresolvable
+  // (a clean install may legitimately predate a pi install). See change:
+  // restore-pi-version-skew-surface.
+  const serverPkgJsonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../package.json");
+  const COMPAT_CACHE_MS = 30_000;
+  let compatCache: { at: number; value: BootstrapCompatibility | null } | null = null;
+  // Pi runtime divergence, on the SAME 30s cache as `compatibility`: the
+  // snapshot does a registry resolve + filesystem enumeration and must not run
+  // on every health poll.
+  //
+  // Two divergence predicates are reported under DISTINCT labels and never
+  // conflated (design D5): `piConsumerDivergence` asks "do the two pi consumers
+  // resolve to the same install", `piInstallSetDivergence` asks "is there more
+  // than one pi version anywhere on this box". A user with one unused old
+  // install has the latter and not the former.
+  // See change: select-pi-runtime-install.
+  let piDivergenceCache: { at: number; value: PiDivergenceHealth | null } | null = null;
+  const readPiDivergence = (): PiDivergenceHealth | null => {
+    const now = Date.now();
+    if (piDivergenceCache && now - piDivergenceCache.at < COMPAT_CACHE_MS) {
+      return piDivergenceCache.value;
+    }
+    let value: PiDivergenceHealth | null = null;
+    try {
+      const snap = piRuntimeSnapshot();
+      value = {
+        consumerDiverged: snap.consumerDiverged,
+        consumerMessage: consumerDivergenceMessage(snap),
+        spawnVersion: snap.spawn.version,
+        moduleVersion: snap.module.version,
+        installSetDiverged: snap.installSetDiverged,
+        installSetVersions: snap.installSetVersions,
+      };
+    } catch (err) {
+      // Health must stay up, so this degrades to `null` rather than throwing —
+      // but a PERSISTENT enumeration failure would otherwise be invisible, with
+      // `piRuntime: null` indistinguishable from "nothing to report".
+      fastify.log.debug({ err }, "pi runtime divergence snapshot failed");
+      value = null;
+    }
+    piDivergenceCache = { at: now, value };
+    return value;
+  };
+
+  const readCompatibility = (): BootstrapCompatibility | null => {
+    const now = Date.now();
+    if (compatCache && now - compatCache.at < COMPAT_CACHE_MS) return compatCache.value;
+    let value: BootstrapCompatibility | null = null;
+    try {
+      const current = readCurrentPiVersion();
+      value = current ? computeCompatibility(readPiCompatibility(serverPkgJsonPath), current) : null;
+    } catch {
+      value = null;
+    }
+    compatCache = { at: now, value };
+    return value;
+  };
+
+  // ── TEST-ONLY back-pressure injector ──
+  // Registered ONLY under `PI_E2E_FORCE_SHED=1`, so on a production instance
+  // the route does not exist at all (404) rather than existing-and-refusing.
+  // Still `networkGuard`-gated, because it is a mutating endpoint and the flag
+  // is an operator mistake away from being set somewhere it should not be.
+  //
+  // It exists because real back-pressure is caused by a browser failing to
+  // drain its own socket — a browser automation driver cannot induce that, so
+  // without this hook the status-reconcile convergence is unobservable in the
+  // rendered UI. See change: fix-backpressure-status-and-subagent-frames.
+  if (process.env.PI_E2E_FORCE_SHED === "1") {
+    fastify.post<{ Body: { enabled?: boolean } }>(
+      "/api/test/force-shed",
+      { preHandler: networkGuard },
+      async (request, reply) => {
+        const enabled = request.body?.enabled === true;
+        const applied = browserGateway?.setTestForceShed?.(enabled);
+        if (applied === undefined) {
+          return reply.code(503).send({ success: false, error: "browser gateway unavailable" });
+        }
+        return { success: true, data: { forceShed: applied } };
+      },
+    );
+  }
+
+  // Config endpoints
+  fastify.get(
+    "/api/config",
+    { preHandler: networkGuard },
+    async () => {
+      // `reachability` is COMPUTED, never persisted, and rides this guarded
+      // surface rather than `/api/health` — it describes the operator's private
+      // network topology, and `/api/health` has no preHandler. Failure-isolated
+      // like `eventLoopDelay` / `storeTrim` / `notifyLog`: a throw here must
+      // never take the config response down with it.
+      // See change: warn-unreachable-trusted-networks.
+      const configModule = await import("@blackbelt-technology/pi-dashboard-shared/config.js");
+      const reachability = safeComputeBindReachability(configModule.loadConfig);
+      // `agentPathGateEnvOverride` is COMPUTED (never persisted): lets Settings
+      // render the toggle inert with the reason. See change: ask-agent-file-access-in-chat.
+      const gateEnv = process.env.PI_DASHBOARD_AGENT_PATH_GATE?.trim().toLowerCase();
+      const agentPathGateEnvOverride = gateEnv === "off" || gateEnv === "on" ? gateEnv : null;
+      // `tls.sources[].solver.configured` (ACME): projected from the vault listing, never a secret.
+      // See change: add-acme-dns01-certs.
+      const redacted = await projectAcmeConfigured(readConfigRedacted());
+      return { success: true, data: { ...redacted, reachability, agentPathGateEnvOverride } };
+    },
+  );
+
+  // ── Gateway (tunnel) — endpoints, enroll, block-events ──────────────
+  // "Accessible at": every tagged address the dashboard answers on. Sourced
+  // from the active tunnel URL + manual publicBaseUrls + LAN/local. Auth-gated.
+  // See change: add-tunnel-providers.
+  fastify.get(
+    "/api/tunnel/endpoints",
+    { preHandler: networkGuard },
+    async () => {
+      const url = getTunnelUrl();
+      const providerEndpoints: Parameters<typeof collectEndpoints>[0]["providerEndpoints"] & {} = url
+        ? [{ kind: "public" as const, url, tls: url.startsWith("https://") }]
+        : [];
+      // Every connected provider's domain URLs (tailscale MagicDNS, extra zrok/
+      // ngrok, ...), not just the primary's - the QR selector reads this list.
+      // Readiness is time-bounded per provider; a failure only loses extras.
+      try {
+        providerEndpoints.push(...liveReadinessEndpoints(await getProviderReadiness()));
+      } catch {
+        /* primary + manual + LAN still listed */
+      }
+      const configModule = await import("@blackbelt-technology/pi-dashboard-shared/config.js");
+      const cfg = configModule.loadConfig();
+      const endpoints = collectEndpoints({
+        providerEndpoints,
+        publicBaseUrls: configModule.resolvePublicBaseUrls(cfg),
+        port: config.port,
+        tlsEndpoints: deps.tls?.tlsListenerUrls() ?? [],
+      });
+      return { success: true, data: { endpoints } } satisfies ApiResponse;
+    },
+  );
+
+  // Run a whitelisted enroll step (auth-token/activate) server-side. The token
+  // is a validated parameter; arbitrary commands are refused. Auth-gated.
+  fastify.post<{ Body: { provider?: string; step?: string; param?: string } }>(
+    "/api/tunnel/enroll",
+    { preHandler: networkGuard },
+    async (request, reply) => {
+      const { provider, step, param } = request.body ?? {};
+      if (!provider || !step || typeof param !== "string") {
+        return reply.code(400).send({ success: false, error: "provider, step, param required" });
+      }
+      const result = await runEnrollStep(provider as any, step as any, param);
+      if (result.ok) return { success: true };
+      const code = result.reason === "unknown-step" || result.reason === "invalid-param" ? 400 : 422;
+      return reply.code(code).send({ success: false, error: result.message });
+    },
+  );
+
+  // Recent network-guard denials = the pending-access-request queue. The same
+  // anti-poisoning buffer backs the "Trust this network?" banner; reading it is
+  // auth-gated (networkGuard), so an untrusted peer cannot enumerate it.
+  // See change: add-access-grants-and-review.
+  fastify.get(
+    "/api/tunnel/block-events",
+    { preHandler: networkGuard },
+    async () => {
+      return { success: true, data: { events: blockEvents.list() } } satisfies ApiResponse;
+    },
+  );
+
+  // Accept a pending access request. The denial IS the request (design D5), so
+  // this path performs exactly one write: the recorded socket peer is added to
+  // trusted networks through the EXISTING config write path
+  // (`writeConfigPartial`, the same one `PUT /api/config` uses). The ledger is
+  // never mutated and never mutates policy.
+  //
+  // ACCEPT-PATH SECURITY REVIEW (task 4.9) — this is the one action that widens
+  // network trust, so the checks and their rationale:
+  //   * The peer must be PRESENT in the ledger. An IP with no recorded pending
+  //     request is refused, so this is not a generic "trust any host" endpoint.
+  //   * `trustable:false` (loopback / proxy-terminated) is REFUSED: its socket
+  //     peer is the tunnel/reverse-proxy itself, and trusting it would trust
+  //     every client behind it (task 4.7).
+  //   * The value written is the ledger's recorded socket peer
+  //     (`request.ip` at denial time), never a caller-supplied network. A
+  //     spoofed `X-Forwarded-For` cannot become the accepted value, and the
+  //     caller cannot widen the blast radius to a subnet through this path.
+  //   * Auth-gated by `networkGuard` like every sibling route, so an
+  //     unauthenticated remote cannot accept. A genuinely-local process is
+  //     trusted by the pre-existing loopback model (design D15's stated limit).
+  //   * The mutating-origin gate (`createMutationOriginGate`) runs BESIDE this
+  //     route for every `/api/*` POST, so a cross-site page cannot drive an
+  //     accept even in the operator's own browser.
+  //   * On a config-write failure the failure is REPORTED (design D11) rather
+  //     than claiming a grant that did not persist; the pending entry stays
+  //     queued for a retry.
+  //   * Every accept is AUDITED (STRIDE: Repudiation) — the widening action is
+  //     recorded server-side, not just in the persisted config.
+  fastify.post<{ Body: { ip?: unknown } }>(
+    "/api/tunnel/block-events",
+    { preHandler: networkGuard },
+    async (request, reply) => {
+      // Accept-to-trust exists only in `legacy`: in `pair` a network match grants
+      // nothing, so there is nothing to accept (the denied device pairs instead).
+      // See change: retire-trusted-networks-bypass (D6).
+      if (effectiveTrustMode().mode === "pair") {
+        return reply.code(403).send({
+          success: false,
+          error: "not_acceptable",
+          reason: "Network trust is off (pair mode) — the denied device must request access instead.",
+        });
+      }
+      const ip = request.body?.ip;
+      if (typeof ip !== "string" || ip.length === 0) {
+        return reply.code(400).send({ success: false, error: "ip required" });
+      }
+      const entry = blockEvents.list().find((e) => e.ip === ip);
+      if (!entry) {
+        return reply
+          .code(404)
+          .send({ success: false, error: "no pending access request for that peer" });
+      }
+      if (acceptTargetFor(entry) === null) {
+        return reply.code(403).send({
+          success: false,
+          error: "not_acceptable",
+          reason: "Loopback or proxy-terminated peer — trusting it would trust the whole tunnel.",
+        });
+      }
+      // The canonical UI write path for host trust is `auth.bypassHosts` (the
+      // trusted-networks spec forbids the UI writing top-level
+      // `config.trustedNetworks` directly); the guard merges both at runtime.
+      const existing = readConfigRedacted().auth?.bypassHosts ?? [];
+      if (!existing.includes(ip)) {
+        const written = writeConfigPartial({ auth: { bypassHosts: [...existing, ip] } });
+        if (!written.success) {
+          return reply.code(500).send({ success: false, error: written.error });
+        }
+      }
+      // Audit the one action that widens network trust. `ip` is the guard's
+      // recorded socket peer (server-derived), so it needs no sanitizing.
+      console.log(`[network-trust] accepted pending request ip=${ip}`);
+      return { success: true } satisfies ApiResponse;
+    },
+  );
+
+  fastify.put(
+    "/api/config",
+    { preHandler: networkGuard },
+    async (request, reply) => {
+      const partial = request.body as Record<string, any>;
+      if (!partial || typeof partial !== "object") {
+        return reply.code(400).send({ success: false, error: "Invalid body" });
+      }
+      // Reject an invalid sessionList patch before it is persisted.
+      // See change: archive-service-sessions-on-end.
+      if (partial.sessionList !== undefined) {
+        const { validateSessionListConfig } = await import("@blackbelt-technology/pi-dashboard-shared/config.js");
+        const check = validateSessionListConfig(partial.sessionList);
+        if (!check.ok) {
+          return reply.code(400).send({ success: false, error: check.errors.join("; ") });
+        }
+      }
+      // `network.trustMode` is a security switch: only the two known values may
+      // be WRITTEN (a hand-edited unknown value is judged fail-closed at read).
+      // See change: retire-trusted-networks-bypass.
+      if ("network" in partial && (partial.network === null || typeof partial.network !== "object" || Array.isArray(partial.network))) {
+        return reply.code(400).send({ success: false, error: "network must be an object" });
+      }
+      if (
+        partial.network !== undefined &&
+        "trustMode" in partial.network &&
+        partial.network.trustMode !== "pair" &&
+        partial.network.trustMode !== "legacy"
+      ) {
+        return reply.code(400).send({ success: false, error: 'network.trustMode must be "pair" or "legacy"' });
+      }
+      // `pairing.acceptLanRequests` is a security switch: boolean only, never
+      // coerced. See change: add-lan-knock-pairing.
+      if (
+        partial.pairing !== null &&
+        typeof partial.pairing === "object" &&
+        "acceptLanRequests" in partial.pairing &&
+        typeof partial.pairing.acceptLanRequests !== "boolean"
+      ) {
+        return reply.code(400).send({ success: false, error: "pairing.acceptLanRequests must be a boolean" });
+      }
+      // `tls` block / listener-port validation against the MERGED config (design D7).
+      // See change: add-tailscale-cert-tls.
+      if (touchesTlsOrPorts(partial)) {
+        const { readRawConfig } = await import("../config-api.js");
+        const tlsError = validateTlsConfigWrite(partial, readRawConfig());
+        if (tlsError) return reply.code(400).send({ success: false, error: tlsError });
+      }
+      const saved = await saveConfigAndMirror(partial);
+      if (!saved.ok) {
+        return reply.code(500).send({ success: false, error: saved.error });
+      }
+      const { result, reloaded, piMirror } = saved;
+      // The `tls` block is applied live: await only the listener (re)bind. Certificate
+      // work is scheduled, never awaited here. A reconcile failure is reported in TLS
+      // status; the config stays as written. See change: add-tailscale-cert-tls (D7).
+      if (partial.tls !== undefined) {
+        try {
+          await deps.tls?.reconcile();
+        } catch (err) {
+          console.warn(`[tls] reconcile after config write failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      // Push the recomputed reachability when ANY part of the published fact
+      // moved — not just `pendingBindHost`. A write that edits `trustedNetworks`
+      // or `auth.bypassHosts` keeps the same bind host yet changes
+      // `unreachable`, and gating on the host alone would leave every OTHER
+      // connected browser on a stale advisory until it reloaded. Failure-
+      // isolated: a config write must never fail because an advisory could not
+      // be computed. See change: warn-unreachable-trusted-networks.
+      try {
+        const before = getLastBindReachability();
+        const configModule = await import("@blackbelt-technology/pi-dashboard-shared/config.js");
+        const after = computeBindReachability(configModule.loadConfig);
+        if (!before || !sameReachability(before, after)) {
+          browserGateway?.broadcastToAll({ type: "reachability_updated", reachability: after });
+        }
+      } catch { /* advisory only */ }
+      if (partial.autoShutdown !== undefined || partial.shutdownIdleSeconds !== undefined) {
+        config.autoShutdown = reloaded.autoShutdown;
+        config.shutdownIdleSeconds = reloaded.shutdownIdleSeconds;
+      }
+      if (partial.auth !== undefined) {
+        config.authConfig = reloaded.auth;
+        if (reloaded.auth && (fastify as any)._reloadAuth) {
+          // Full config, not only `reloaded.auth`: the reload has to merge
+          // top-level `trustedNetworks` exactly as boot does (D15).
+          await (fastify as any)._reloadAuth(reloaded.auth, reloaded);
+        }
+      }
+      // The delivery switch and grace are read live by the vault hub; push the
+      // new state to connected sessions now (a disable withdraws their values).
+      if (partial.vault !== undefined) deps.onVaultConfigChanged?.();
+      if (partial.openspec !== undefined && directoryService) {
+        directoryService.reconfigurePolling(reloaded.openspec);
+        // Live pages re-hydrate the fleet switches (offerInitialization /
+        // enabled) without a reload — the ABSENT offer gate reads them.
+        // See change: add-openspec-init-affordances.
+        browserGateway?.broadcastToAll({ type: "config_updated", section: "openspec" });
+      }
+      // The editor large-file limit is read per render by every open browser
+      // (CappedViewer gate); it needs no restart. See change: gate-changed-on-disk-by-content.
+      if (partial.editor !== undefined) {
+        browserGateway?.broadcastToAll({ type: "config_updated", section: "editor" });
+      }
+      // Session-ordering gates take effect immediately (no restart) so the
+      // Settings toggles apply to the next status transition.
+      // See change: simplify-session-card-ordering.
+      if (partial.completedFirst !== undefined) {
+        config.completedFirst = reloaded.completedFirst;
+      }
+      if (partial.questionFirst !== undefined) {
+        config.questionFirst = reloaded.questionFirst;
+      }
+      // Sidebar folder list mode / attention peek: every open browser re-reads
+      // /api/config. See change: add-focus-mode-and-card-block-toggles.
+      if (partial.folderListMode !== undefined || partial.folderAttentionPeek !== undefined) {
+        browserGateway?.broadcastToAll({ type: "config_updated", section: "sessions" });
+      }
+      // Live-reload tunnel watchdog when its config changes (no restart needed).
+      // We always restart the watchdog when partial.tunnel is present and a
+      // tunnel is currently active — covers both watchdog flag changes and
+      // numeric tweaks. Cheap operation: stop + start with new config.
+      if (partial.tunnel !== undefined) {
+        config.tunnelWatchdog = reloaded.tunnel.watchdog;
+        // Re-source the v2 reserved-name / persistence from the reloaded config.
+        config.tunnelReservedName = reloaded.tunnel.zrok?.reservedName;
+        config.tunnelPersistent = reloaded.tunnel.zrok?.persistent;
+        if (getTunnelUrl()) {
+          stopTunnelWatchdog();
+          const wd = reloaded.tunnel.watchdog;
+          if (wd?.enabled !== false) {
+            startTunnelWatchdog(
+              {
+                getUrl: getTunnelUrl,
+                recycle: async () => {
+                  await deleteTunnel(config.port);
+                  return await createTunnel(config.port, config.tunnelReservedName);
+                },
+              },
+              wd,
+            );
+          }
+        }
+      }
+
+      return {
+        success: true,
+        restartRequired: result.restartRequired,
+        ...(piMirror ? { piMirror } : {}),
+      };
+    },
+  );
+
+  // Which redirect base actually WON, and which tier produced it (D10). The
+  // D4 warning says a value is malformed; this says which of the four tiers is
+  // in force — the actual question when OAuth breaks.
+  //
+  // Gated (it discloses the deployment's public origin) but deliberately NOT
+  // remote-only: `networkGuard` admits loopback, which is how the `doctor`
+  // skill module reads it server-side without a JWT. A remote operator whose
+  // OAuth is broken cannot obtain one.
+  //
+  // `authActive: false` when the boot registry was empty: in that state no
+  // `/auth/*` route and no `_reloadAuth` exist, so a live-looking value would
+  // be boot-frozen and misleading (D6).
+  // See change: config-override-oauth-redirect-base.
+  fastify.get(
+    "/api/auth/diagnostics",
+    { preHandler: networkGuard },
+    async () => {
+      const { resolveRedirectBase } = await import("../auth/auth.js");
+      const cfg = (await import("@blackbelt-technology/pi-dashboard-shared/config.js")).loadConfig();
+      const { base, source } = resolveRedirectBase(config.port, cfg.auth?.redirectBaseUrl);
+      return {
+        success: true,
+        data: {
+          redirectBase: base,
+          source,
+          authActive: Boolean((fastify as any)._reloadAuth),
+          providerCount: Object.keys(cfg.auth?.providers ?? {}).length,
+        },
+      } satisfies ApiResponse;
+    },
+  );
+
+  // Delete ONE OAuth provider. A separate verb rather than a delete sentinel
+  // inside the secret-preserving providers merge (D9), behind the same guard as
+  // PUT /api/config. Idempotent. Deleting the LAST provider leaves auth
+  // ENFORCED with no login path, so it is refused without `?force=true`.
+  // See change: config-override-oauth-redirect-base.
+  fastify.delete<{ Params: { id: string }; Querystring: { force?: string } }>(
+    "/api/config/auth/providers/:id",
+    { preHandler: networkGuard },
+    async (request, reply) => {
+      const { id } = request.params;
+      const force = request.query?.force === "true";
+      const result = deleteAuthProvider(id, { force });
+
+      if (!result.success && result.reason === "last-provider") {
+        return reply.code(409).send({
+          success: false,
+          error:
+            `"${id}" is the last OAuth provider. Deleting it does NOT disable auth: ` +
+            "the gate stays installed and /auth/login would list no way to sign in, " +
+            "which can lock out every remote operator until the server is restarted. " +
+            "Repeat with ?force=true to accept that.",
+        } satisfies ApiResponse);
+      }
+      if (!result.success) {
+        return reply.code(500).send({ success: false, error: result.error } satisfies ApiResponse);
+      }
+
+      if (result.deleted) {
+        const reloaded = (await import("@blackbelt-technology/pi-dashboard-shared/config.js")).loadConfig();
+        config.authConfig = reloaded.auth;
+        if (reloaded.auth && (fastify as any)._reloadAuth) {
+          // Full config, not only `reloaded.auth`: the reload has to merge
+          // top-level `trustedNetworks` exactly as boot does (D15).
+          await (fastify as any)._reloadAuth(reloaded.auth, reloaded);
+        }
+      }
+      return {
+        success: true,
+        data: { deleted: result.deleted, remaining: result.remaining },
+      } satisfies ApiResponse;
+    },
+  );
+
+  // Tunnel endpoints
+  /**
+   * Per-provider readiness for the Gateway board.
+   *
+   * Shells out per provider (~4 subprocesses per call), so it is polled ONLY
+   * while the dialog is open — there is no background evaluation and no push
+   * channel. Guarded like the other config-adjacent routes: it discloses which
+   * tunnelling tools the operator has installed and enrolled.
+   *
+   * A throwing or hung provider degrades its own row only; the board never
+   * blanks because one CLI stalled. See change: add-zrok-custom-reserved-name.
+   */
+  fastify.get(
+    "/api/tunnel-readiness",
+    { preHandler: networkGuard },
+    async () => {
+      const providers = await getProviderReadiness({
+        zerotierNetworkId: (config.tunnelConfig as { zerotier?: { networkId?: string } } | undefined)?.zerotier
+          ?.networkId,
+      });
+      return {
+        success: true,
+        data: { providers, checkedAt: new Date().toISOString() },
+      } satisfies ApiResponse;
+    },
+  );
+
+  // Deliberately UNGATED, as before this change — the client reads it to render
+  // the tunnel indicator before any auth exists.
+  fastify.get("/api/tunnel-status", async () => {
+    // Ungated: the toolbar indicator gets COUNTS only (planned vs connected
+    // providers) - never provider errors or names. In-memory, no shell-out.
+    const configModule = await import("@blackbelt-technology/pi-dashboard-shared/config.js");
+    const planned = gatewayProviderStatus(configModule.loadConfig().tunnel ?? config.tunnelConfig);
+    const gateway = { connected: planned.filter((p) => p.state === "connected").length, expected: planned.length };
+    const status = {
+      ...getTunnelStatus({
+        reservedName: config.tunnelReservedName,
+        persistent: config.tunnelPersistent,
+      }),
+      gateway,
+    };
+    // `degraded.configuredName` is, BY DEFINITION, a reserved name the operator
+    // owns that does NOT appear in the served URL — so unlike `url` it is not
+    // already public. Emitting it here would disclose it to an unauthenticated
+    // caller whenever no auth gate is installed, which is exactly the
+    // deployment shape a tunnel creates. The degraded FLAG is kept (the
+    // indicator needs it); the name is redacted and served from the gated
+    // `/api/tunnel-readiness`-adjacent surfaces the dialog already uses.
+    if (status.status === "active" && status.degraded) {
+      return { ...status, degraded: { configuredName: "", ...(status.degraded.effectiveName ? { effectiveName: status.degraded.effectiveName } : {}) } };
+    }
+    return status;
+  });
+
+  // The gated twin of `/api/tunnel-status` — same projection, but allowed to
+  // name the configured reserved name. The Gateway dialog reads this one.
+  fastify.get(
+    "/api/tunnel-status-detail",
+    { preHandler: networkGuard },
+    async () => {
+      // `connectedProviders` + per-provider `providers` (state + reason) drive
+      // the Setup Connect/Disconnect toggle. In-memory; safe to poll.
+      const configModule = await import("@blackbelt-technology/pi-dashboard-shared/config.js");
+      return {
+        ...getTunnelStatus({
+          reservedName: config.tunnelReservedName,
+          persistent: config.tunnelPersistent,
+        }),
+        connectedProviders: connectedProviderIds(),
+        providers: gatewayProviderStatus(configModule.loadConfig().tunnel ?? config.tunnelConfig),
+      };
+    },
+  );
+
+  fastify.post("/api/tunnel-connect", async () => {
+    // Read the tunnel block FRESH: the provider/mode the Setup tab just saved
+    // must apply without a server restart (`config.tunnelConfig` is a boot
+    // snapshot).
+    const configModule = await import("@blackbelt-technology/pi-dashboard-shared/config.js");
+    const tunnelCfg = configModule.loadConfig().tunnel ?? config.tunnelConfig;
+    const zrokPrimary = !tunnelCfg?.provider || tunnelCfg.provider === "zrok";
+    if (zrokPrimary && getTunnelStatus().status === "unavailable") return { ok: false, error: "zrok not installed" };
+
+    // Primary + every enabled extra, each in its own mode; an already-active
+    // zrok is reused rather than short-circuiting the extras.
+    // See change: add-zrok-custom-reserved-name (D3).
+    const result = await connectGateway(tunnelCfg, config.port, {
+      zerotierNetworkId: tunnelCfg?.zerotier?.networkId,
+      zrokLastError: getZrokLastError,
+      zrokActiveUrl: () => {
+        const s = getTunnelStatus();
+        return s.status === "active" ? s.url : null;
+      },
+      createZrok: async () => {
+        // v2: resolve the reserved NAME (stored or minted-when-persistent) and
+        // cache it so watchdog recycles reuse the SAME name (stable URL).
+        const reservedName = ensureReservedName({
+          reservedName: config.tunnelReservedName,
+          persistent: config.tunnelPersistent,
+        });
+        config.tunnelReservedName = reservedName;
+        return createTunnel(config.port, reservedName);
+      },
+    });
+    for (const f of result.failures) {
+      console.warn(`tunnel: provider ${f.provider} did not connect: ${f.error}`);
+    }
+    const providers = gatewayProviderStatus(tunnelCfg);
+    if (!result.ok) return { ok: false, error: result.error ?? "Failed to create tunnel", providers };
+    const url = result.zrokUrl;
+    if (url) {
+      const wd = config.tunnelWatchdog;
+      if (wd?.enabled !== false) {
+        startTunnelWatchdog(
+          {
+            getUrl: getTunnelUrl,
+            recycle: async () => {
+              await deleteTunnel(config.port);
+              return await createTunnel(config.port, config.tunnelReservedName);
+            },
+          },
+          wd,
+        );
+      }
+    }
+    return { ok: true, url: result.url ?? undefined, providers };
+  });
+
+  /**
+   * Set, replace or clear the zrok reserved name — independently of connecting.
+   *
+   * The whole point is WHEN the user finds out. Previously the only way to run
+   * on a chosen name was to hand-edit config.json, and the only report of a
+   * failed reservation was a `console.warn` on the server while the UI showed a
+   * green tunnel at a URL the user never picked. This validates while they are
+   * still looking at the input and returns the typed reason.
+   *
+   * `networkGuard` is NOT optional here despite the route looking read-shaped
+   * from the client: it writes persisted config AND creates or destroys a
+   * remote resource on the operator's zrok account.
+   *
+   * Ordering is load-bearing in two directions:
+   *  - the OLD name is released only AFTER the new reservation succeeds, so a
+   *    failed replace can never leave the user holding neither name;
+   *  - a live share is torn down BEFORE `delete name`, mirroring the forget
+   *    path, so a reservation is never pulled out from under a running tunnel.
+   *
+   * See change: add-zrok-custom-reserved-name (D1).
+   */
+  fastify.post(
+    "/api/tunnel-reserved-name",
+    { preHandler: networkGuard },
+    async (req, reply) => {
+      const body = (req.body ?? {}) as { name?: string | null };
+      const previous = config.tunnelReservedName;
+      const live = getTunnelStatus({
+        reservedName: config.tunnelReservedName,
+        persistent: config.tunnelPersistent,
+      });
+      const liveUrl = live.status === "active" ? live.url : undefined;
+
+      // ── Clear ────────────────────────────────────────────────────
+      if (body.name === null || body.name === undefined) {
+        if (previous) {
+          // Tear the share down first, unconditionally: `delete name` against a
+          // running share would strip the reservation from under a live tunnel,
+          // and `liveUrl` is a snapshot that can under-report.
+          stopTunnelWatchdog();
+          await deleteTunnel(config.port);
+          if (!releaseShare(previous)) {
+            console.warn(
+              `tunnel: reserved name "${previous}" could not be released; it may remain reserved on the zrok account`,
+            );
+          }
+        }
+        const written = writeConfigPartial({
+          tunnel: { zrok: { reservedName: undefined, persistent: false } },
+        });
+        if (!written.success) {
+          return reply.code(500).send({
+            success: false,
+            error: written.error ?? "failed to clear reserved name",
+          } satisfies ApiResponse);
+        }
+        config.tunnelReservedName = undefined;
+        config.tunnelPersistent = false;
+        return { success: true, data: { status: "ok", name: previous ?? "" } } satisfies ApiResponse<ReservedNameResult>;
+      }
+
+      // ── Set / replace ────────────────────────────────────────────
+      // An empty string is a submitted-nothing, never a request to generate.
+      // `reserveName` rejects it as `invalid`; asserting it here too keeps the
+      // route honest if that ever changes.
+      const requested = String(body.name);
+      // ASYNC: the sync twin blocks the event loop for up to 30s, freezing every
+      // WebSocket heartbeat and session event in the dashboard while the zrok
+      // control plane is slow.
+      const outcome = await reserveNameAsync(requested);
+      if (outcome.status !== "ok") {
+        // A failed reservation is inert by construction: nothing was released,
+        // nothing persisted, and any running tunnel is untouched.
+        return {
+          success: true,
+          data: { status: outcome.status, name: outcome.name, message: outcome.message },
+        } satisfies ApiResponse<ReservedNameResult>;
+      }
+
+      // Reservation succeeded and `reserveName` already persisted the name with
+      // `persistent: true`. Only NOW may the old reservation be released.
+      if (previous && previous !== outcome.name) {
+        // Tear the share down UNCONDITIONALLY, matching the forget path. A
+        // share that is running but transiently reports inactive would
+        // otherwise have its reservation pulled out from under it.
+        stopTunnelWatchdog();
+        await deleteTunnel(config.port);
+        if (!releaseShare(previous)) {
+          // The new name is already persisted, so this cannot be unwound — but
+          // an orphaned reservation counts against the account's limit and
+          // must not vanish into a discarded boolean.
+          console.warn(
+            `tunnel: reserved name "${previous}" was replaced but could not be released; it may remain reserved on the zrok account`,
+          );
+        }
+      }
+      config.tunnelReservedName = outcome.name;
+      config.tunnelPersistent = true;
+
+      return {
+        success: true,
+        data: {
+          status: "ok",
+          name: outcome.name,
+          // Only claimed when the tunnel is STILL UP. On a replace the share is
+          // torn down first (a release must never run against a live share), so
+          // reporting "still serving the old URL" there would be false at the
+          // moment of the response. `tunnelStopped` says what actually happened.
+          ...(liveUrl && previous && previous !== outcome.name
+            ? { tunnelStopped: true }
+            : liveUrl
+              ? { liveUrlUnchanged: liveUrl }
+              : {}),
+        },
+      } satisfies ApiResponse<ReservedNameResult>;
+    },
+  );
+
+  fastify.post("/api/tunnel-disconnect", async (req, reply) => {
+    // Pass port so orphan zrok processes bound to this endpoint are also
+    // swept (not just the one we tracked via pid-file).
+    stopTunnelWatchdog();
+    await deleteTunnel(config.port);
+    // Non-primary tunnels come down too, or they would keep serving (and keep
+    // widening CORS) after the operator disconnected the Gateway.
+    await disconnectResolvedProviders(config.port);
+    // Plain disconnect PRESERVES the reserved name (stable URL survives a
+    // disconnect/restart). `{forget:true}` is the ONLY path that releases it:
+    // `delete name` + clear config. See change: support-zrok-v2.
+    const body = (req.body ?? {}) as { forget?: boolean };
+    if (body.forget === true) {
+      const name = config.tunnelReservedName;
+      if (name) releaseShare(name);
+      const written = writeConfigPartial({ tunnel: { zrok: { reservedName: undefined, persistent: false } } });
+      if (!written.success) {
+        // The name was released remotely but disk still points at it — surface
+        // the failure instead of a misleading ok.
+        return reply.code(500).send({ ok: false, error: written.error ?? "failed to clear reserved name" });
+      }
+      config.tunnelReservedName = undefined;
+      config.tunnelPersistent = false;
+    }
+    return { ok: true };
+  });
+
+  // Resolved ONCE at registration, not per request: the id is immutable for the
+  // process, and `ensureInstanceId` touches the filesystem. Inside the handler
+  // it made an unauthenticated, frequently-polled route do file I/O
+  // (CodeQL js/missing-rate-limiting).
+  const healthInstanceFields = instanceIdHealthFields(ensureInstanceId(undefined, config.piPort));
+  // Runtime-overlay identity, refreshed off the request path.
+  // See change: electron-runtime-overlay-updates (D10).
+  const runtimeOverlayDir = getRuntimeOverlayDir();
+  if (parseLaunchSource(process.env) === "electron") {
+    try { ensureRuntimeRequest(runtimeOverlayDir); } catch { /* non-fatal: menu pick reports request_unreadable */ }
+  }
+  const runtimeHealth = createRuntimeHealthProvider({
+    env: process.env,
+    serverVersion: version ?? "unknown",
+    readRequest: () => readRuntimeRequest(runtimeOverlayDir),
+    readState: () => readRuntimeState(runtimeOverlayDir),
+    localSnapshot: (p) => deriveLocalIdentity(p).snapshot,
+  });
+  fastify.addHook("onClose", async () => runtimeHealth.stop());
+
+  // Health endpoint — includes server + agent process metrics
+  fastify.get("/api/health", async (request, reply) => {
+    // The payload is caller-dependent (`accessGrants`, `trustPosture`,
+    // `push` are disclosure-gated): never let a cache replay it to another
+    // caller. See change: add-server-push-notifications.
+    reply.header("Cache-Control", "no-store, private");
+    const mem = process.memoryUsage();
+    // Telemetry reads are failure-isolated so a throwing provider can never
+    // turn /api/health into a 500. See change: instrument-session-hydration-timing.
+    let eventLoopDelay = { meanMs: 0, p99Ms: 0, maxMs: 0 };
+    try { eventLoopDelay = readEventLoopDelay?.() ?? eventLoopDelay; } catch { /* keep zeros */ }
+    let hydration: ReturnType<HydrationMetrics["snapshot"]> = [];
+    try { hydration = hydrationMetrics?.snapshot() ?? hydration; } catch { /* keep empty */ }
+    let eventLoopSpikesSnap: ReturnType<EventLoopSpikeMetrics["snapshot"]> = [];
+    try { eventLoopSpikesSnap = eventLoopSpikes?.snapshot() ?? eventLoopSpikesSnap; } catch { /* keep empty */ }
+    let notifyLogStats = { evictedEntries: 0, bySession: {} as Record<string, number> };
+    try { notifyLogStats = browserGateway?.getNotifyLogStats?.() ?? notifyLogStats; } catch { /* keep zeros */ }
+    let questionStats: unknown;
+    try { questionStats = browserGateway?.getQuestionStats?.(); } catch { /* omit */ }
+    // Provider-OAuth readiness. Failure-isolated like the other telemetry reads:
+    // when the pi runtime exposes no provider definitions, sign-in is
+    // unavailable but EVERY other route keeps serving, and the message names
+    // the resolved pi-coding-agent version so the operator can see a version
+    // skew rather than a bare symptom.
+    // See change: delegate-provider-oauth-to-pi-ai (D3).
+    let accessGrants: AccessGrantHealth | null = null;
+    // `/api/health` is unguarded (tunnel-reachable): `accessGrants` names the
+    // host-gate mode, YOLO state and whether an operator is online, so it is
+    // served only to an authenticated or genuinely-local caller.
+    if (canDiscloseAccessPosture(request)) {
+      try { accessGrants = readAccessGrants?.() ?? null; } catch { /* keep null */ }
+    }
+    // Inert-entry flag: a loopback entry in trustedNetworks/bypassHosts never
+    // admits tunnel traffic. Same disclosure gate as `accessGrants`.
+    // See change: fix-trusted-network-tunnel-bypass (D3).
+    // Also carries the effective trust mode and the in-memory network-only
+    // admission counters (counts only — never a peer address). Zeroed in `pair`,
+    // where no network-only admission can occur.
+    // See change: retire-trusted-networks-bypass (D4).
+    let trustPosture: {
+      trustedHasLoopback: boolean;
+      trustMode: "pair" | "legacy";
+      trustModeOrigin: "upgrade" | "operator" | null;
+      networkOnly: { admissions: number; distinctPeers: number; lastAt: number | null };
+    } | null = null;
+    if (canDiscloseAccessPosture(request)) {
+      try {
+        const trusted = readTrustedNetworks?.() ?? config.resolvedTrustedNetworks ?? [];
+        const { mode, origin } = effectiveTrustMode();
+        trustPosture = {
+          trustedHasLoopback: loopbackCoveringEntries(trusted).length > 0,
+          trustMode: mode,
+          trustModeOrigin: origin,
+          networkOnly: mode === "pair" ? { admissions: 0, distinctPeers: 0, lastAt: null } : networkOnlySnapshot(),
+        };
+      } catch { /* keep null */ }
+    }
+    // Push errors name local config (file paths, missing keys): same
+    // disclosure gate. Absent key when undisclosable or push is disabled.
+    // See change: add-server-push-notifications.
+    let push: { errors: string[] } | null = null;
+    if (readPushErrors && canDiscloseAccessPosture(request)) {
+      try { push = { errors: [...readPushErrors()] }; } catch { /* keep null */ }
+    }
+    let providerAuthError: string | null = null;
+    try { providerAuthError = getRegistryError(); } catch { /* keep null */ }
+    // TLS listener status: `{ enabled, bound }` for every caller; the detail
+    // (port, gates, certificate names/errors) only where access posture may be
+    // disclosed. Reads cached state only — never calls out. See change: add-tailscale-cert-tls (D8).
+    let tlsStatus: ReturnType<NonNullable<typeof deps.tls>["status"]> | null = null;
+    try { tlsStatus = deps.tls?.status(canDiscloseAccessPosture(request)) ?? null; } catch { /* omit */ }
+    const activeSessions = sessionManager.listActive();
+    const agentMetrics = activeSessions
+      .filter(s => s.processMetrics)
+      .map(s => ({
+        sessionId: s.id,
+        cwd: s.cwd,
+        ...s.processMetrics,
+      }));
+    return {
+      ok: true,
+      pid: process.pid,
+      // Access-grant prompting counters (additive; null when unwired or on a
+      // throwing read). See change: add-access-grant-dialog (task 9.3).
+      accessGrants,
+      ...(tlsStatus ? { tls: tlsStatus } : {}),
+      // Loopback-trusted-entry posture (additive; null unless disclosable).
+      // See change: fix-trusted-network-tunnel-bypass (D3).
+      trustPosture,
+      ...(push ? { push } : {}),
+      // Rendezvous instance id (NOT the Ed25519 `identity`): names which
+      // same-HOME instance answered, so a bridge can tell its own dashboard
+      // from a foreign listener on a recycled port. An IDENTIFIER, never a
+      // credential — this route has no preHandler, so the value is public.
+      // See change: add-pi-gateway-transport-identity (D14).
+      ...healthInstanceFields,
+      // launchSource: single source of truth for arm-aware client gating
+      // (e.g. hide pi-core update UI under Electron, since bundled
+      // node_modules/ is read-only). See change:
+      // eliminate-electron-runtime-install task 3.2.
+      launchSource: parseLaunchSource(process.env),
+      // Active dashboard runtime (origin/id/version/updatable/source/…); redacted
+      // (no local path / git / failure detail) for unauthenticated remote callers. Drives
+      // ONLY the Settings → Updates section; pi-core gates are unchanged.
+      // See change: electron-runtime-overlay-updates (D10).
+      runtime: canDiscloseAccessPosture(request) ? runtimeHealth.get() : redactRuntimeHealth(runtimeHealth.get()),
+      // Boot parent PID (static, captured at module load) + live parent PID
+      // (reparenting-aware, read fresh per request) + boot-parent liveness.
+      // Powers Electron zombie detection: POSIX compares live `ppid` against
+      // `bootParentPid` plus `bootParentAlive`; Windows uses `bootParentAlive`
+      // alone (Windows never reparents). See change:
+      // electron-attach-ownership-fixes.
+      bootParentPid,
+      ppid: readLivePpid(),
+      bootParentAlive: computeBootParentAlive(),
+      // Ephemeral mode is opt-in via --ephemeral ONLY (D5); surfaced so the
+      // isolated-verification recipe can assert the server will self-exit
+      // when its boot parent dies. See change:
+      // fix-autostart-discovery-precedence (task 5.7).
+      ephemeral: config.ephemeral === true,
+      // Count of pi WebSocket connections held by the pi-gateway. Feeds the
+      // bridge-orphan promotion below and future Doctor advisories.
+      activeBridgeCount: piGateway?.connectionCount() ?? 0,
+      /** `{ error: null }` when the OAuth registry built; otherwise the reason
+       * (naming the resolved pi-coding-agent version) sign-in is unavailable. */
+      providerAuth: { error: providerAuthError },
+      // Bridge-contention observability: `bridgeContentionCount` is cumulative
+      // for the process lifetime (a rule firing too often), while
+      // `contendedSessionIds` is what an operator needs mid-incident and
+      // follows the contention record's own lifecycle (reclaim, 60 s expiry,
+      // incumbent disconnect, or session end).
+      // See change: fix-duplicate-bridge-registration (D6).
+      bridgeContentionCount: piGateway?.contention.count() ?? 0,
+      contendedSessionIds: piGateway?.contention.contendedIds() ?? [],
+      // The bound gateway port. Diagnosing "my bridge cannot register" needs
+      // the port the gateway actually bound, which is not the file-config
+      // value when it was allocated dynamically.
+      piGatewayPort: piGateway?.address() ?? null,
+      // Which bridge listeners are active; the loopback fallback is visible
+      // here without reading the log. No path, no pid: /api/health is
+      // unauthenticated. See change: fix-gateway-socket-stale-owner (D7).
+      gateway: piGateway?.bridgeListeners?.() ?? { listeners: [] },
+      // Derived label: promotes a stale `bridge` (no live session, past the
+      // 30 s grace window) to `bridge-orphaned`. Static `launchSource` above
+      // is left untouched for the `decideShutdownOnQuit` back-compat rule.
+      launchSourceEffective: computeEffectiveLaunchSource({
+        raw: parseLaunchSource(process.env),
+        activeBridgeCount: piGateway?.connectionCount() ?? 0,
+        uptimeMs: Date.now() - serverStartTime,
+      }),
+      // Host OS the dashboard server runs on. Used by Settings → Tools to
+      // filter install hints to the host (not the browser) OS — a mobile
+      // browser hitting a Linux dashboard must see Linux install commands.
+      // See change: register-bash-and-tool-install-help.
+      platform: process.platform,
+      // Server-advertised host capabilities. `systemOpen` gates the editor-pane
+      // *Open in system app* / *Reveal in file manager* tab actions: true only
+      // on a desktop-capable host, false headless/container/remote. Computed
+      // once at startup. See change: open-view-command-in-editor-pane (D9).
+      capabilities: { systemOpen: systemOpenCapability() },
+      version: version ?? "unknown",
+      uptime: Math.floor((Date.now() - serverStartTime) / 1000),
+      // ISO timestamp of process start. Used by the Plugins tab to detect
+      // server restarts and clear the Restart-required banner.
+      // See change: add-plugin-activation-ui.
+      startedAt: new Date(serverStartTime).toISOString(),
+      mode: config.dev ? "dev" : "production",
+      server: {
+        rss: mem.rss,
+        heapUsed: mem.heapUsed,
+        heapTotal: mem.heapTotal,
+        // V8's heap ceiling for this process. Absent before this change, so no
+        // client could compute headroom against the limit the server dies at.
+        // Process-derived (not store-derived), so it sits with the gauges.
+        // See change: bound-event-store-by-bytes (D4).
+        heapSizeLimit: getHeapStatistics().heap_size_limit,
+        // Major-GC pressure on the SERVER, and the ceiling the RUNNING process
+        // was started with. Cumulative (a polled GET must be idempotent) and
+        // process-derived (`serverHeap` applies on the next start/restart, so
+        // the configured value can legitimately differ from this one until
+        // then — which is exactly what this field makes visible).
+        // See change: bound-session-heap-and-gc-telemetry (D13),
+        //             guard-server-heap-and-store-coupling (D5).
+        ...serverHeapTelemetry(),
+        activeSessions: activeSessions.length,
+        totalSessions: sessionManager.listAll().length,
+      },
+      agents: agentMetrics,
+      // Whether any spawn had to fall back to the `NODE_OPTIONS` subset because
+      // its resolution offered no runtime slot. Reported here as well as in the
+      // server log so it is discoverable live, not only post-mortem.
+      // See change: bound-session-heap-and-gc-telemetry (D3a).
+      sessionHeapFallback: heapFallbackStatus(),
+      plugins: enrichWithBridgeSource(getPluginStatusStore().listAll()),
+      bundleHash,
+      // Served-artifact coherence (design D4). Additive; `bundleHash` above
+      // keeps its shape and meaning. No filesystem path is exposed.
+      // See change: add-served-build-coherence-and-hash-parity.
+      clientBuild,
+      proxy: getModelProxyStatus(),
+      // Windows-only: active git/sh source readout for Settings + Diagnostics.
+      // null on macOS/Linux. See change: embed-git-bash-on-windows.
+      gitSource: getGitSourceReadout(whichSync),
+      // Event-loop delay (ms) over the window since the last /api/health read.
+      // Correlates hydration spikes with real main-loop lag. Additive field.
+      // See change: instrument-session-hydration-timing.
+      eventLoopDelay,
+      // Recent worst-case event-loop stalls, newest-first. Additive field.
+      // Each entry: {at, ms, turn}; `turn` is the attributed poll turn
+      // (tickOpen/dirPollPre/dirPollPost) or null for the dedicated sampler.
+      // See change: attribute-openspec-poll-eventloop-stalls.
+      eventLoopSpikes: eventLoopSpikesSnap,
+      // Recent session-hydration timing samples, newest-first. Additive field.
+      hydration,
+      // pi-version-skew compatibility (30s-cached) or null when pi is
+      // unresolvable. Drives the Settings → General advisory. See change:
+      // restore-pi-version-skew-surface.
+      compatibility: readCompatibility(),
+      // Pi runtime divergence, under two distinct labels (see readPiDivergence).
+      // See change: select-pi-runtime-install (design D5).
+      piRuntime: readPiDivergence(),
+      // Per-hop dropped-frame counters (observability for silently-dropped
+      // WS frames). `serverToBrowser` = frames the fanout skipped under
+      // back-pressure, split transcript vs blocking; `bridgeToServer` = the max
+      // bridge ring-buffer eviction count reported across active sessions'
+      // heartbeats. `coalescedState` / `stalledSocketsTerminated` are the
+      // pending-state map's counters, lifted beside the drops per the spec
+      // (coalescing is NOT a drop — `serverToBrowser.total` never moves for
+      // it). The fallback is TYPED (EMPTY_DROPPED_FRAME_STATS), not an
+      // inline literal — `a ?? b` does not check `b`, and an untyped literal
+      // missing `blocking` would typecheck while reporting a stale shape.
+      // See changes: fix-stuck-tool-card-on-dropped-event,
+      // fix-pending-prompt-lost-on-replay, fix-connect-snapshot-frame-loss (D8).
+      droppedFrames: (() => {
+        const serverToBrowser = browserGateway?.getDroppedFrameStats?.() ?? EMPTY_DROPPED_FRAME_STATS;
+        return {
+          serverToBrowser,
+          bridgeToServer: activeSessions.reduce(
+            (max, s) => Math.max(max, (s.processMetrics as { droppedBufferedFrames?: number } | undefined)?.droppedBufferedFrames ?? 0),
+            0,
+          ),
+          coalescedState: serverToBrowser.coalescedState,
+          stalledSocketsTerminated: serverToBrowser.stalledSocketsTerminated,
+          // Status-reconcile debt counters. Deliberately BESIDE the drop
+          // counters, never folded into them: the reconcile must not mask the
+          // shed it recovers from, so a regression stays attributable.
+          // See change: fix-backpressure-status-and-subagent-frames.
+          statusReconcileQueued: serverToBrowser.statusReconcileQueued,
+          statusReconcileSent: serverToBrowser.statusReconcileSent,
+        };
+      })(),
+      // Browser-socket `bufferedAmount` occupancy. The drop counters are
+      // cumulative and instance-wide: they can neither attribute saturation to
+      // a socket nor bound its duration, so a back-pressure claim was only ever
+      // inferrable. Sampled at the send-decision sites (which already read
+      // `bufferedAmount` for the shed predicate), never on a timer — a periodic
+      // sampler breaks the gateway's zero-timers-when-unsaturated invariant.
+      // `msAboveThreshold` includes spans still open at read time.
+      // Typed-zero fallback (the EMPTY_TRIM_STATS convention) — `a ?? b` does
+      // not typecheck `b`, so an inline literal could silently drift.
+      // See change: fix-backpressure-status-and-subagent-frames.
+      socketBufferOccupancy: browserGateway?.getSocketBufferOccupancy?.() ?? EMPTY_SOCKET_BUFFER_OCCUPANCY,
+      // Subagent-tick throttle counters, summed across active bridges. Rides
+      // the heartbeat `processMetrics` transport, so the per-session breakdown
+      // is already in `agents[]` above and this block is the session-agnostic
+      // roll-up. `tickDiscardedAtTerminal` + `tickDroppedNotReady` are the
+      // throttle's only two information-loss modes; they sit here beside the
+      // other silent-loss counters for exactly that reason.
+      // See change: reduce-bridge-tick-bandwidth (D6).
+      subagentTickThrottle: activeSessions.reduce(
+        (acc, s) => {
+          const m = s.processMetrics as Record<string, number | undefined> | undefined;
+          acc.tickForwarded += m?.tickForwarded ?? 0;
+          acc.tickCoalesced += m?.tickCoalesced ?? 0;
+          acc.tickDiscardedAtTerminal += m?.tickDiscardedAtTerminal ?? 0;
+          acc.tickDroppedNotReady += m?.tickDroppedNotReady ?? 0;
+          return acc;
+        },
+        { tickForwarded: 0, tickCoalesced: 0, tickDiscardedAtTerminal: 0, tickDroppedNotReady: 0 },
+      ),
+      // Plugin event-forward registry counters summed across active bridges
+      // (declared channels, rejected declaration entries, conflicts, retained +
+      // dropped stream/latest messages). See change: add-plugin-bridge-contributions.
+      pluginEventForward: activeSessions.reduce(
+        (acc, s) => {
+          const m = s.processMetrics as Record<string, number | undefined> | undefined;
+          acc.declared += m?.pluginForwardDeclared ?? 0;
+          acc.rejected += m?.pluginForwardRejected ?? 0;
+          acc.conflicts += m?.pluginForwardConflicts ?? 0;
+          acc.retained += m?.pluginForwardRetained ?? 0;
+          acc.dropped += m?.pluginForwardDropped ?? 0;
+          return acc;
+        },
+        { declared: 0, rejected: 0, conflicts: 0, retained: 0, dropped: 0 },
+      ),
+      // Poll-cost counters (SUM across live sessions, not max).
+      // See change: optimize-polling-hot-paths.
+      pollCost: activeSessions.reduce(
+        (acc, s) => {
+          const m = s.processMetrics as Record<string, number | undefined> | undefined;
+          for (const k of POLL_COST_KEYS) acc[k] += m?.[k] ?? 0;
+          return acc;
+        },
+        Object.fromEntries(POLL_COST_KEYS.map((k) => [k, 0])) as Record<(typeof POLL_COST_KEYS)[number], number>,
+      ),
+      // Notify-log cap evictions (silent transcript loss on a chatty emitter),
+      // surfaced beside the other silent-loss counters.
+      // See change: split-notify-from-prompt-request.
+      notifyLog: notifyLogStats,
+      // Pending-question store + brief fallbacks (task 4.6). See change: add-pending-question-stack.
+      ...(questionStats !== undefined ? { questions: questionStats } : {}),
+      // In-memory event-store shed counters (per-session trim + cross-session
+      // LRU eviction). The third silent tool_execution_end loss path, made
+      // observable beside droppedFrames. See change: instrument-event-store-trim.
+      // The fallback is the store's own EXPLICITLY-TYPED all-zero constant, not
+      // an inline literal: TypeScript types `a ?? b` as `NonNullable<A> | B` and
+      // does NOT check `b` against `A`, so an inline literal would silently omit
+      // a newly-required field while still typechecking.
+      // See change: collapse-superseded-tool-execution-updates (D9).
+      storeTrim: eventStore?.getTrimStats?.() ?? EMPTY_TRIM_STATS,
+      // Cumulative tool-result route answers: `202` still running, `410`
+      // recorded eviction. See change: distinguish-tool-result-pending-vs-gone (D6).
+      toolResult: { pending: toolResultStats?.pending ?? 0, gone: toolResultStats?.gone ?? 0 },
+      // Store-derived retention signals (D4), DELIBERATELY separate from the
+      // cumulative `storeTrim` counters: a gauge, a set of configuration
+      // constants and a boolean latch all break the "never reset on read"
+      // invariant that struct exists to hold. `residentBytes` is the gauge an
+      // operator reads against `server.heapSizeLimit` for headroom; the
+      // EFFECTIVE budgets are published because the floor clamp runs in the
+      // store, so configured ≠ enforced. Typed-zero fallback (the
+      // EMPTY_TRIM_STATS convention), never an inline literal.
+      // See change: bound-event-store-by-bytes (D4).
+      storeRetention: eventStore?.getRetention?.() ?? EMPTY_STORE_RETENTION,
+      // Keeper-log disk posture: total/fileCount/largest plus the sweep's
+      // reclaimedBytes and the runawayFiles non-rotation signal (2× cap —
+      // the keeper is a separate process and cannot report its own rotation
+      // failures). Typed-zero fallback for the degraded case, never an
+      // inline literal (the EMPTY_TRIM_STATS convention). Failure-isolated:
+      // a throwing stats provider must never 500 the unguarded hot path.
+      // See change: fix-runaway-keeper-log-growth (D6, task 4.2).
+      keeperLogs: (() => {
+        try {
+          return keeperLogStats?.get() ?? EMPTY_KEEPER_LOG_STATS;
+        } catch {
+          return EMPTY_KEEPER_LOG_STATS;
+        }
+      })(),
+      // Embed-session-lifecycle diagnostics (active/idle ephemeral counts,
+      // reaped-by-reason, capacity rejections, acquire reuse hit/miss). Failure-
+      // isolated so a throwing snapshot can never 500 the health hot path.
+      // See change: add-embed-session-lifecycle.
+      embedLifecycle: (() => {
+        try {
+          return embedLifecycle?.snapshot();
+        } catch {
+          return undefined;
+        }
+      })(),
+    };
+  });
+
+  // Shutdown endpoint — used by devBuildOnReload
+  fastify.post<{ Body?: { userQuit?: boolean } }>(
+    "/api/shutdown",
+    { preHandler: networkGuard },
+    async (request) => {
+      // Record WHY the server is going away, before anything can kill us.
+      // Default `shutdown`: this process exits without touching the pi
+      // sessions and announces a 60 s bridge quiesce, so those sessions are
+      // still running and will reattach long after any recovery grace window
+      // — offering them would be a phantom offer. An Electron `before-quit`
+      // declares `userQuit`, where the sessions may genuinely be gone; that
+      // case is left to the liveness gate rather than suppressed.
+      // See change: fix-recovery-exit-intent.
+      recordExitIntent(request.body?.userQuit === true ? "user-quit" : "shutdown");
+      metaPersistence.flushAll();
+      preferencesStore.flush();
+      // Tell every connected bridge that the server is going away deliberately
+      // BEFORE we start tearing down state, so bridges suppress auto-start.
+      // See change: fix-restart-bridge-auto-start-race.
+      announceRestart("shutdown", SHUTDOWN_QUIESCE_MS);
+      // Tear down the zrok tunnel (and sweep orphans on our port) so restarts
+      // don't leak reservations that leave stale URLs backed by nothing.
+      try { await deleteTunnel(config.port); } catch { /* best-effort */ }
+      setTimeout(() => process.exit(0), 100);
+      return { ok: true };
+    },
+  );
+
+  // Re-extract endpoint — Electron-only; 403 for Bridge/Standalone, 202 for Electron.
+  // See change: simplify-electron-bootstrap-derived-state (task 6.4).
+  fastify.post(
+    "/api/electron/reextract",
+    { preHandler: networkGuard },
+    async (_request, reply) => {
+      const launchSource = parseLaunchSource(process.env);
+      if (launchSource !== "electron") {
+        reply.status(403);
+        return {
+          error: "reextract_not_allowed",
+          message: `Re-extract is only available when the server was started by Electron (current launchSource: ${launchSource})`,
+          launchSource,
+        };
+      }
+      reply.status(202);
+      return { ok: true, message: "Re-extraction scheduled. Electron will restart the server." };
+    },
+  );
+
+  // Restart endpoint — flush state, spawn new server, then exit
+  fastify.post<{ Body: { dev?: boolean; requestId?: string } }>(
+    "/api/restart",
+    { preHandler: networkGuard },
+    async (request, reply) => {
+      // Doubt-review fix (fix-autostart-discovery-precedence, D5): a restart
+      // replaces this process with a child of the detached spawnRestart
+      // orchestrator, so `bootParentPid` would no longer name the agent — the
+      // ephemeral bond ("live only under the boot parent") cannot survive a
+      // restart. Carrying `--ephemeral` would make the replacement self-exit
+      // the moment the orchestrator exits; silently dropping the flag would
+      // leak. Refuse explicitly instead — relaunch an ephemeral server.
+      // FIRST, before any intent record or bridge announcement.
+      if (config.ephemeral === true) {
+        return reply.code(409).send({
+          ok: false,
+          error: "An ephemeral server cannot restart (its boot-parent bond would be lost). Relaunch it instead.",
+        });
+      }
+      // The false positive this change exists to kill: `/api/restart` exits via
+      // `process.exit(0)` without clearing a single `live` marker, so every
+      // surviving session looked crashed to the next boot. Record the intent
+      // BEFORE the exit sequence — write-once, so the restart-helper's
+      // SIGTERM ladder cannot overwrite it with `signal`.
+      // See change: fix-recovery-exit-intent.
+      recordExitIntent("restart");
+      metaPersistence.flushAll();
+      preferencesStore.flush();
+
+      // Announce restart to every bridge BEFORE spawning the replacement so
+      // bridges suppress their auto-start spawn step and don't race the
+      // orchestrator. See change: fix-restart-bridge-auto-start-race.
+      // Echo the optional client requestId to browsers so a confirm:"ws"
+      // restart click can correlate. Bound it to a sane string before fanning
+      // out to all browser clients. See change: add-async-action-feedback.
+      const rawReqId = request.body?.requestId;
+      const requestId = typeof rawReqId === "string" && rawReqId.length <= 128 ? rawReqId : undefined;
+      announceRestart("restart", RESTART_QUIESCE_MS, requestId);
+
+      // Tear down tunnel before spawning the replacement process so the new
+      // server doesn't race an orphan zrok agent on the same port.
+      try { await deleteTunnel(config.port); } catch { /* best-effort */ }
+
+      // Electron-owned server: the app respawns it (keeps the Electron starter,
+      // runtime identity and its watchdog). `cli start` would come back Standalone.
+      // See change: electron-runtime-overlay-updates.
+      if (restartsViaElectron(process.env)) {
+        setTimeout(() => process.exit(ELECTRON_RESTART_EXIT_CODE), 200);
+        return { ok: true };
+      }
+
+      const cliPath = process.argv[1];
+      if (!cliPath) return { ok: false, error: "Cannot determine CLI path" };
+
+      // Always the Node-native TypeScript loader, whatever this process booted
+      // under (jiti inherited across an upgrade, tsx, or none). Copying the
+      // running `--import` verbatim would carry a foreign loader across restarts.
+      // See change: strip-only-native-ts-loader (design D5).
+      let loader: string;
+      try {
+        loader = resolveNativeTsLoader({ anchor: cliPath });
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : "Cannot locate the native TypeScript loader" };
+      }
+
+      // Allow overriding dev mode via request body
+      const useDev = request.body?.dev ?? config.dev;
+      const extraArgs: string[] = [];
+      if (useDev) extraArgs.push("--dev");
+
+      // Cross-platform restart: spawns a detached Node orchestrator that
+      // polls the port via net, spawns the new server, polls /api/health
+      // via http. No dependency on sh/lsof/curl — works on Windows too.
+      // See change: fix-windows-server-parity.
+      spawnRestart({
+        cliPath,
+        loader,
+        port: config.port,
+        // Carry the bound gateway port across the restart. Without it the new
+        // process re-resolves it from the file config (which usually has no
+        // `piPort`), lands on the 9999 default, and every live pi bridge — still
+        // dialling the old port — fails to re-register.
+        // See change: restore-ask-user-tool-state-on-reconnect.
+        piPort: config.piPort,
+        extraArgs,
+        dev: useDev,
+      });
+
+      setTimeout(() => process.exit(0), 200);
+      return { ok: true };
+    },
+  );
+
+  // Network interfaces for trusted networks UI (localhost-only for security)
+  // GET /api/spawn-failures — rolling log of failed spawn attempts. See change: spawn-failure-diagnostics.
+  fastify.get<{ Querystring: { limit?: string } }>(
+    "/api/spawn-failures",
+    async (request) => {
+      const rawLimit = request.query.limit;
+      const parsed = rawLimit !== undefined ? parseInt(rawLimit, 10) : NaN;
+      const limit = Number.isNaN(parsed) ? 50 : parsed;
+      const entries = readSpawnFailures(limit);
+      return { entries };
+    },
+  );
+
+  fastify.get(
+    "/api/network-interfaces",
+    { preHandler: localhostGuard },
+    async (_request, reply) => {
+      const out = buildNetworkInterfaceList(os.networkInterfaces);
+      if (!out.success) return reply.code(500).send(out);
+      return out;
+    },
+  );
+
+  const sampleHostResources = createHostResourcesSampler();
+  fastify.get(
+    "/api/host/resources",
+    { preHandler: networkGuard },
+    async (_request, reply) => {
+      reply.header("Cache-Control", "no-store, private");
+      return { success: true, data: await sampleHostResources() };
+    },
+  );
+}
+
+export interface HostResourcesSample {
+  sampledAt: string;
+  cpuCount: number;
+  cpuUsedPercent: number | null;
+  loadAvg1m: number;
+  memoryTotal: number;
+  memoryAvailable: number;
+  memoryUsed: number;
+  memoryUsedPercent: number;
+}
+
+export function createHostResourcesSampler() {
+  const sampleCpuTicks = () => {
+    const cores = os.cpus();
+    let total = 0;
+    let idle = 0;
+    for (const core of cores) {
+      total += core.times.user + core.times.nice + core.times.sys + core.times.idle + core.times.irq;
+      idle += core.times.idle;
+    }
+    return { total, idle, count: cores.length, at: Date.now() };
+  };
+
+  let previousCpu = sampleCpuTicks();
+
+  return async function sample(): Promise<HostResourcesSample> {
+    const now = sampleCpuTicks();
+    const delta = now.total - previousCpu.total;
+    const cpuUsedPercent = delta > 0
+      ? Math.max(0, Math.min(100, Math.round((100 * (delta - (now.idle - previousCpu.idle))) / delta)))
+      : null;
+    if (now.at - previousCpu.at > 900) previousCpu = now;
+
+    let memoryAvailable = os.freemem();
+    try {
+      const meminfo = await fs.promises.readFile("/proc/meminfo", "utf8");
+      const match = /^MemAvailable:\s*(\d+)\s*kB/m.exec(meminfo);
+      if (match) memoryAvailable = Number(match[1]) * 1024;
+    } catch {
+      /* Non-Linux hosts report free memory from os.freemem(). */
+    }
+
+    const memoryTotal = os.totalmem();
+    const memoryUsed = Math.max(0, memoryTotal - memoryAvailable);
+    const memoryUsedPercent = memoryTotal > 0 ? Math.round((memoryUsed / memoryTotal) * 100) : 0;
+    const loadAvg1m = Number((os.loadavg()[0] ?? 0).toFixed(2));
+
+    return {
+      sampledAt: new Date(now.at).toISOString(),
+      cpuCount: now.count,
+      cpuUsedPercent,
+      loadAvg1m,
+      memoryTotal,
+      memoryAvailable,
+      memoryUsed,
+      memoryUsedPercent,
+    };
+  };
+}

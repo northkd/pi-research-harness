@@ -1,0 +1,204 @@
+/**
+ * Shared context for browser message handlers.
+ * Each handler receives only what it needs via this context.
+ */
+
+import type { ServerToBrowserMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import type { WebSocket } from "ws";
+import type { DirectoryService } from "../directory-service.js";
+import type { PendingArchiveIntentRegistry } from "../pending/pending-archive-intent-registry.js";
+import type { PendingAttachRegistry } from "../pending/pending-attach-registry.js";
+import type { PendingClientCorrelations } from "../pending/pending-client-correlations.js";
+import type { PendingForkRegistry } from "../pending/pending-fork-registry.js";
+import type { PendingInitialPromptRegistry } from "../pending/pending-initial-prompt-registry.js";
+import type { PendingPrincipalOwnerRegistry } from "../pending/pending-principal-owner-registry.js";
+import type { PendingResumeIntentRegistry } from "../pending/pending-resume-intent-registry.js";
+import type { PendingResumeRegistry } from "../pending/pending-resume-registry.js";
+import type { PendingWorktreeBaseRegistry } from "../pending/pending-worktree-base-registry.js";
+import type { EventStore } from "../persistence/memory-event-store.js";
+import type { MetaPersistence } from "../persistence/meta-persistence.js";
+import type { PreferencesStore } from "../persistence/preferences-store.js";
+import type { PiGateway } from "../pi/pi-gateway.js";
+import type { SessionManager } from "../session/memory-session-manager.js";
+import type { SessionOrderManager } from "../session/session-order-manager.js";
+import type { HeadlessPidRegistry } from "../spawn-process/headless-pid-registry.js";
+import type { TerminalManager } from "../terminal/terminal-manager.js";
+
+export interface BrowserHandlerContext {
+  ws: WebSocket;
+  /**
+   * Was this socket genuinely local at the `/ws` upgrade (`isLocallyTrusted`)?
+   * Only `true` is local: `false` OR absent is remote, so `pin_directory` /
+   * `add_folder_to_workspace` / `move_folder_to_workspace` are confined to the shared
+   * roots (default-deny). The gateway always sets it.
+   * See change: harden-server-capability-bounds (D1b).
+   */
+  locallyTrusted?: boolean;
+  /** The shared-root set for the remote folder gate (`null` = confinement off); absent on a remote socket = refuse. */
+  browseRoots?: () => Promise<import("../lib/browse-roots.js").BrowseRoots | null>;
+  sessionManager: SessionManager;
+  eventStore: EventStore;
+  piGateway: PiGateway;
+  pendingForkRegistry?: PendingForkRegistry;
+  sessionOrderManager?: SessionOrderManager;
+  preferencesStore?: PreferencesStore;
+  /**
+   * Optional meta-persistence handle. Required for handlers that write
+   * synchronously to a session's `.meta.json` outside the debounced
+   * onChange path (currently: `setSessionDisplayPrefs`).
+   * See change: configurable-chat-display.
+   */
+  metaPersistence?: MetaPersistence;
+  /**
+   * Optional display-fit pool.
+   *
+   * Hydration strips inline image bytes to a bounded placeholder
+   * UNCONDITIONALLY — the bound must not depend on whether a fitter happens to
+   * be configured, or a replayed image-bearing event trips the per-event
+   * ceiling and its row vanishes. This pool only decides how the placeholder
+   * RESOLVES: with one, to the fitted derivative; without, every placeholder
+   * settles to an explicit failed state rather than spinning.
+   * See change: fit-attachments-for-display (test-plan #E9).
+   */
+  fitWorkerPool?: import("../attachments/fit-worker-pool.js").FitWorkerPool;
+  /**
+   * Max events replayed on a FULL-stream subscribe (0 / absent = unlimited).
+   * Never applied to a genuine delta.
+   * See change: lazy-load-session-history (D1).
+   */
+  maxReplayEvents?: number;
+  /**
+   * SHAPE of the replay window when one applies. Absent → `head-tail`.
+   * See change: add-tail-only-replay-window (D1).
+   */
+  replayWindowMode?: import("@blackbelt-technology/pi-dashboard-shared/memory-limits.js").ReplayWindowMode;
+  /**
+   * Bridge replay-mode controller + hydration/register bookkeeping. Absent ⇒
+   * a subscribe never waits for a bridge replay and records no fingerprint.
+   * See change: fix-large-session-resume-replay (D5, D6).
+   */
+  replayState?: import("../session/hydration-state.js").ReplayState;
+  directoryService?: DirectoryService;
+  terminalManager?: TerminalManager;
+  headlessPidRegistry: HeadlessPidRegistry;
+  pendingResumeRegistry: PendingResumeRegistry;
+  pendingDashboardSpawns?: Map<string, number>;
+  /**
+   * Archive index + transition owner. Required for `archive_session` /
+   * `unarchive_session`. See change: archive-sessions-lazy-load.
+   */
+  sessionArchive?: import("../session/session-archive.js").SessionArchive;
+  /**
+   * Retained transcripts of REMOTE-origin sessions. Their `.jsonl` lives on
+   * another host, so hydration reads from here instead — and NEVER from the
+   * recorded `sessionFile`, which on this host names an unrelated file (#E15).
+   * See change: serve-retained-remote-transcripts.
+   */
+  remoteTranscriptStore?: import("../session/remote-transcript-store.js").RemoteTranscriptStore;
+  /**
+   * One-shot intents for idle-alive archive requests.
+   * See change: archive-sessions-lazy-load.
+   */
+  pendingArchiveIntents?: PendingArchiveIntentRegistry;
+  /**
+   * Injectable session-end action for the idle-alive archive path (tests force
+   * a rejection). Production omits it and `requestArchive` uses the real
+   * `shutdownSession`. See change: archive-sessions-lazy-load.
+   */
+  endSession?: (sessionId: string, deps: any) => Promise<void>;
+  /**
+   * Optional pending-attach registry for spawn-with-attach flow.
+   * See change: add-folder-task-checker-and-spawn-attach.
+   */
+  pendingAttachRegistry?: PendingAttachRegistry;
+  /**
+   * Optional pending-initial-prompt registry. Populated by the no-hook
+   * Initialize button's spawn flow; consumed on `session_register` to
+   * dispatch the first prompt (`/skill:project-init`) into the session.
+   * See change: project-init-skill-and-profiles.
+   */
+  pendingInitialPromptRegistry?: PendingInitialPromptRegistry;
+  /**
+   * Optional pending-worktree-base registry. Populated by the
+   * worktree dialog's spawn flow; consumed on `session_register` to
+   * write `gitWorktreeBase` to the session's `.meta.json`.
+   * See change: add-worktree-spawn-dialog.
+   */
+  pendingWorktreeBaseRegistry?: PendingWorktreeBaseRegistry;
+  /**
+   * Optional token-keyed pending principal-owner registry (§6.2 / D11).
+   * Populated by the browser `spawn_session` road when the resolver is active
+   * and the socket carries a principal; consumed on `session_register` to
+   * stamp `principalOwner`. Filed against a pre-minted spawn token BEFORE the
+   * spawn await — cwd never confers ownership.
+   */
+  pendingPrincipalOwnerRegistry?: PendingPrincipalOwnerRegistry;
+  /** Host-guarded explicit spawn association; absent leaves ordinary spawns unchanged. */
+  resWorkflowSpawnSupport?: import("../res-workflow/participants.js").ResWorkflowSpawnSupport;
+  /**
+   * Predicate: is a trusted+configured principal resolver active? Gates owner
+   * stamping so the inert era stays ownerless. See change:
+   * add-multi-user-identity-plane.
+   */
+  isResolverActive?: () => boolean;
+  /**
+   * Optional pending-resume-intent registry. Tagged when the user clicks
+   * Resume / drags-to-resume / hits the REST resume endpoint, consumed by
+   * `server.ts`'s `onChange` hook in the ended→alive branch to gate the
+   * sessionOrder mutation behind explicit user intent.
+   * See change: preserve-session-order-on-reboot.
+   */
+  pendingResumeIntents?: PendingResumeIntentRegistry;
+  /**
+   * Optional registry mapping `spawnToken → requestId` for client-side
+   * correlation. When set, browser-initiated spawns/resumes that carry a
+   * `requestId` are recorded so the eventual `session_added` broadcast
+   * carries `spawnRequestId` for auto-select / placeholder dismissal.
+   * See change: spawn-correlation-token.
+   */
+  pendingClientCorrelations?: PendingClientCorrelations;
+  /**
+   * True while `sessionId` is an unresolved cold-start recovery candidate whose
+   * process liveness is still being determined (the Class-2 bridge-reattach
+   * grace window). A `continue` resume MUST be refused in this window: a
+   * surviving bridge may be about to reattach, and spawning now would
+   * double-register the session and break message routing. Finalized (dead)
+   * candidates leave the pending set when the window closes.
+   * See change: fix-recovery-offer-bridge-liveness-gate.
+   */
+  isRecoveryLivenessPending?(sessionId: string): boolean;
+  /**
+   * Remember that THIS connection asked for a subagent resync, so the bridge's
+   * reply is delivered back to it instead of fanned out to every subscriber of
+   * the session. Absent → the reply falls back to the broadcast path.
+   * See change: reduce-subagent-details-payload (C5).
+   */
+  recordResyncRequester?(requestId: string, ws: WebSocket): void;
+  /** Send message to a specific WebSocket */
+  sendTo(ws: WebSocket, msg: ServerToBrowserMessage): void;
+  /** Broadcast to all connected browsers */
+  broadcast(msg: ServerToBrowserMessage): void;
+  /**
+   * Insert-and-broadcast a dashboard event into a session's chat stream
+   * (same path as forwarded extension events). Used by inline-terminal
+   * open/close so the card is event-sourced and replays on reload.
+   * See change: add-inline-terminal-card.
+   */
+  broadcastEvent?(sessionId: string, seq: number, event: unknown): void;
+  /** Get subscribers for a session */
+  getSubscribers(sessionId: string): WebSocket[];
+  /** Track UI request */
+  trackUiRequest(sessionId: string, requestId: string, method: string, params: Record<string, unknown>): boolean | void;
+  /** Replay pending UI requests to a browser */
+  replayPendingUiRequests(ws: WebSocket, sessionId: string): void;
+  /**
+   * Replay the retained notify log to a browser. Sibling of
+   * `replayPendingUiRequests` — kept separate because a notify is transcript
+   * history, never a pending ask. See change: split-notify-from-prompt-request.
+   */
+  replayNotifyLog(ws: WebSocket, sessionId: string): void;
+  /** Mark a session as mid-replay for a specific WebSocket (suppresses live events) */
+  markReplaying(ws: WebSocket, sessionId: string): void;
+  /** Clear replay flag and send catch-up events */
+  clearReplaying(ws: WebSocket, sessionId: string, lastReplayedSeq: number): void;
+}

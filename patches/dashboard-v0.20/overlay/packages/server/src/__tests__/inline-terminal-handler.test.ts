@@ -1,0 +1,217 @@
+import { describe, expect, it, vi } from "vitest";
+import type { BrowserHandlerContext } from "../browser-handlers/handler-context.js";
+import { handleCloseInlineTerminal, handleCreateTerminal, handleOpenInlineTerminal } from "../browser-handlers/terminal-handler.js";
+import { createMemoryEventStore } from "../persistence/memory-event-store.js";
+import { capTranscript, TerminalLimitError } from "../terminal/terminal-manager.js";
+
+/**
+ * Inline interactive terminal card server handlers.
+ * See change: add-inline-terminal-card, preserve-inline-terminal-transcript.
+ */
+
+interface CtxOpts {
+  record?: { transcript: string; sawInput: boolean } | undefined;
+  eventStore?: any;
+  seedOpen?: string | null; // terminalId to seed an inline_terminal_open for
+}
+
+function makeCtx(opts: CtxOpts = {}): {
+  ctx: BrowserHandlerContext;
+  events: Array<{ sessionId: string; seq: number; event: any }>;
+  broadcasts: any[];
+  spawn: ReturnType<typeof vi.fn>;
+  kill: ReturnType<typeof vi.fn>;
+  released: Set<string>;
+  store: Map<number, any>;
+} {
+  const events: Array<{ sessionId: string; seq: number; event: any }> = [];
+  const broadcasts: any[] = [];
+  let seq = 0;
+  const store = new Map<number, any>();
+  const released = new Set<string>();
+  const hasRecord = "record" in opts;
+  const record = hasRecord ? opts.record : { transcript: "captured transcript", sawInput: true };
+
+  const spawn = vi.fn((cwd: string, o?: { ephemeral?: boolean }) => ({
+    id: "term-xyz",
+    cwd,
+    shell: "/bin/bash",
+    status: "active" as const,
+    createdAt: 0,
+    ...(o?.ephemeral ? { ephemeral: true } : {}),
+  }));
+  const kill = vi.fn();
+  const terminalManager = {
+    spawn,
+    kill,
+    getTranscript: vi.fn(() => record?.transcript ?? ""),
+    getTerminalRecord: vi.fn(() => record),
+    releaseTranscript: vi.fn((id: string) => { released.add(id); }),
+    isReleased: vi.fn((id: string) => released.has(id)),
+    attach: vi.fn(), detach: vi.fn(), get: vi.fn(), list: vi.fn(() => []), updateTitle: vi.fn(),
+  } as any;
+
+  const eventStore = opts.eventStore ?? {
+    insertEvent: vi.fn((_sid: string, event: any) => { seq += 1; store.set(seq, event); return seq; }),
+    getEvent: vi.fn((_sid: string, s: number) => store.get(s)),
+    getEvents: vi.fn((_sid: string, _min: number) =>
+      Array.from(store.entries()).map(([s, event]) => ({ seq: s, event })),
+    ),
+  } as any;
+
+  if (opts.seedOpen) {
+    seq += 1;
+    store.set(seq, { eventType: "inline_terminal_open", timestamp: 0, data: { terminalId: opts.seedOpen } });
+  }
+
+  const ctx = {
+    terminalManager,
+    eventStore,
+    broadcast: (msg: any) => broadcasts.push(msg),
+    broadcastEvent: (sessionId: string, s: number, event: any) => events.push({ sessionId, seq: s, event }),
+  } as unknown as BrowserHandlerContext;
+  return { ctx, events, broadcasts, spawn, kill, released, store };
+}
+
+describe("inline terminal handlers", () => {
+  it("open spawns an ephemeral PTY, broadcasts terminal_added, and emits inline_terminal_open", () => {
+    const { ctx, events, broadcasts, spawn } = makeCtx();
+    handleOpenInlineTerminal({ type: "open_inline_terminal", sessionId: "s1", cwd: "/repo" }, ctx);
+
+    expect(spawn).toHaveBeenCalledWith("/repo", { ephemeral: true });
+    expect(broadcasts.some((m) => m.type === "terminal_added" && m.terminal.ephemeral === true)).toBe(true);
+    expect(events).toHaveLength(1);
+    expect(events[0].event.eventType).toBe("inline_terminal_open");
+    expect(events[0].event.data.terminalId).toBe("term-xyz");
+  });
+
+  it("close emits the captured transcript when the user interacted", () => {
+    const { ctx, events, kill } = makeCtx();
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+
+    expect(kill).toHaveBeenCalledWith("term-xyz");
+    expect(events).toHaveLength(1);
+    expect(events[0].event.eventType).toBe("inline_terminal_close");
+    expect(events[0].event.data.terminalId).toBe("term-xyz");
+    expect(events[0].event.data.transcript).toBe("captured transcript");
+  });
+
+  it("close emits an empty transcript when the user never interacted", () => {
+    const { ctx, events } = makeCtx({ record: { transcript: "prompt$ ", sawInput: false } });
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+    expect(events).toHaveLength(1);
+    expect(events[0].event.data.transcript).toBe("");
+  });
+
+  it("X1 (acceptance gate): oversize mixed transcript survives a real store — terminalId intact, not truncated", () => {
+    const big = ("中\u001b[31m🚀".repeat(30_000)); // far over the 20000 B ceiling
+    const capped = capTranscript(big, 15_000);
+    const realStore = createMemoryEventStore(() => true, undefined, undefined, 0); // maxStringFieldSize=0, default ceiling
+    const { ctx, events } = makeCtx({
+      record: { transcript: capped, sawInput: true },
+      eventStore: realStore,
+    });
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+
+    expect(events).toHaveLength(1);
+    const data = events[0].event.data as Record<string, unknown>;
+    expect(data.terminalId).toBe("term-xyz");
+    expect(typeof data.transcript).toBe("string");
+    expect((data.transcript as string).length).toBeGreaterThan(0);
+    expect(data.__truncated).toBeUndefined();
+  });
+
+  it("X8: a second close emits nothing", () => {
+    const { ctx, events } = makeCtx();
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+    expect(events).toHaveLength(1);
+  });
+
+  it("X9: concurrent second close (entry still live) emits nothing; live == replay", () => {
+    // Both closes route through the same handler synchronously; the first sets
+    // the release flag before the second runs, so the second is a no-op.
+    const { ctx, events } = makeCtx({ record: { transcript: "live", sawInput: true } });
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+    expect(events).toHaveLength(1);
+    expect(events[0].event.data.transcript).toBe("live");
+  });
+
+  it("X10: close for an unknown terminal emits nothing and does not throw", () => {
+    const { ctx, events, store } = makeCtx({ record: undefined }); // no live entry / tombstone, no open event
+    expect(() =>
+      handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-nope" }, ctx),
+    ).not.toThrow();
+    expect(events).toHaveLength(0);
+    expect(store.size).toBe(0);
+  });
+
+  it("X11: evicted tombstone (opened but no record) emits transcript:''", () => {
+    const { ctx, events } = makeCtx({ record: undefined, seedOpen: "term-xyz" });
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+    expect(events).toHaveLength(1);
+    expect(events[0].event.data.transcript).toBe("");
+  });
+
+  it("X13: close → evict → duplicate close preserves content (guards compose)", () => {
+    const { ctx, events } = makeCtx({ record: { transcript: "content", sawInput: true } });
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+    // duplicate close after release
+    handleCloseInlineTerminal({ type: "close_inline_terminal", sessionId: "s1", terminalId: "term-xyz" }, ctx);
+    expect(events).toHaveLength(1);
+    expect(events[0].event.data.transcript).toBe("content");
+  });
+});
+
+// ─── PTY cap refusal delivery (change: harden-server-capability-bounds, #E6-#E8, #E36) ───
+describe("terminal cap refusal", () => {
+  function capCtx(err: Error) {
+    const ws = { id: "requesting-socket" };
+    const sendTo = vi.fn();
+    const broadcast = vi.fn();
+    const insert = vi.fn();
+    const insertEvent = vi.fn();
+    const ctx = {
+      ws,
+      sendTo,
+      broadcast,
+      broadcastEvent: vi.fn(),
+      eventStore: { insertEvent, getEvent: vi.fn(), getEvents: vi.fn(() => []) },
+      sessionOrderManager: { insert, getOrder: vi.fn(() => []) },
+      terminalManager: { spawn: vi.fn(() => { throw err; }) },
+    } as unknown as BrowserHandlerContext;
+    return { ctx, ws, sendTo, broadcast, insert, insertEvent };
+  }
+
+  it("E6 create_terminal at the cap: requesting socket only gets terminal_limit_reached; nothing broadcast or inserted", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { ctx, ws, sendTo, broadcast, insert } = capCtx(new TerminalLimitError("global", 32));
+    handleCreateTerminal({ type: "create_terminal", cwd: "/w" }, ctx);
+    expect(sendTo).toHaveBeenCalledTimes(1);
+    expect(sendTo).toHaveBeenCalledWith(ws, { type: "terminal_limit_reached", scope: "global", limit: 32, cwd: "/w", inline: false });
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+    // E36: exactly one log line with scope + limit
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/global/);
+    expect(String(warn.mock.calls[0][0])).toMatch(/32/);
+    warn.mockRestore();
+  });
+
+  it("E7 open_inline_terminal at the cap: inline:true, no event, no terminal_added", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { ctx, ws, sendTo, broadcast, insertEvent } = capCtx(new TerminalLimitError("owner", 16));
+    handleOpenInlineTerminal({ type: "open_inline_terminal", sessionId: "S", cwd: "/w" } as any, ctx);
+    expect(sendTo).toHaveBeenCalledWith(ws, { type: "terminal_limit_reached", scope: "owner", limit: 16, cwd: "/w", inline: true });
+    expect(insertEvent).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("E8 a non-cap spawn error is rethrown and sends nothing", () => {
+    const { ctx, sendTo } = capCtx(new Error("pty boom"));
+    expect(() => handleCreateTerminal({ type: "create_terminal", cwd: "/w" }, ctx)).toThrow("pty boom");
+    expect(sendTo).not.toHaveBeenCalled();
+  });
+});

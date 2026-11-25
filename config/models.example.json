@@ -1,0 +1,14 @@
+{
+  "providers": {
+    "research-proxy": {
+      "baseUrl": "http://127.0.0.1:8317/v1",
+      "api": "openai-completions",
+      "apiKey": "${RESEARCH_API_KEY}",
+      "models": [
+        {
+          "id": "replace-with-your-authenticated-model-id"
+        }
+      ]
+    }
+  }
+}

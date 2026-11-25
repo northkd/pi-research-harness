@@ -1,0 +1,158 @@
+# Changelog
+
+## 开发中
+
+- `main` 默认安装可在浏览器打开的 Pi Research Dashboard。`0.20` 分支保留历史快照。
+- 调度拓扑会随画布缩放重新排列同一父节点下的 Agent。侧栏优先显示文件夹名，舒适模式下模型名和用量分行显示。
+- `pi-research-host` 提供独立的会话、科研派发和浏览器接口。
+- 保留原生会话 ID 和旧历史链接。工作台同步扫描在独立进程运行，主 Agent 的派发和回执可在宿主重启后查询。
+
+## 分层协作、完成通知与目标内授权 — 2026-11-15
+
+- 同一会话和冻结目标的首次分工确认持久保存；后续范围内任务复用授权，各分支自主拆解。
+- 新增有归属和目标核验的父子通信；普通进度静默保存，完成、阻塞和求助通过持久回执通知。
+- 单个任务完成即可通知主 Agent；通知重试沿用原 ID，派发与通信共用一次通知。
+- 仅原生送达确认结束重试；内部状态检查不会误确认尚未送达的结果。
+- 错误、重试和中止不会提前排队缺回执提醒；进程回收仍要求真实终态证据。
+- 保留并发、内存、原始数据、外发及发表边界；普通本地执行沿用当前完全访问选择。
+- 内部科学接受与外部发表授权继续分开，加入完整证据通过内部接受的回归。
+- 同步当前模型分层配置和相关回归；保留公开版的调用方隔离、模型环境配置与跨平台资源快照。
+
+## 会话总览 100% 与创建来源 — 2026-11-06
+
+- 工作区会话总览默认 `100%`，返回全部会话恢复 `100%`。
+- 总览布局按实际宽度排列，保留手动缩放与显式“适应画布”。
+- 画布与列表统一显示“用户创建”“Agent 派生”“来源未记录”。
+- `via: spawn` 不再充当创建者证据。
+- 新建、手动 Fork、独立研究阶段保存明确的用户创建记录。
+- 派生会话显示实际父名称或 ID；多父冲突不选择任意父边。
+- 创建者保留独立可见行，过长角色名单行省略并提供完整悬停文本。
+- 元数据缓存隔离主机与工作区，父名称限定同工作区。
+- 旧顶层 `researchSession` 经严格核对后进入既有保存、重连、归档流程。
+- 新增 `sessionCreation` 只供展示，不创建成员关系或权限。
+- Harness 381 项、监督离线 64 项、原生 client 63 项、server 63 项、最终布局 9 项通过；各组有重叠。
+- 生产构建、语法检查、649 项覆盖层核对与隔离浏览器 43 项通过。
+- 浏览器核对三类来源、100% 默认值、创建者可见行及真实 rename 保存。
+- TypeScript 保留 61 条既有诊断，新增 0、消除 0。
+- 合成项目验证未调用真实模型，未操作用户生产数据或服务。
+- 来源规则、更新步骤与实测范围见[会话来源说明](docs/session-origins/README.md)。
+
+## 目标绑定衔接与子代理模型保持 — 2026-11-06
+
+- 主 Agent 区域区分会话选择、工作流接入、当前目标绑定。
+- `research_dispatch` 区分未接入、旧目标绑定、旧子任务、证明不可用。
+- “衔接到目标版本 N”通过原 adoption 的私有追加链更新有效绑定。
+- owner / canonical cwd / CAS 核验限制衔接范围。
+- 原 confirmation、workflow、研究记录保留原内容。
+- 旧子任务与 queued plan 保留原目标范围。
+- `pi-auto-model 0.8.4` startup 接管后，原生子代理恢复指定的具体模型。
+- provider 请求前核验子会话模型选择。
+- 原生 `pi-virtual` 保留路由支持。
+- legacy `pi-auto-model/auto` + `pi-messages` 在请求前要求具体 `provider/model`。
+- 实际 response metadata mismatch 继续拒绝。
+- Harness 375 项、监督 64 项、client 39 项、新 binding server 7 项通过。
+- 实际 SDK / native driver 检查 16 项通过，网络请求 0 次。
+- 生产前端构建成功，648 项 overlay 核对一致。
+- 隔离真实服务与浏览器 39 项通过，6 个原记录文件 hash 保留。
+- TypeScript 保留 61 条既有诊断，新增 0 条。
+- 扩展 server 回归 21 项通过、13 项失败，失败与同布局基线逐项一致。
+- 操作入口、源码与实测证据见[目标绑定与模型说明](docs/charter-binding-models/README.md)。
+
+## 主 Agent、阶段入口与完全访问 — 2026-11-06
+
+- 恢复工作台主 Agent 选择、“打开主对话”和向指定会话发送任务。
+- 五个阶段各自显示独立启动入口；查看阶段与启动新阶段会话分别操作。
+- “研究总览”移除预算设置及长任务授权表；实际响应、token 和计费观测继续保留。
+- “默认权限 / 完全访问”按操作者与规范项目目录立即保存；已注册主会话、工作台协作会话和执行协调者共用，直到切回默认。
+- 常规 `research_loop run` 直接使用原生工作流 RPC；旧配额、默认 `maxAttempts: 60` 和损坏的旧预算文件不再阻塞常规启动或证据记录。
+- 内存准入、并发递归限制、明确停止、重复与无进展检查、科学验收继续生效；旧显式预算接口保留兼容。
+- 已运行且绑定旧预算适配器的作业保留原尝试次数与模型请求限额；本次更新不热替换运行中的模型接口。
+- Harness 346 项、监督离线 64 项、实际 TypeScript adapter 28 项通过；客户端 40 项、权限服务 13 项、文件门控 47 项通过，各组有重叠。生产构建及 642 项覆盖层核对通过；全量 TypeScript 仍有 61 条既有诊断，相比 `d951322` 无新增或消除。
+- 隔离真实服务部署与浏览器 35 项通过；权限服务实际保存及刷新，主 Agent 投递与阶段创建使用显式模拟，0 模型请求。本轮未修改用户生产机器。
+- 当前行为、启动与接续区别、验证范围见[工作流控制说明](docs/workflow-controls/implementation.md)。
+
+## 模型速度口径与原生计时修正 — 2026-11-06
+
+- 参考 CC Switch 的实际请求统计，分开首输出后的观测 TPS 与全程估算；分别采用 100 token / 100 ms、200 token / 1 s 的样本门槛。
+- Pi 端使用单调时钟记录请求、首个有效输出和响应结束；计时关联实际持久化消息 ID，优先使用有效采集，再回退 SDK `durationMs` 或明确标注的旧日志估算。
+- 均速限定同一 provider、model 和主/子 agent 类型；观测与估算分别加权，缺失计时保持未知，极慢正速率保留精度。
+- 面板修正模型名称与速度错配，移除把历史均速当作实时 TPS 的展示；报告思考 token 但未观测到思考首输出时采用保守的全程估算。
+- 缓存预热不重置正在跟踪的 assistant 计时；请求起点歧义保留未知，历史重放不生成新实测；失败记录保留实际用量与费用。
+- Speed plugin 137 项、Harness 326 项、监督离线 64 项通过；覆盖层 632 个文件，完整类型检查仍有 61 条既有诊断、无新增。计时限制、扩展重载与验证范围见[模型测速说明](docs/model-speed/implementation.md)及[验证记录](docs/model-speed/validation.json)。本次没有发送付费模型测速请求。
+
+## 目标委托与主 agent 上下文减负 — 2026-11-06
+
+- 新增 `research_dispatch delegate`：主 agent 交代完整目标和约束，独立执行协调者负责拆分、跟进、复核与汇总，服务端沿用持久化依赖调度和真实结果契约。
+- 根会话也纳入首次分发决策门控；有子任务运行时限制主 agent 重复读取材料。执行器不可用或已知工作区身份丢失时明确阻塞，不静默退回主 agent 批量执行。
+- 默认模型回执最多 8 KiB，详情最多 16 KiB，保留失败与阻塞状态，支持记录版本校验的分页和未变更状态压缩；工作台记忆块最多 8 KiB，固定指导另计。
+- 子会话启动提示保持在原生 16 KiB 上限内，完整任务仍持久保存并可按需取回；创建回执不再重复返回全量任务。只读约束沿协调者和后代继承，只能收紧。
+- 子会话首次任务提示等待可信工作区登记，临时注册及关联失败不会提前消费提示。
+- Harness 308 项、监督离线 64 项、原生定向 9 项、重新部署后的浏览器 29 项通过；类型检查仍有 61 条既有诊断，新增 0 条。合成测量只量化返回文本字节，不代表真实 token、费用或长任务完成率，见[减负实现说明](docs/autonomous-collaboration/context-offload.md)与[验证记录](docs/autonomous-collaboration/context-offload-validation.json)。
+
+## 长任务授权、递归分发与协作画布 — 2026-11-06
+
+- 原生横向、纵向滚动条改用主题低透明度颜色，保留悬停、键盘焦点及高对比度表现。
+- 新增长任务授权面板、宿主私有的限时授权记录和实际文件门控接线；已加入工作区的协作会话共享范围，支持撤销、到期和阻塞记录，复用主线监督的确认流程。
+- 增加持久化 `research_dispatch` 任务执行器，按依赖创建子会话、控制递归与容量、接收明确结果和通知父会话；修正只允许 lead 委派的旧指导，增加协作者执行前的计划门控。
+- Multi-Agent 画布根据真实创建来源展示父子层级、创建者和导航；多轮 Subagent 直接在当前画布中动画展开，支持窄屏和减少动效设置。
+- 修复研究后端发现忽略启动器 `PI_RESEARCH_LOOP_ROOT` 的问题，显式路径需验证对应扩展包。
+- 扩展隔离原生部署、浏览器检查、权限与调度回归；具体证据及未验证范围见 [本次实施记录](docs/autonomous-collaboration/implementation.md)。本次没有运行真实付费模型或连续十几个小时的科研作业。
+
+## 当前开发快照、月度计费与 Goal 续跑 — 2026-10-18
+
+- 以 `46fad5d`（2026-10-15）为远端基线，保存当前 dashboard 开发源码与主仓库此前未推送的10项文件改动。
+- 第4补丁 `0004-current-development.patch` 叠加旧3补丁；`config/snapshot.json` 核对完整开发源码hash。
+- 新增 TPS、CNY主子分账、北京时间自然月与历史月份统计、模型排序及会话重命名入口。
+- 保存 Goal 实时状态恢复、same-driver reattach、原目标 Resume、blocked 暂停、累计轮数预算ACK与修改总轮数入口。
+- 保存可选 Hermes `0.1.0` 补丁、原始／目标文件hash与隔离目录应用脚本；不自动重启或启动目标，不计入默认13扩展锁。
+- 增加21项CNY费率模板，仅含provider、模型ID与cost；手动合并，不覆盖现有模型配置。
+- 同步1GiB小内存门槛与子代理运行约定；保留开发中的历史重放候选，不把源码快照等同部署或新机验收。
+- 实际本轮检查结果见 `docs/VALIDATION.md`，旧日期条目保留当时发布边界。
+
+## 阶段式后台主线监督与布局修复 — 2026-10-15
+
+- 导出主线监管policy v2/cadence v1：方向与科学验收分开，仅准确偏离分支受限；新material与真正阶段checkpoint同时存在才自动审查，同阶段测试/记录/收尾不逐步调用模型。
+- 保存只读fresh/async监督角色、受控嵌套边界、人工决定/精确短操作许可与证据完整性回归；现有分支放行不是尚未实现的持久人工流程裁决。
+- 去除作者固定provider/model与机器路径，改为`PI_RESEARCH_SUPERVISOR_MODEL`显式认证模型；离线/实际public RPC/SDK no-model门禁分开，不发布私人研究状态或日志。
+- 修复Subagents执行流与主会话长正文/URL/行内可点击路径溢出；长内容默认限高预览，支持「展开全文 / 收起」，代码/表格保留内部滚动。独立CSS/原生DOM增强不替换已有JavaScript与速度监控功能，无会话/服务重启。最终实际验证范围见`docs/VALIDATION.md`。
+
+## 当前可用版本源码补齐 — 2026-10-13
+
+- 补齐9个dashboard运行源码差异及实际shared context-window函数，第三源补丁与29文件hash；不含暂停的B1/R4。
+- 补齐pi-subagents嵌套async identity补丁、包版本/前后hash拒绝保护与MIT许可证。
+- 补齐compaction/非模型thinking、四插件bridge、KB/systemd/loopback proxy及外部工具可移植模板。
+- 保存路由与验收历史代码，不保存真实账号模型映射或历史记录，不新增自动后台调用。
+- 保存Pi、13扩展和browser依赖锁；固定首次安装使用npm ci与manifest检查。
+- 实际收录88个许可可核验技能及辅助源码、原许可证和逐文件来源/SHA256；另外20个仅盘点待许可核验。
+- 增加显式捆绑技能发现／canonical复制入口，拒绝覆盖已有技能，明确外部reviewer工具仍须单独授权配置。
+
+## 迁移核验与浏览器入口修正 — 2026-10-13
+
+- 修正浏览器 MCP 模板启动入口：使用固定版本实际可执行的 `build/src/bin/chrome-devtools-mcp.js`，而非只导出库的 `build/src/index.js`。
+- 增加路径契约断言和文件授权说明；不改本机运行配置。
+- 修正固定版本扩展首次安装：显式安装13个npm包，并核对实际manifest版本；不再把跳过固定版本的更新命令成功视作安装完成。
+- 明确克隆源码不等于完整迁移当前设备，模型之外仍有外部工具、技能、插件和私有状态差异。
+
+## 科研功能深色图 — 2026-10-13
+
+- README 增加用户确认的深色科研功能图，介绍子代理推理、复核、数值验证与授权后的服务器计算及结果回流。
+- 保留实际原图 1672×941，注明非原生 4K、非实验记录；不改运行代码或 `v0.1.0` 标签。
+
+## README 中文图片更新 — 2026-10-12
+
+- 概念封面替换为中文标题与模块说明，明确标注非实际界面。
+- 实际 dashboard 截图的隐私遮罩与公开静态说明中文化。
+- 仅更新图片和文档；`v0.1.0` 标签保留原始代码快照，不重写已发布历史。
+
+## 0.1.0 — 2026-10-12
+
+- Preserve a sanitized, source-based snapshot of the usable Pi research environment.
+- Release Feynman/ARIS evidence adapters, route and proof/review gates, workflow bodies and offline contract tests.
+- Add portable isolated-agent startup/configuration scripts and pinned package templates.
+- Preserve the actually deployed dashboard frontend/native bridge source patches with upstream commit/license and file hashes.
+- Include last-user-message undo/edit extension with immediate busy refusal, not deferred execution.
+- Separate credentials, local auth/model settings, research data, compiled runtime and paused unaccepted history-replay work from the release.
+- Add redacted real dashboard images and a labelled conceptual cover illustration.
+
+This is a developer snapshot, not a claim that every model, browser, HPC or
+scientific workflow has been end-to-end validated on a fresh machine.

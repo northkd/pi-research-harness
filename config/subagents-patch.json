@@ -1,0 +1,10 @@
+{
+  "package": "pi-subagents",
+  "version": "0.76.1",
+  "license": "MIT",
+  "path": "src/runs/foreground/subagent-executor.js",
+  "patch": "patches/subagents/0001-nested-route-identity.patch",
+  "beforeSha256": "574b155913a5298de917e26b83fa49047cc11e014990d9b3b6474980de623f89",
+  "afterSha256": "6fb26f4b4d58840fa8e7e576ffb3cde668a142ed47645a74e1da7ba530477d3f",
+  "purpose": "Use the public async run id for inherited nested-route restore/status identity"
+}

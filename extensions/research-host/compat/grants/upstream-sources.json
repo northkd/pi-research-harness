@@ -1,0 +1,146 @@
+{
+  "package": "@blackbelt-technology/pi-agent-dashboard",
+  "version": "0.10.0",
+  "changes": [
+    "Grant store state isolated per host factory",
+    "Explicit storeFile and homedir supplied by host; no process env mutation"
+  ],
+  "files": [
+    {
+      "path": "@blackbelt-technology/pi-dashboard-extension/src/path-gate/decide.ts",
+      "sha256": "edc553f176a387350e76922f55a97f52d2317257a7a308150c606b38630c38a6"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-extension/src/path-gate/grant-cache.ts",
+      "sha256": "e0d1b43ab753e7bcf267199be0f10949060cf82411eebd28019f88ad6fc3edb9"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-extension/src/path-gate/handler.ts",
+      "sha256": "0e5101d650d73f86d2f04529973ac67b741443217591aabcead151e0a91969e5"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-extension/src/path-gate/resolve.ts",
+      "sha256": "5b24da892ed85c501295b4ee0dc973e9b8523d4a888a497d48f14c63a12af4ec"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-extension/src/path-gate/roots.ts",
+      "sha256": "b3697b424610998580edd0b8f50b6e98d744d0068100495484c4c40882dc970e"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-extension/src/path-gate/suppression.ts",
+      "sha256": "fc14f2a6343c95881ed8e44e893d78db23e7e056a0fce63243856a75d046e007"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/access/access-grants.ts",
+      "sha256": "e7a2f1444c82b3a3f2fbe445d50c4f9fdf818a995d99e2bfabba207b3328f6a2"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/access/ancestor-ladder.ts",
+      "sha256": "e0c6d0170ba0cdc5072c212fb2739d637a1a2b0044e1d7cfd2e6b8908c1be487"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/access/forbidden-subjects.ts",
+      "sha256": "1af6704941906c2eeb915e6a9d35961bb971fb4cc9983ccac470568e3fec7583"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/lib/path-containment.ts",
+      "sha256": "aed4ac7a54394689bfe44f96e074a38527f99500cca00946105018b030b7281f"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/acp/acp-config.ts",
+      "sha256": "a17252a2cb0526811043ea2da2e9560dbe23aa12d3ab7c0dc6706f686d86b285"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/canonical-subject.ts",
+      "sha256": "9f381b305cffa9bb90512cdcf384f1d059e39cdc297e5e6df347c008dec88127"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/config.ts",
+      "sha256": "ed182bef4f5c0bc95ab6f57c6712842e259ee3d9f4a68602f83f09a524fcb241"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/file-kind.ts",
+      "sha256": "72d299050f93b1036ae16649d4d2fbdfaff9f1d77410a4a1d4be69fd84ad42b9"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/forbidden-subjects.ts",
+      "sha256": "2949832f49d78d9f4bcfdb2fd740fa9fa73b3a3c712a14761dd038c5fa7584d8"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/heap-limits.ts",
+      "sha256": "0f58b80c8973c6cdafe59437aedb89c7075659daabe2b6debfff5bffec0f203f"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/managed-paths.ts",
+      "sha256": "1f2ae08c04dc7a284ae6ade1e5eef1c3f1cbb38993ca286e36056b85cdac6363"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/memory-limits.ts",
+      "sha256": "2eb1f857d65584a8da4dfc8840f5edc5d8bbc0ef049ad5b965624b10160b9ea0"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/binary-lookup.ts",
+      "sha256": "092da72bc15776ec5947f1a28e27c17727dcbe27c8ead6951022a7c7e8993b06"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/check-rollup.ts",
+      "sha256": "88ff8799300df3d9091b747e4d761122e34f4d5dc1c54939fb9c467086f300b4"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/ensure-bundled-git.ts",
+      "sha256": "d077e08f71debfba7811539c3d5fe45547ffa66121407c9b00e7ac53ccd10ea3"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/ensure-windows-path.ts",
+      "sha256": "69fe5a1cdc8c3a31262bf820f1702865d2dc3491f26e340a70b6e4c2bb7f90c3"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/env-path-key.ts",
+      "sha256": "a4b34c99a45c0ac2486abb50fc761baffc685f88d4164eb25bd08ffaa1f99390"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/exec.ts",
+      "sha256": "5d080f8556b25b78f840e0dac2b22545ebace9ffb1adb4796e95ed8ac3416d3e"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/git-source.ts",
+      "sha256": "e29aa5f21d701a5c35ca70d8442cc47ecb5cabfa22bf4cb5781bb64269e1952e"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/git.ts",
+      "sha256": "b61052d1bf18df577ccb9d2c8e3575901599559ecd46419dc6b04ba0df122343"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/paths.ts",
+      "sha256": "4d8643f93b9b27ccea0ea9b7a168011712ca2a2ed20a8d65031b7cca225bc9be"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/runner.ts",
+      "sha256": "f2ac4799495d2256523652e79f95a5b2878f0c682da6edcc9f6c16bf291f416f"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/select-git-source.ts",
+      "sha256": "46de79d2b13bd37a65299c243984ac78712f27d2c268e651744f948dd3819a4f"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/session-group-path.ts",
+      "sha256": "a38410b8ab7c543d1e7e57dbecce7f7318832834ed1c1fbeb7965647d695d936"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/tiers.ts",
+      "sha256": "d0594cae0ae14c87569335e9747a86ab49b47c290cebe64228077f2b9027dd70"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/tool-path-resolve.ts",
+      "sha256": "5248245298118fbcd501d7e77505f72d74be62ecd8d73f23aaf5763cfa8ec8c8"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/tunnel-provider.ts",
+      "sha256": "5f2497569177edbd52f5add09ff886df2e337ff172333984dea3454d21816d28"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/vault-delivery.ts",
+      "sha256": "37718245e47c802a5b5c0703b9fdc3517ba789381408dd96685b427c87e2daaa"
+    }
+  ]
+}

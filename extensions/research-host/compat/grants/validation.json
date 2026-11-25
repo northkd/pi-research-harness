@@ -1,0 +1,18 @@
+{
+  "suite": "standalone filesystem grants and native gate compatibility",
+  "passed": 19,
+  "failed": 0,
+  "skipped": 0,
+  "tests": ["test/grants.test.mjs", "test/transport.test.mjs", "test/native-integration.test.mjs"],
+  "nativeRuntime": "installed managed Pi 1.3.0, --offline, deterministic local provider; no external model requests",
+  "verifiedNativeEffects": [
+    "real built-in in-root read returns fixture bytes",
+    "sensitive target raises native select and Deny blocks the actual tool",
+    "actual --no-session --print --mode json read succeeds with unavailable host",
+    "native select plus positive confirm writes a matching transcript receipt before grant persistence",
+    "full-access is checked per call and resumes through host channel restart"
+  ],
+  "fixtures": "all session and grant writes in temporary directories; no production grants rewritten or subject data inspected",
+  "authorization": "local-loopback token authentication, exact session header identity/cwd/file, existing host session ACL, sealed named denial and one-use positive native receipt",
+  "source": "upstream-sources.json records the original closure and transforms"
+}

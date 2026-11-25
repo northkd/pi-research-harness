@@ -1,0 +1,77 @@
+{
+  "schema": "pi-research-science-source-manifest.v1",
+  "generatedAt": "2026-11-23T08:14:36.133Z",
+  "adaptation": "TypeScript syntax removal and local ESM module paths. Shared host workbench error class replaces the former Dashboard class import.",
+  "modules": [
+    {
+      "source": "pi-dashboard-server/src/res-workflow/science-host-client.ts",
+      "sha256": "d59a995f9c7cae2889f16373d807e24307e18b7dcc11f3cdd7cf210018ecc5bc",
+      "output": "res-workflow/science-host-client.mjs",
+      "outputSha256": "d4ef6988df992aa3b839045294f1ca405f1b082faa48aa6be2f8cd7a3ca250d1",
+      "bytes": 13248
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/science-server-hosts.ts",
+      "sha256": "63814f8bf08531cfdea5686ff40b47a19f8077fd2c878cc85ac943acfe6279c0",
+      "output": "res-workflow/science-server-hosts.mjs",
+      "outputSha256": "724680ff4a18a8f4f12824a2ee515a35ba74968a4a53c82dc9d2afbae8a8b9d1",
+      "bytes": 2155
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/science-instances-host.ts",
+      "sha256": "14df0892f043bdb027453d8fe5e221db98091b6ccfccd5b5b0549036d5a883fb",
+      "output": "res-workflow/science-instances-host.mjs",
+      "outputSha256": "114149cf9d8289c0203b8d74bf944971bdc9fa5b6227a1e254063a4ec6bcd7c8",
+      "bytes": 2858
+    },
+    {
+      "source": "pi-dashboard-server/src/res-workflow/science-viewer.ts",
+      "sha256": "fa09273c85f342b3158583c55b8a145e6f48b63a579ae8ef6937f3297a4a6085",
+      "output": "res-workflow/science-viewer.mjs",
+      "outputSha256": "b494018373e40ed68a8b419cb630b3693e41dd572366ceb534ee59cff28a275e",
+      "bytes": 12674
+    },
+    {
+      "source": "pi-dashboard-shared/src/science-host-files.ts",
+      "sha256": "7575151c8a85bd8cab2fa56fde040ddf2f1c987aee6ffad6cb9204c8c8e60db2",
+      "output": "shared/science-host-files.mjs",
+      "outputSha256": "532422d33c7e1c7c82c36f807f657ab0b8d1250557213e74dd352430ae035fac",
+      "bytes": 2802
+    },
+    {
+      "source": "pi-dashboard-shared/src/science-host-records.ts",
+      "sha256": "2a350bc1e564175fd887f65a548f663fc93b6b9f0e613c97536fd10c6d1fdecd",
+      "output": "shared/science-host-records.mjs",
+      "outputSha256": "2968bd0f2132775a279a1ce9576a6fada0c019a261d451d8c3dc4c6ae9254d56",
+      "bytes": 3513
+    },
+    {
+      "source": "pi-dashboard-shared/src/science-host-transport.ts",
+      "sha256": "8bf141a5d653c7a4bf3be49a5545a51f26b66d21a87c622f3e4fa4834987a8e9",
+      "output": "shared/science-host-transport.mjs",
+      "outputSha256": "4be2141198c9f4229471fccdefdba3f7b9d7a2d9a11360a9c1ad5300f05a5e41",
+      "bytes": 8076
+    },
+    {
+      "source": "pi-dashboard-shared/src/science-instances.ts",
+      "sha256": "f45709a6292447649aa72e7a9d416d4f6b4c8e7a57af3c56ce1768d5df0034de",
+      "output": "shared/science-instances.mjs",
+      "outputSha256": "00460c2b57f3521c026bed026283aa35493a47b9b87ea0c2791db11d6ccd8870",
+      "bytes": 4489
+    },
+    {
+      "source": "pi-dashboard-shared/src/science-paths.ts",
+      "sha256": "62c818021a956b054f00fd1e197c33cc9b461533af68a115982a7daeacf4439b",
+      "output": "shared/science-paths.mjs",
+      "outputSha256": "09652f2f3f9767629b641f84f72345d199b93cfa1e58d57a93a36c434fd2f83b",
+      "bytes": 1242
+    },
+    {
+      "source": "pi-dashboard-shared/src/science-viewer.ts",
+      "sha256": "100d2a7118c3a99ddd132a9ee5255b9f6adff1f95651b66c124ee033641eb9f7",
+      "output": "shared/science-viewer.mjs",
+      "outputSha256": "e803b6d4677dbbd574c212a692b69941330aa4037e0e8e61e7bdae4a1b0d2f51",
+      "bytes": 2757
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "pi-research-integration",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Thin Pi entry points for Feynman evidence and ARIS research workflows",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.mjs"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/northkd/pi-research-harness.git"
+  }
+}

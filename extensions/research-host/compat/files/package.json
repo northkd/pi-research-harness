@@ -1,0 +1,14 @@
+{
+  "name": "pi-research-file-viewers",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mammoth": "1.13.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "chardet": "2.2.0",
+    "iconv-lite": "0.6.3",
+    "mailparser": "3.9.14",
+    "isomorphic-dompurify": "3.18.0",
+    "asciidoctor": "3.0.4"
+  }
+}

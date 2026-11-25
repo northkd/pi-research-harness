@@ -1,0 +1,95 @@
+{
+  "schema": "pi-research-providers-source.v1",
+  "adaptation": "TypeScript removal, factory closure for per-host path/environment/probe/health/registry seams. Original route and discovery behavior preserved.",
+  "modules": [
+    {
+      "source": "pi-dashboard-server/src/package/provider-probe.ts",
+      "sourceSha256": "6c82045a1ef517fa59b5d8e4fe5e41eaf86a40158bc384be56650dbc022a2b05",
+      "output": "upstream/probe.mjs",
+      "outputSha256": "aab1c80cc66e9cee31fca13cddf6f36e0663987795500c7efaa38931c65d0b00"
+    },
+    {
+      "source": "pi-dashboard-server/src/routes/provider-routes.ts",
+      "sourceSha256": "486de805bbbc586691666ea91b7d6cd87e2ea0c5d374c53abb02b58b4c3504eb",
+      "output": "upstream/routes.mjs",
+      "outputSha256": "d22aaa4dfd073264b32929b8c3c12744eca90c4bee92442e21d0b46c78f0e0b7"
+    },
+    {
+      "source": "pi-dashboard-server/src/model-proxy/custom-provider-discovery.ts",
+      "sourceSha256": "740e87e34ea2327a2ad6436bfbf1b8769b0a1491453a3e17d7758ed9566a465d",
+      "output": "upstream/discovery.mjs",
+      "outputSha256": "1544bc32c143f1da6ae35e9a7ca343ef4a9e9c1f1cd5d4b33b0316eaaeeecfa2"
+    },
+    {
+      "source": "pi-dashboard-shared/src/provider-model-metadata.ts",
+      "sourceSha256": "67036d90bc13577294aadc743171a4e859628f2c70b2a208811fe4e6074cc0e2",
+      "output": "shared/provider-model-metadata.mjs",
+      "outputSha256": "3942989cc6027f4a249b9270f3e4b9739ed9e31d98b7af8a41b9908713e964e3"
+    },
+    {
+      "source": "pi-dashboard-server/src/model-proxy/recursion-guard.ts",
+      "sourceSha256": "ee92568f896cd6092ace8fd93fdfbafb3f505c4bffb817930bf723d994c08dce",
+      "output": "shared/recursion-guard.mjs",
+      "outputSha256": "0789cd54b43a6b4f1c38e094bef1e187156d6d566a259cad3b396157c304853e"
+    },
+    {
+      "source": "proper-lockfile (bundled)",
+      "dependencies": [
+        {
+          "source": "graceful-fs/polyfills.js",
+          "sha256": "66ea1687ed5edf39d67296d26edccc8da695d9a869303a78d0e580cd770aca27"
+        },
+        {
+          "source": "graceful-fs/legacy-streams.js",
+          "sha256": "60a6a7ecf7c3e55a3ffaae13433b6cff388b7205bba6daf393c863f77a949e36"
+        },
+        {
+          "source": "graceful-fs/clone.js",
+          "sha256": "7258eca52e65d69845759503f9fdd66c252f40e5eafb76db5d481172e31ac9ed"
+        },
+        {
+          "source": "graceful-fs/graceful-fs.js",
+          "sha256": "7da35669b6b6b0e4aafee31674c033f2cebb0c8f9ae010f709dcc185d3f17786"
+        },
+        {
+          "source": "proper-lockfile/node_modules/retry/lib/retry_operation.js",
+          "sha256": "eaca13037da35523326c8870e39c4fd236c4f38b5822a2af0f33d0f4e0b21d02"
+        },
+        {
+          "source": "proper-lockfile/node_modules/retry/lib/retry.js",
+          "sha256": "4388d78729faa0dea430e2a7fa572aee6a15a407da05097b41ee44106d336616"
+        },
+        {
+          "source": "proper-lockfile/node_modules/retry/index.js",
+          "sha256": "003f04e5fb5913675c886ac938e9b7bbd33754eb17ee8f00e074e1bf888bec1e"
+        },
+        {
+          "source": "proper-lockfile/node_modules/signal-exit/signals.js",
+          "sha256": "ae538fdae683d6fa2e14579da06df10fb7a66378cfa50971956fb68c2c86c727"
+        },
+        {
+          "source": "proper-lockfile/node_modules/signal-exit/index.js",
+          "sha256": "7cc6f6a1e14dec79dc23f6afd7caca1319189747144e1a33af77616c21d9e9de"
+        },
+        {
+          "source": "proper-lockfile/lib/mtime-precision.js",
+          "sha256": "eb5adf91a21715b50f39438cdcda52043d551ccb5fe530681364c474c7206218"
+        },
+        {
+          "source": "proper-lockfile/lib/lockfile.js",
+          "sha256": "c517a976f7a31c8b1768cb8e7ac9936aee70299ae762548495016a79d64a6434"
+        },
+        {
+          "source": "proper-lockfile/lib/adapter.js",
+          "sha256": "c95e2408b91b70e02c625a9b1a42e0c793140dbe6c1bff8cc183bb88bc267c6c"
+        },
+        {
+          "source": "proper-lockfile/index.js",
+          "sha256": "c11869aa340b61757c2e7a6739a1d423495fe627ac0a54cb44f8c47c393e2fdd"
+        }
+      ],
+      "output": "upstream/lockfile.mjs",
+      "outputSha256": "f07047dd78d0058c54702e7ae1556e7ed389f74d0364518728cde1d8775e5e1a"
+    }
+  ]
+}

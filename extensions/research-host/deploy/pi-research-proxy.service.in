@@ -1,0 +1,17 @@
+[Unit]
+Description=Pi Research authenticated web interface
+After=pi-research-host.service
+Wants=pi-research-host.service
+
+[Service]
+Type=simple
+WorkingDirectory=@DEPLOY_DIRECTORY@
+EnvironmentFile=%h/.config/pi-research/host-proxy.env
+ExecStart=@CADDY_BINARY@ run --config @CADDYFILE@ --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target

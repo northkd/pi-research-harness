@@ -1,0 +1,41 @@
+{
+  "name": "pi-research-harness",
+  "version": "0.20.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Pi Research Dashboard, research CLI, standalone session host and evidence workflows",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/northkd/pi-research-harness.git"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "pi": {
+    "extensions": [
+      "./integration/index.mjs",
+      "./extensions/undo-last.ts",
+      "./extensions/mainline-supervision/src/index.ts",
+      "./extensions/research-loop/src/index.ts",
+      "./extensions/research-host/native-extension.mjs",
+      "./extensions/thinking-translator/extensions/thinking-translator.ts"
+    ],
+    "skills": [
+      "./integration/skills",
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "test": "node scripts/run-tests.mjs",
+    "test:supervision": "node extensions/mainline-supervision/scripts/run-checks.mjs offline",
+    "test:supervision:host": "node extensions/mainline-supervision/scripts/run-checks.mjs host",
+    "test:supervision:sdk": "node extensions/mainline-supervision/scripts/run-checks.mjs sdk",
+    "check:release": "python3 scripts/check-release.py",
+    "check:syntax": "bash scripts/check-syntax.sh"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

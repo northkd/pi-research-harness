@@ -1,0 +1,44 @@
+[
+  {
+    "file": "research-communication-service.mjs",
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/res-workflow/research-communication-service.mjs",
+    "sourceSha256": "b3e068e047bd1cc8de58fda62903c62ac2c445c2051ecf50c53beea789da0942",
+    "sha256": "b3e068e047bd1cc8de58fda62903c62ac2c445c2051ecf50c53beea789da0942",
+    "bytes": 21129,
+    "exactCopy": true
+  },
+  {
+    "file": "research-dispatch-receipts.mjs",
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-extension/src/research-dispatch-receipts.mjs",
+    "sourceSha256": "90b7553bdd123ea2f1e2f1d4403572ce7f423074447d60e5462654ec18c5dd4c",
+    "sha256": "90b7553bdd123ea2f1e2f1d4403572ce7f423074447d60e5462654ec18c5dd4c",
+    "bytes": 2284,
+    "exactCopy": true
+  },
+  {
+    "file": "research-session-service.mjs",
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/res-workflow/research-session-service.mjs",
+    "sourceSha256": "8da88960762cb8a3a3d20b1236cee11abac98b777d8277f921eaaeed6db79f19",
+    "sha256": "c22a87d3d0cd379a4df1f1d661e019f7d1ce009ada4632334b5ec2f0c0c7a547",
+    "bytes": 38951,
+    "exactCopy": false,
+    "change": "Require actual native registration when explicit host proof is present; preserve uncertainty during preparation/recovery. Session receipts return verified exact child IDs and never replay a spawn."
+  },
+  {
+    "file": "research-collaboration-service.mjs",
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/res-workflow/research-collaboration-service.mjs",
+    "sourceSha256": "47f9115c4ed726a49a6b90996763abd6689d206a4d13c99184f2da9a72934056",
+    "sha256": "47f9115c4ed726a49a6b90996763abd6689d206a4d13c99184f2da9a72934056",
+    "bytes": 37929,
+    "exactCopy": true
+  },
+  {
+    "file": "research-dispatch-service.mjs",
+    "source": "dashboard/node_modules/@blackbelt-technology/pi-dashboard-server/src/res-workflow/research-dispatch-service.mjs",
+    "sourceSha256": "73d6cee46942cda60af967530d275d47172914fd1b9db766de1b3c876464119e",
+    "sha256": "f2e01e85c4a2dc25242b048a6781a4d531fd0285425dd2a524b35bd7046cddb8",
+    "bytes": 45381,
+    "exactCopy": false,
+    "change": "Require actual native registration when explicit host proof is present; preserve uncertainty during preparation/recovery. Session receipts return verified exact child IDs and never replay a spawn."
+  }
+]

@@ -1,0 +1,363 @@
+{
+  "root": "/workspace/scratch/3fd354af919f/charter-binding-service-baseline-0cu0f1at",
+  "baseline": "9ea11f48cf71501e4c076c9a0519b91f3f28ec23",
+  "specUnchanged": true,
+  "specSha256": "6d0e57bad99ddc10fedb0fef65588ecb2bc7781518c003b62a3eb668743e9985",
+  "beforeServiceSha256": "c9b9c07dd31b5d3332c6559b8c5a6cbdd8bd6a762867bba1cffaaf33186ab771",
+  "afterServiceSha256": "30298796db5cb04bfbb9c4299d4964427f9446f545c2b71e40796a9f76e77740",
+  "method": "Two isolated copied runtime trees with identical unmodified baseline spec and dependencies; only adoption-service.ts changed between exact git 9ea11f4 bytes and current working tree. Shared .runtime/dashboard-source was read only; caches and reports stay under these temporary trees.",
+  "sameRuntimeLayout": {
+    "before": {
+      "total": 16,
+      "passed": 3,
+      "failed": 13,
+      "pending": 0
+    },
+    "after": {
+      "total": 16,
+      "passed": 3,
+      "failed": 13,
+      "pending": 0
+    },
+    "allTestOutcomesUnchanged": true,
+    "failureCategories": {
+      "fixture-native-adoption-module-missing": 3,
+      "snapshot-agent-consent-required-refresh-and-authorize": 10
+    },
+    "failures": [
+      {
+        "name": "local-only inventory waits for a separate explicit model consent and saves no chat body in the project",
+        "before": {
+          "status": "failed",
+          "reason": "fixture-native-adoption-module-missing"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "fixture-native-adoption-module-missing"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "binds one finite snapshot to one physical model, with no tools or scientific writes",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "requestId is idempotent, scope has a single flight, and another owner cannot read the job",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "missing explicit model blocks instead of falling back or creating a Pi task",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "confirmation freezes a new charter only after proposal and target confirmation, without autoRun",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "detects concurrent charter creation and never overwrites it",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "cancellation and per-directory single flight fence a scan before any outbound request",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "an explicitly cancelled operation does not prevent immediate re-entry or reclaim the new current operation",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "a changed model configuration invalidates the pre-scan consent rather than changing the receiver",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "explicit analysis consumes only the sealed finite snapshot, not new or changed project files",
+        "before": {
+          "status": "failed",
+          "reason": "fixture-native-adoption-module-missing"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "fixture-native-adoption-module-missing"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "history owner revocation fences finite source preview and the later model send",
+        "before": {
+          "status": "failed",
+          "reason": "fixture-native-adoption-module-missing"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "fixture-native-adoption-module-missing"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "a provider ignoring abort becomes an explicit unknown result, never an automatic resend",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "a restart reconciles an unknown send without scanning, resending or trusting project status",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      }
+    ],
+    "passedTests": [
+      "a read or cancelled first-entry step neither scans nor creates research state or a model call",
+      "requires actual request consent; a project consent:true cannot authorize analysis",
+      "refuses malformed or symlinked scientific state rather than reporting it empty"
+    ],
+    "matchesOriginalRegressionFailureNames": true
+  },
+  "supplementalExistingNativePathControl": {
+    "before": {
+      "total": 16,
+      "passed": 4,
+      "failed": 12,
+      "pending": 0
+    },
+    "after": {
+      "total": 16,
+      "passed": 4,
+      "failed": 12,
+      "pending": 0
+    },
+    "allTestOutcomesUnchanged": true,
+    "failureCategories": {
+      "snapshot-agent-consent-required-refresh-and-authorize": 11,
+      "fixture-history-source-assertion": 1
+    },
+    "failures": [
+      {
+        "name": "binds one finite snapshot to one physical model, with no tools or scientific writes",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "requestId is idempotent, scope has a single flight, and another owner cannot read the job",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "missing explicit model blocks instead of falling back or creating a Pi task",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "confirmation freezes a new charter only after proposal and target confirmation, without autoRun",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "detects concurrent charter creation and never overwrites it",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "cancellation and per-directory single flight fence a scan before any outbound request",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "an explicitly cancelled operation does not prevent immediate re-entry or reclaim the new current operation",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "a changed model configuration invalidates the pre-scan consent rather than changing the receiver",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "explicit analysis consumes only the sealed finite snapshot, not new or changed project files",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "history owner revocation fences finite source preview and the later model send",
+        "before": {
+          "status": "failed",
+          "reason": "fixture-history-source-assertion"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "fixture-history-source-assertion"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "a provider ignoring abort becomes an explicit unknown result, never an automatic resend",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      },
+      {
+        "name": "a restart reconciles an unknown send without scanning, resending or trusting project status",
+        "before": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "after": {
+          "status": "failed",
+          "reason": "snapshot-agent-consent-required-refresh-and-authorize"
+        },
+        "unchanged": true
+      }
+    ],
+    "passedTests": [
+      "a read or cancelled first-entry step neither scans nor creates research state or a model call",
+      "local-only inventory waits for a separate explicit model consent and saves no chat body in the project",
+      "requires actual request consent; a project consent:true cannot authorize analysis",
+      "refuses malformed or symlinked scientific state rather than reporting it empty"
+    ]
+  }
+}

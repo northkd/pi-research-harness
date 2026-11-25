@@ -1,0 +1,243 @@
+/**
+ * `ShellContent` — the shell's route-derived content region.
+ *
+ * The load-bearing property is the one this component was extracted FOR: it
+ * must resolve its branch from the AMBIENT wouter location, so a frozen
+ * `<Router>` (the `RouteBackedOverlay` underlay) selects the launching surface
+ * even while `window.location` points at the overlay. Before the extraction
+ * that was impossible — App's body had already fixed the branch against the
+ * live URL.
+ *
+ * See change: add-route-backed-overlay-dialogs.
+ */
+import { cleanup, render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { Redirect, Router, useLocation } from "wouter";
+import { memoryLocation } from "wouter/memory-location";
+import { buildFolderSettingsUrl } from "../../../lib/nav/route-builders.js";
+import { encodeFolderPath } from "../../../lib/util/folder-encoding.js";
+import { ShellContent, type ShellContentRenderers } from "../ShellContent.js";
+
+const CWD = "/work/repo";
+const ENC = encodeFolderPath(CWD);
+
+/** Every renderer prints a stable marker so a wrong branch is unambiguous. */
+function renderers(): ShellContentRenderers {
+  return {
+    renderOpenSpecBoard: (cwd) => <div>board:{cwd}</div>,
+    renderArchive: (cwd) => <div>archive:{cwd}</div>,
+    renderSpecs: (cwd) => <div>specs:{cwd}</div>,
+    renderDiff: (id) => <div>diff:{id}</div>,
+    renderPiResourceFile: (path, title) => <div>resource:{path}:{title}</div>,
+    // Mirrors the App wiring: the legacy route lands on the Add-ons page.
+    renderPiResourcesRedirect: (cwd) => <Redirect to={buildFolderSettingsUrl(cwd, "add-ons")} replace />,
+    renderFolderSettings: (cwd, page) => <div>folder-settings:{cwd}:{page}</div>,
+    renderOpenSpecPreview: (cwd, change, artifact) => <div>preview:{cwd}:{change}:{artifact}</div>,
+    renderFilePreview: (cwd, path) => <div>file:{cwd}:{path}</div>,
+    renderUrlPreview: (url) => <div>url:{url}</div>,
+    renderFolderEditor: (cwd) => <div>editor:{cwd}</div>,
+    renderFolderHome: (cwd) => <div>home:{cwd}</div>,
+    renderResearch: (cwd) => <div>research:{cwd}</div>,
+    renderSession: (id) => (id === "known" ? <div>session:{id}</div> : null),
+    renderLanding: () => <div>landing</div>,
+  };
+}
+
+function LocationProbe() {
+  const [loc] = useLocation();
+  return <span data-testid="loc">{loc}</span>;
+}
+
+function at(location: string, variant: "desktop" | "mobile" = "desktop") {
+  const { hook, searchHook, history } = memoryLocation({
+    path: location.split("?")[0],
+    searchPath: location.split("?")[1] ?? "",
+    record: true,
+  });
+  const utils = render(
+    <Router hook={hook} searchHook={searchHook}>
+      <ShellContent variant={variant} {...renderers()} />
+      <LocationProbe />
+    </Router>,
+  );
+  return { ...utils, history };
+}
+
+describe("ShellContent branch selection", () => {
+  it("renders the folder home for /folder/:cwd", () => {
+    at(`/folder/${ENC}`);
+    expect(screen.getByText(`home:${CWD}`)).toBeTruthy();
+  });
+
+  it.each(["desktop", "mobile"] as const)("renders research with decoded cwd on %s", (variant) => {
+    at(`/folder/${ENC}/research`, variant);
+    expect(screen.getByText(`research:${CWD}`)).toBeTruthy();
+    expect(screen.queryByText(`home:${CWD}`)).toBeNull();
+  });
+
+  it("renders the session chat for /session/:id", () => {
+    at("/session/known");
+    expect(screen.getByText("session:known")).toBeTruthy();
+  });
+
+  it("falls back to the landing page when the session is unknown", () => {
+    at("/session/ghost");
+    expect(screen.getByText("landing")).toBeTruthy();
+  });
+
+  it("renders the landing page for an unmatched route", () => {
+    at("/nothing/here");
+    expect(screen.getByText("landing")).toBeTruthy();
+  });
+
+  it("passes both halves of a query-carrying preview route", () => {
+    at(`/folder/${ENC}/view?path=src/a.ts`);
+    expect(screen.getByText(`file:${CWD}:src/a.ts`)).toBeTruthy();
+  });
+
+  it("resolves /pi-view from the search string", () => {
+    at("/pi-view?url=https://example.com");
+    expect(screen.getByText("url:https://example.com")).toBeTruthy();
+  });
+
+  it("prefers the deeper openspec board route over the folder home", () => {
+    at(`/folder/${ENC}/openspec`);
+    expect(screen.getByText(`board:${CWD}`)).toBeTruthy();
+  });
+
+  it("prefers archive over the board on the deeper path", () => {
+    at(`/folder/${ENC}/openspec/archive`);
+    expect(screen.getByText(`archive:${CWD}`)).toBeTruthy();
+  });
+
+  // See change: addons-hub-declutter (test-plan E7)
+  it("E7: defaults an unknown or missing folder-settings page to add-ons", () => {
+    at(`/folder/${ENC}/settings/bogus`);
+    expect(screen.getByText(`folder-settings:${CWD}:add-ons`)).toBeTruthy();
+    cleanup();
+    at(`/folder/${ENC}/settings`);
+    expect(screen.getByText(`folder-settings:${CWD}:add-ons`)).toBeTruthy();
+  });
+
+  it("E7: renders add-ons and cards pages as themselves", () => {
+    at(`/folder/${ENC}/settings/add-ons`);
+    expect(screen.getByText(`folder-settings:${CWD}:add-ons`)).toBeTruthy();
+    cleanup();
+    at(`/folder/${ENC}/settings/cards`);
+    expect(screen.getByText(`folder-settings:${CWD}:cards`)).toBeTruthy();
+  });
+
+  it("E7: the legacy packages page replace-redirects to add-ons", () => {
+    const { history } = at(`/folder/${ENC}/settings/packages`);
+    expect(screen.getByTestId("loc").textContent).toBe(`/folder/${ENC}/settings/add-ons`);
+    // replace: the legacy entry is not left behind in the history stack.
+    expect(history).toEqual([`/folder/${ENC}/settings/add-ons`]);
+    expect(screen.getByText(`folder-settings:${CWD}:add-ons`)).toBeTruthy();
+  });
+
+  it("E7: /pi-resources lands on the Add-ons page", () => {
+    at(`/folder/${ENC}/pi-resources`);
+    expect(screen.getByTestId("loc").textContent).toBe(`/folder/${ENC}/settings/add-ons`);
+  });
+
+  it("honours a valid folder-settings page", () => {
+    at(`/folder/${ENC}/settings/skills`);
+    expect(screen.getByText(`folder-settings:${CWD}:skills`)).toBeTruthy();
+  });
+});
+
+describe("ShellContent variant divergence (pre-existing, reproduced deliberately)", () => {
+  it("gives mobile its own diff branch", () => {
+    at("/session/known/diff", "mobile");
+    expect(screen.getByText("diff:known")).toBeTruthy();
+  });
+
+  it("routes desktop diff through the session chat instead", () => {
+    at("/session/known/diff", "desktop");
+    expect(screen.getByText("session:known")).toBeTruthy();
+  });
+
+  it("gives mobile its own folder-editor branch", () => {
+    at(`/folder/${ENC}/editor`, "mobile");
+    expect(screen.getByText(`editor:${CWD}`)).toBeTruthy();
+  });
+});
+
+describe("frozen-underlay derivation (the reason this component exists)", () => {
+  it("selects the launching surface from a FROZEN router while the browser URL is the overlay", () => {
+    // This is the case the pre-extraction shape could not express: the live URL
+    // is /settings, but the pinned router says /folder/:cwd, and the content
+    // must follow the pinned one.
+    window.history.pushState({}, "", "/settings/general");
+    const { hook } = memoryLocation({ path: `/folder/${ENC}`, static: true });
+    render(
+      <Router hook={hook}>
+        <ShellContent variant="desktop" {...renderers()} />
+      </Router>,
+    );
+    expect(screen.getByText(`home:${CWD}`)).toBeTruthy();
+    // Fails closed: if the branch were derived from window.location the shell
+    // would fall through every branch to the landing page, which is exactly the
+    // bug this extraction fixes.
+    expect(screen.queryByText("landing")).toBeNull();
+  });
+
+  it("derives from the browser URL when NOT pinned — the counterfactual", () => {
+    // The other two tests in this block are only meaningful if the same render
+    // WITHOUT a pinned router gives a different answer. It does: at /settings
+    // no content branch matches and the shell falls through to the landing
+    // page. That is precisely the broken underlay the extraction fixes, pinned
+    // here so the pair cannot both drift into agreement.
+    window.history.pushState({}, "", "/settings/general");
+    render(<ShellContent variant="desktop" {...renderers()} />);
+    expect(screen.getByText("landing")).toBeTruthy();
+    expect(screen.queryByText(`home:${CWD}`)).toBeNull();
+  });
+
+  it("keeps a frozen session underlay while the browser URL is a preview overlay", () => {
+    window.history.pushState({}, "", "/pi-view?url=https://example.com");
+    const { hook, searchHook } = memoryLocation({ path: "/session/known", searchPath: "", static: true });
+    render(
+      <Router hook={hook} searchHook={searchHook}>
+        <ShellContent variant="desktop" {...renderers()} />
+      </Router>,
+    );
+    expect(screen.getByText("session:known")).toBeTruthy();
+    // The overlay's own `?url=` must not leak into the frozen underlay.
+    expect(screen.queryByText("url:https://example.com")).toBeNull();
+  });
+});
+
+describe("ShellContent archive routes (resolve-archived-attached-proposal)", () => {
+  it("E23 /openspec/archive/:entry renders the archive list, never the change preview", () => {
+    at(`/folder/${ENC}/openspec/archive/2026-09-30-x`);
+    expect(screen.getByText(`archive:${CWD}`)).toBeTruthy();
+    expect(screen.queryByText(/^preview:/)).toBeNull();
+  });
+
+  it("archive deep link passes entry + artifact to renderArchive", () => {
+    const { hook, searchHook } = memoryLocation({ path: `/folder/${ENC}/openspec/archive/2026-09-30-x/design` });
+    render(
+      <Router hook={hook} searchHook={searchHook}>
+        <ShellContent
+          variant="desktop"
+          {...renderers()}
+          renderArchive={(cwd, deepLink) => <div>archive:{cwd}:{deepLink?.entry}:{deepLink?.artifact}</div>}
+        />
+      </Router>,
+    );
+    expect(screen.getByText(`archive:${CWD}:2026-09-30-x:design`)).toBeTruthy();
+  });
+
+  it("an undecodable archive segment falls back to the archive list instead of throwing", () => {
+    at(`/folder/${ENC}/openspec/archive/%ZZ/design`);
+    expect(screen.getByText(`archive:${CWD}`)).toBeTruthy();
+    at(`/folder/${ENC}/openspec/archive/%ZZ`);
+    expect(screen.getAllByText(`archive:${CWD}`).length).toBe(2);
+  });
+
+  it("a change preview still renders for a normal change name", () => {
+    at(`/folder/${ENC}/openspec/my-change/proposal`);
+    expect(screen.getByText(`preview:${CWD}:my-change:proposal`)).toBeTruthy();
+  });
+});

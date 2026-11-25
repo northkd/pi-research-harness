@@ -1,0 +1,65 @@
+--- a/src/extension/rpc.js
++++ b/src/extension/rpc.js
+@@ -1,4 +1,5 @@
+ import * as path from "node:path";
++import { registerRequiredChildExtensions } from "../shared/required-child-extensions.js";
+ import { Compile } from "typebox/compile";
+ import { resolveAsyncRunLocation } from "../runs/background/async-resume.js";
+ import { deliverAsyncRunStop } from "../runs/foreground/async-stop-action.js";
+@@ -345,9 +346,20 @@
+ async function executeChecked(options, ctx, requestId, method, params) {
+     assertSubagentParams(params, `RPC ${method} params`);
+     const controller = new AbortController();
+-    const result = await options.execute(`rpc-${method}-${requestId}`, params, controller.signal, undefined, ctx);
+-    failIfToolError(result);
+-    return dataFromToolResult(result);
++    // The binding is a host closure registered before RPC, never a request payload field.
++    const binding = globalThis[Symbol.for("pi-research-budget-rpc.v1")]?.get(requestId);
++    let scoped;
++    try {
++        if (binding !== undefined) {
++            if (binding.version !== 1 || binding.method !== method || typeof binding.bindContext !== "function")
++                throw new Error("research-budget-bridge-unavailable");
++            scoped = await binding.bindContext(ctx, registerRequiredChildExtensions, controller.signal);
++        }
++        const result = await options.execute(`rpc-${method}-${requestId}`, params, controller.signal, undefined, scoped?.ctx ?? ctx);
++        failIfToolError(result);
++        return dataFromToolResult(result);
++    }
++    finally { scoped?.dispose(); }
+ }
+ function manageParams(params, options) {
+     const input = assertRecordParams(params, "manage");
+@@ -590,7 +602,7 @@
+ async function handleRequest(request, options, fleetKeys) {
+     const ctx = options.getContext();
+     if (request.method === "ping")
+-        return pingData(ctx, options);
++        return { ...pingData(ctx, options), researchBudgetProtocol: 1 };
+     if (!ctx)
+         throw new SubagentRpcError("no_active_session", "No active extension context for subagent RPC.");
+     if (request.method === "manage") {
+--- a/src/runs/shared/child-session.js
++++ b/src/runs/shared/child-session.js
+@@ -475,10 +475,20 @@
+                     : undefined;
+                 if (resolvedModel?.error)
+                     throw new Error(resolvedModel.error);
++                let requestModelRuntime = modelRuntime;
++                const budgetExtensions = (launch.requiredExtensions ?? []).filter((entry) => entry.id === "research-budget-v1");
++                if (budgetExtensions.length > 1)
++                    throw new Error("research-budget-bridge-unavailable");
++                if (budgetExtensions.length === 1) {
++                    const budgetModule = await import(pathToFileURL(budgetExtensions[0].path).href);
++                    if (typeof budgetModule.bindResearchModelRuntime !== "function")
++                        throw new Error("research-budget-bridge-unavailable");
++                    requestModelRuntime = await budgetModule.bindResearchModelRuntime(modelRuntime, { cwd: launch.cwd, signal: launch.signal, role: launch.runtime.agent });
++                }
+                 const { session } = await pi.createAgentSession({
+                     cwd: launch.cwd,
+                     agentDir,
+-                    modelRuntime,
++                    modelRuntime: requestModelRuntime,
+                     ...(resolvedModel?.model ? { model: resolvedModel.model } : {}),
+                     ...(resolvedModel?.thinkingLevel ? { thinkingLevel: resolvedModel.thinkingLevel } : {}),
+                     ...(launch.tools ? { tools: launch.tools } : {}),

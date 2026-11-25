@@ -1,0 +1,511 @@
+/**
+ * Tests for session-sync: sendStateSync and handleSessionSwitch.
+ */
+import { describe, it, expect, vi } from "vitest";
+import { sendStateSync, handleSessionChange, replaySessionEntries, isLive } from "../session-sync.js";
+import type { BridgeContext } from "../bridge-context.js";
+import { __resetSpawnToken, captureSpawnTokenAtActivation } from "../spawn-token.js";
+
+function createMockBridgeContext(overrides?: Partial<BridgeContext>): BridgeContext {
+  const sent: any[] = [];
+  return {
+    pi: {
+      getSessionName: () => "test-session",
+      getCommands: () => [],
+    } as any,
+    connection: {
+      send: (msg: any) => sent.push(msg),
+    } as any,
+    sessionId: "sess-123",
+    cachedCtx: {
+      sessionManager: {
+        getSessionFile: () => "/path/to/session.json",
+        getSessionDir: () => "/path/to/session",
+        getBranch: () => [{ role: "user", content: "hello" }],
+        getEntries: () => [{ role: "user", content: "hello" }],
+      },
+    },
+    cachedModelRegistry: null,
+    cachedHasUI: true,
+    lastModel: undefined,
+    lastThinkingLevel: undefined,
+    lastSessionFile: undefined,
+    lastSessionDir: undefined,
+    lastFirstMessage: undefined,
+    lastGitBranch: undefined,
+    lastGitPrNumber: undefined,
+    lastSessionName: undefined,
+    hasRegisteredOnce: false,
+    dashboardSpawned: false,
+    ...overrides,
+    // Expose sent messages for assertions
+    _sent: sent,
+  } as any;
+}
+
+describe("sendStateSync", () => {
+  it("should include pid in session_register message", () => {
+    const bc = createMockBridgeContext();
+    sendStateSync(bc, () => []);
+
+    const sent = (bc as any)._sent;
+    const registerMsg = sent.find((m: any) => m.type === "session_register");
+    expect(registerMsg).toBeDefined();
+    expect(registerMsg.pid).toBe(process.pid);
+    expect(typeof registerMsg.pid).toBe("number");
+    expect(registerMsg.pid).toBeGreaterThan(0);
+  });
+
+  // ── reattach-move-to-front ──
+
+  it("first sendStateSync after boot tags registerReason: spawn", () => {
+    const bc = createMockBridgeContext();
+    expect(bc.hasRegisteredOnce).toBe(false);
+
+    sendStateSync(bc, () => []);
+
+    const sent = (bc as any)._sent;
+    const registerMsg = sent.find((m: any) => m.type === "session_register");
+    expect(registerMsg.registerReason).toBe("spawn");
+    expect(bc.hasRegisteredOnce).toBe(true);
+  });
+
+  it("second sendStateSync (reconnect) tags registerReason: reattach", () => {
+    const bc = createMockBridgeContext();
+
+    sendStateSync(bc, () => []);
+    // Clear sent, simulate reconnect
+    (bc as any)._sent.length = 0;
+    sendStateSync(bc, () => []);
+
+    const sent = (bc as any)._sent;
+    const registerMsg = sent.find((m: any) => m.type === "session_register");
+    expect(registerMsg.registerReason).toBe("reattach");
+    expect(bc.hasRegisteredOnce).toBe(true);
+  });
+
+  it("hasRegisteredOnce flips exactly once and stays true", () => {
+    const bc = createMockBridgeContext();
+
+    sendStateSync(bc, () => []);
+    expect(bc.hasRegisteredOnce).toBe(true);
+
+    sendStateSync(bc, () => []);
+    expect(bc.hasRegisteredOnce).toBe(true);
+
+    sendStateSync(bc, () => []);
+    expect(bc.hasRegisteredOnce).toBe(true);
+  });
+
+  it("third+ sendStateSync continues to tag reattach", () => {
+    const bc = createMockBridgeContext();
+
+    sendStateSync(bc, () => []);
+    sendStateSync(bc, () => []);
+    (bc as any)._sent.length = 0;
+    sendStateSync(bc, () => []);
+
+    const sent = (bc as any)._sent;
+    const registerMsg = sent.find((m: any) => m.type === "session_register");
+    expect(registerMsg.registerReason).toBe("reattach");
+  });
+});
+
+describe("handleSessionChange", () => {
+  it("E21/E34: git info goes through the tracker's first evaluation, after register, with the status diff cache reset", () => {
+    const order: string[] = [];
+    const evaluateFirst = vi.fn((_bc: any, cwd: string) => order.push(`git:${cwd}`));
+    const bc = createMockBridgeContext({ gitTracker: { evaluateFirst } as any, lastGitStatusJson: '{"stale":1}' } as any);
+    const origSend = (bc as any).connection.send;
+    (bc as any).connection.send = (m: any) => { order.push(m.type); origSend(m); };
+    handleSessionChange(bc, {
+      cwd: "/proj",
+      sessionManager: { getSessionId: () => "sess-new", getSessionFile: () => "/f", getSessionDir: () => "/d", getBranch: () => [], getEntries: () => [] },
+    } as any, () => []);
+    expect(evaluateFirst).toHaveBeenCalledWith(bc, "/proj");
+    expect(order.indexOf("git:/proj")).toBeGreaterThan(order.indexOf("session_register"));
+    expect(order.indexOf("git:/proj")).toBeLessThan(order.indexOf("commands_list"));
+    expect(bc.lastGitStatusJson).toBeUndefined();
+  });
+
+  it("always tags registerReason: spawn even after reattach", () => {
+    const bc = createMockBridgeContext({ hasRegisteredOnce: true } as any);
+
+    const ctx = {
+      cwd: "/proj",
+      sessionManager: {
+        getSessionId: () => "sess-new",
+        getSessionFile: () => "/path/new.json",
+        getSessionDir: () => "/path",
+        getBranch: () => [],
+        getEntries: () => [],
+      },
+    };
+
+    handleSessionChange(bc, ctx as any, () => []);
+
+    const sent = (bc as any)._sent;
+    const registerMsg = sent.find((m: any) => m.type === "session_register");
+    expect(registerMsg).toBeDefined();
+    expect(registerMsg.sessionId).toBe("sess-new");
+    expect(registerMsg.registerReason).toBe("spawn");
+  });
+});
+
+// See change: spawn-correlation-token — bridge token inclusion contract.
+describe("sendStateSync: spawnToken from env", () => {
+  const ENV_VAR = "PI_DASHBOARD_SPAWN_TOKEN";
+
+  function withEnvVar<T>(value: string | undefined, fn: () => T): T {
+    const prior = process.env[ENV_VAR];
+    if (value === undefined) delete process.env[ENV_VAR];
+    else process.env[ENV_VAR] = value;
+    // The token is captured + scrubbed at bridge ACTIVATION (not first register).
+    // See change: mirror-dashboard-trust-to-pi.
+    __resetSpawnToken();
+    captureSpawnTokenAtActivation();
+    try {
+      return fn();
+    } finally {
+      __resetSpawnToken();
+      if (prior === undefined) delete process.env[ENV_VAR];
+      else process.env[ENV_VAR] = prior;
+    }
+  }
+
+  it("first register includes spawnToken from env", () => {
+    withEnvVar("tok_first", () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: false } as any);
+      sendStateSync(bc, () => []);
+      const sent = (bc as any)._sent;
+      const registerMsg = sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBe("tok_first");
+      expect(registerMsg.registerReason).toBe("spawn");
+    });
+  });
+
+  it("reattach register omits spawnToken (even when env still set)", () => {
+    withEnvVar("tok_first", () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: true } as any);
+      sendStateSync(bc, () => []);
+      const sent = (bc as any)._sent;
+      const registerMsg = sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBeUndefined();
+      expect(registerMsg.registerReason).toBe("reattach");
+    });
+  });
+
+  it("first register without env var omits spawnToken", () => {
+    withEnvVar(undefined, () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: false } as any);
+      sendStateSync(bc, () => []);
+      const sent = (bc as any)._sent;
+      const registerMsg = sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBeUndefined();
+      expect(registerMsg.registerReason).toBe("spawn");
+    });
+  });
+
+  // See change: fix-spawn-token-env-leak.
+  it("first register emits token + dashboardSpawned:true and scrubs the env var", () => {
+    withEnvVar("tok_first", () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: false, dashboardSpawned: true } as any);
+      sendStateSync(bc, () => []);
+      const registerMsg = (bc as any)._sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBe("tok_first");
+      expect(registerMsg.dashboardSpawned).toBe(true);
+      // Single-use token scrubbed so descendants can't inherit it.
+      expect(process.env.PI_DASHBOARD_SPAWN_TOKEN).toBeUndefined();
+    });
+  });
+
+  it("second register (reattach) omits token but keeps dashboardSpawned:true via capture-once boolean", () => {
+    // Env already scrubbed (token gone) but the captured boolean persists.
+    withEnvVar(undefined, () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: true, dashboardSpawned: true } as any);
+      sendStateSync(bc, () => []);
+      const registerMsg = (bc as any)._sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBeUndefined();
+      expect(registerMsg.dashboardSpawned).toBe(true);
+      expect(registerMsg.registerReason).toBe("reattach");
+    });
+  });
+
+  it("descendant child (no token, dashboardSpawned:false) emits neither field", () => {
+    withEnvVar(undefined, () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: false, dashboardSpawned: false } as any);
+      sendStateSync(bc, () => []);
+      const registerMsg = (bc as any)._sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBeUndefined();
+      expect(registerMsg.dashboardSpawned).toBeUndefined();
+    });
+  });
+
+  it("handleSessionChange register omits spawnToken (in-process new/fork/resume)", () => {
+    withEnvVar("tok_first", () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: true } as any);
+      const ctx = {
+        cwd: "/proj",
+        sessionManager: {
+          getSessionId: () => "sess-fork",
+          getSessionFile: () => "/path/new.json",
+          getSessionDir: () => "/path",
+          getBranch: () => [],
+          getEntries: () => [],
+        },
+      };
+      handleSessionChange(bc, ctx as any, () => []);
+      const sent = (bc as any)._sent;
+      const registerMsg = sent.find((m: any) => m.type === "session_register" && m.sessionId === "sess-fork");
+      expect(registerMsg).toBeDefined();
+      expect(registerMsg.spawnToken).toBeUndefined();
+      expect(registerMsg.registerReason).toBe("spawn");
+    });
+  });
+});
+
+describe("D3 re-mint on every re-register (wire-mcp-session-token)", () => {
+  it("sendStateSync sends mcp/mint-token AFTER its session_register (the reconnect path)", () => {
+    const bc = createMockBridgeContext();
+    sendStateSync(bc, () => []);
+    const sent = (bc as any)._sent;
+    const registerIdx = sent.findIndex((m: any) => m.type === "session_register");
+    const mintIdx = sent.findIndex(
+      (m: any) => m.type === "plugin_pi_message" && m.messageType === "mcp/mint-token",
+    );
+    expect(registerIdx).toBeGreaterThanOrEqual(0);
+    expect(mintIdx).toBeGreaterThan(registerIdx);
+    expect(sent[mintIdx]).toMatchObject({
+      type: "plugin_pi_message",
+      sessionId: "sess-123",
+      pluginId: "mcp-server",
+      messageType: "mcp/mint-token",
+    });
+  });
+
+  it("the REATTACH register (reconnect after dashboard restart) re-mints — the token registry died server-side", () => {
+    const bc = createMockBridgeContext();
+    sendStateSync(bc, () => []); // first register
+    (bc as any)._sent.length = 0;
+    bc.hasRegisteredOnce = true;
+    sendStateSync(bc, () => []); // reconnect
+    const sent = (bc as any)._sent;
+    const register = sent.find((m: any) => m.type === "session_register");
+    expect(register.registerReason).toBe("reattach");
+    expect(
+      sent.some((m: any) => m.type === "plugin_pi_message" && m.messageType === "mcp/mint-token"),
+    ).toBe(true);
+  });
+
+  it("handleSessionChange (new/fork/resume identity) re-mints for the NEW session id", () => {
+    const bc = createMockBridgeContext();
+    const ctx = {
+      sessionManager: {
+        getSessionId: () => "sess-456",
+        getSessionFile: () => "/path/to/other.json",
+        getSessionDir: () => "/path/to/other",
+        getBranch: () => [{ role: "user", content: "hello" }],
+      },
+      cwd: "/tmp/x",
+    };
+    bc.cachedCtx = ctx as any;
+    handleSessionChange(bc, ctx, () => []);
+    const sent = (bc as any)._sent;
+    const registerIdx = sent.findIndex((m: any) => m.type === "session_register");
+    const mint = sent.find(
+      (m: any) => m.type === "plugin_pi_message" && m.messageType === "mcp/mint-token",
+    );
+    expect(registerIdx).toBeGreaterThanOrEqual(0);
+    expect(mint).toBeDefined();
+    expect(mint.sessionId).toBe("sess-456");
+  });
+});
+
+/**
+ * pi 0.99+ creates the session file on the FIRST user message, so a bridge
+ * registers while `getSessionFile()` names a path that does not exist yet.
+ * Register + state sync must succeed with cwd/model and log no error; a later
+ * session change picks the file up.
+ * See change: update-pi-core-1-0-adopt-apis (test-plan #X1).
+ */
+describe("session file not yet created (X1)", () => {
+  it("registers headless and TUI sessions without error and records the path", async () => {
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const fs = await import("node:fs");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nofile-"));
+    const missing = path.join(dir, "not-yet.jsonl");
+    expect(fs.existsSync(missing)).toBe(false);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const cachedHasUI of [false, true]) {
+        const bc = createMockBridgeContext({
+          cachedHasUI,
+          cachedCtx: {
+            sessionManager: {
+              getSessionFile: () => missing,
+              getSessionDir: () => dir,
+              getBranch: () => [],
+              getEntries: () => [],
+            },
+          } as any,
+        });
+        expect(() => sendStateSync(bc, () => [])).not.toThrow();
+        const register = (bc as any)._sent.find((m: any) => m.type === "session_register");
+        expect(register).toBeDefined();
+        expect(register.sessionFile).toBe(missing);
+        expect(register.cwd).toBe(process.cwd());
+      }
+      expect(err).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+      warn.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── Live bridge replay: liveness + live-tail option ───────────────────────
+// See change: fix-replay-fabricates-orphan-end-for-live-calls (D3).
+describe("isLive (test-plan #E5, #X3)", () => {
+  const ctxWith = (isIdle: unknown) => (isIdle === "absent" ? {} : { isIdle });
+  const cases: Array<[boolean, unknown, boolean]> = [
+    [true, () => true, true],
+    [true, () => false, true],
+    [true, "absent", true],
+    [true, () => { throw new Error("stale ctx"); }, true],
+    [false, () => true, false],
+    [false, () => false, true],
+    [false, "absent", false],
+    [false, () => { throw new Error("stale ctx"); }, false],
+  ];
+  for (const [flag, isIdle, expected] of cases) {
+    const label = typeof isIdle === "function" ? isIdle.toString().slice(0, 30) : String(isIdle);
+    it(`flag=${flag} isIdle=${label} -> ${expected}`, () => {
+      expect(isLive(ctxWith(isIdle), flag)).toBe(expected);
+    });
+  }
+  it("tolerates an undefined ctx", () => {
+    expect(isLive(undefined, false)).toBe(false);
+    expect(isLive(undefined, true)).toBe(true);
+  });
+});
+
+describe("replaySessionEntries live tail (test-plan #E6)", () => {
+  const branch = [
+    { type: "message", id: "u1", timestamp: "2026-10-13T10:00:00.000Z", message: { role: "user", content: "go" } },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: "2026-10-13T10:00:01.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "A", name: "Agent", arguments: {} },
+          { type: "toolCall", id: "B", name: "bash", arguments: {} },
+        ],
+      },
+    },
+  ];
+  const endsFor = (sent: any[]) =>
+    sent.filter((m) => m.type === "event_forward" && m.event.eventType === "tool_execution_end").map((m) => m.event.data.toolCallId);
+  const mkBc = () =>
+    createMockBridgeContext({
+      cachedCtx: { sessionManager: { getBranch: () => branch } },
+    } as any);
+
+  it("sends no end for the in-flight tail when liveTailOpen", () => {
+    const bc = mkBc();
+    replaySessionEntries(bc, { liveTailOpen: true });
+    expect(endsFor((bc as any)._sent)).toEqual([]);
+  });
+
+  it("orphan-closes the tail by default", () => {
+    const bc = mkBc();
+    replaySessionEntries(bc);
+    expect(endsFor((bc as any)._sent)).toEqual(["A", "B"]);
+  });
+
+  it("handleSessionChange replays with the tail closed (new/fork/resume has no turn in flight)", () => {
+    // handleSessionChange replays from bc.cachedCtx; seed it with the branch.
+    const bc2 = createMockBridgeContext({ cachedCtx: { sessionManager: { getBranch: () => branch } } } as any);
+    handleSessionChange(
+      bc2,
+      { cwd: "/proj", sessionManager: { getSessionId: () => "s2", getSessionFile: () => "/f", getSessionDir: () => "/d", getBranch: () => branch, getEntries: () => branch } } as any,
+      () => [],
+    );
+    expect(endsFor((bc2 as any)._sent)).toEqual(["A", "B"]);
+  });
+});
+
+// test-plan #E14 — the bridge marks replayed events and carries the branch fingerprint.
+// See change: fix-large-session-resume-replay (D1, D5, D7).
+describe("replay marker + branch fingerprint (test-plan #E14)", () => {
+  const branch5 = ["e1", "e2", "e3", "e4", "e5"].map((id, i) => ({
+    type: "message",
+    id,
+    ...(i > 0 ? { parentId: `e${i}` } : {}),
+    timestamp: `2026-10-13T10:00:0${i}.000Z`,
+    message: i % 2 === 0
+      ? { role: "user", content: `question ${i}` }
+      : { role: "assistant", content: [{ type: "text", text: `answer ${i}` }] },
+  }));
+  const mk = () =>
+    createMockBridgeContext({
+      cachedCtx: { sessionManager: { getBranch: () => branch5, getSessionFile: () => "/f", getSessionDir: () => "/d" } },
+    } as any);
+  const forwards = (sent: any[]) => sent.filter((m) => m.type === "event_forward");
+
+  it("reconnect: every replayed event_forward is marked, the first after replay_complete is not", () => {
+    const bc = mk();
+    sendStateSync(bc, () => [], { liveTailOpen: false });
+    replaySessionEntries(bc, { liveTailOpen: false });
+    (bc as any).connection.send({ type: "replay_complete", sessionId: bc.sessionId });
+    (bc as any).connection.send({ type: "event_forward", sessionId: bc.sessionId, event: { eventType: "agent_start", timestamp: 1, data: {} } });
+    const sent = (bc as any)._sent as any[];
+    const completeAt = sent.findIndex((m) => m.type === "replay_complete");
+    const replayed = forwards(sent.slice(0, completeAt));
+    expect(replayed.length).toBeGreaterThan(0);
+    expect(replayed.every((m) => m.replay === true)).toBe(true);
+    const live = forwards(sent.slice(completeAt));
+    expect(live).toHaveLength(1);
+    expect(live[0].replay).toBeUndefined();
+  });
+
+  it("register carries leafEntryId (last branch id), eventCount and the shared liveTailOpen", () => {
+    const bc = mk();
+    sendStateSync(bc, () => [], { liveTailOpen: false });
+    const reg = (bc as any)._sent.find((m: any) => m.type === "session_register");
+    expect(reg.eventCount).toBe(5);
+    expect(reg.leafEntryId).toBe("e5");
+    expect(reg.liveTailOpen).toBe(false);
+  });
+
+  it("register omits liveTailOpen / leafEntryId when the caller or branch gives none", () => {
+    const bc = createMockBridgeContext(); // branch entries carry no id
+    sendStateSync(bc, () => []);
+    const reg = (bc as any)._sent.find((m: any) => m.type === "session_register");
+    expect(reg.leafEntryId).toBeUndefined();
+    expect(reg.liveTailOpen).toBeUndefined();
+  });
+
+  it("session switch: marked replay, leafEntryId from the new session, liveTailOpen: false", () => {
+    const bc = mk();
+    handleSessionChange(
+      bc,
+      { cwd: "/proj", sessionManager: { getSessionId: () => "s2", getSessionFile: () => "/f", getSessionDir: () => "/d", getBranch: () => branch5, getEntries: () => branch5 } } as any,
+      () => [],
+    );
+    const sent = (bc as any)._sent as any[];
+    const reg = sent.find((m) => m.type === "session_register");
+    expect(reg.liveTailOpen).toBe(false);
+    expect(reg.leafEntryId).toBe("e5");
+    const completeAt = sent.findIndex((m) => m.type === "replay_complete");
+    const replayed = forwards(sent.slice(0, completeAt));
+    expect(replayed.length).toBeGreaterThan(0);
+    expect(replayed.every((m) => m.replay === true)).toBe(true);
+  });
+});

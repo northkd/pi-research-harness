@@ -1,0 +1,16 @@
+{
+  "sources": [
+    {
+      "source": "pi-dashboard-server/src/access/pi-trust-mirror-service.ts",
+      "sha256": "c9b2986eaa99af2a2398d8ab34d36f3b630242ebb16e0bc4c2d5bf5f9ddf60d4"
+    },
+    {
+      "source": "pi-dashboard-shared/src/pi-trust-mirror.ts",
+      "sha256": "7497fa03e3ff29900edf8947e0a0c135284bab03f86d55a01b2ffa667fbdd989"
+    },
+    {
+      "source": "pi-dashboard-shared/src/pi-trust-mirror-snapshot.ts",
+      "sha256": "18ce08fc010b0d479025aa36309712a4b4a2e378c8e189c38c493ad8de6e2524"
+    }
+  ]
+}

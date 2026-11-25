@@ -1,0 +1,9 @@
+{
+  "name": "pi-science-external-cli-worker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@blackbelt-technology/pi-dashboard-server": "^0.10.0",
+    "@blackbelt-technology/pi-dashboard-shared": "^0.10.0"
+  }
+}

@@ -1,0 +1,405 @@
+#!/usr/bin/env node
+// kb CLI (Phase 1): index | search | neighbors | backlinks | get | config
+// Run (dev): NODE_OPTIONS=--experimental-sqlite tsx src/cli.ts <cmd> ...
+// Shipped bin builds to dist/cli.js (build step deferred).
+import { existsSync, readFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { indexOptionsFromConfig, loadConfig, type ResolvedConfig, type ResolvedSource } from "./config.js";
+import { agentsChain, doxInit, doxLint, listEmptyPurposeRows } from "./dox.js";
+import { ackTargets, applyDecisions, buildWorkItems } from "./dox-triage.js";
+import { evaluate, loadGolden } from "./eval.js";
+import { beginForcedSource, sourceGateIsStale, stampPass, stampSource } from "./index-gate.js";
+import { BUILDING_LINE, isFirstIndexLive, runIndexAtomic } from "./index-run.js";
+import { indexSource } from "./indexer.js";
+import { kbInit } from "./init.js";
+import { renderHits } from "./render.js";
+import { searchOptsFromConfig } from "./search-opts.js";
+import { seedOptionsFromConfig } from "./seed.js";
+import { classifyRef, type ResolvedSource as RResolvedSource, resolveAll } from "./sources.js";
+import { SqliteFtsStore } from "./sqlite-store.js";
+import { readStaleness } from "./staleness.js";
+import { defaultPromptTrust } from "./trust.js";
+import type { DocType, SearchOpts } from "./types.js";
+import { enrichHits } from "./verdict.js";
+
+interface Flags {
+  _: string[];
+  [k: string]: string | boolean | string[];
+}
+function parse(argv: string[]): Flags {
+  const f: Flags = { _: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) f[key] = true;
+      else {
+        // collect repeatable --source
+        if (key === "source") (f.source = ([] as string[]).concat((f.source as string[]) ?? [], next));
+        else f[key] = next;
+        i++;
+      }
+    } else f._.push(a);
+  }
+  return f;
+}
+
+/** Validate a positive-integer flag; exit 2 with a clear message on garbage. */
+function posInt(v: unknown, name: string): number | undefined {
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) { console.error(`${name} must be a positive integer (got ${String(v)})`); process.exit(2); }
+  return n;
+}
+/** Validate an enum flag against an allowlist; exit 2 on unknown value. */
+function enumFlag(v: unknown, allowed: string[], name: string): string | undefined {
+  if (v === undefined || v === true) return undefined;
+  if (!allowed.includes(v as string)) { console.error(`${name} must be one of ${allowed.join("|")} (got ${String(v)})`); process.exit(2); }
+  return v as string;
+}
+
+function cfgFrom(flags: Flags): ResolvedConfig {
+  const cwd = (flags.cwd as string) ?? process.cwd();
+  const cfg = loadConfig(cwd, { configPath: flags.config as string | undefined });
+  // --source <dir> (repeatable) overrides sources for ad-hoc use
+  const srcs = flags.source as string[] | undefined;
+  if (srcs?.length) {
+    cfg.resolvedSources = srcs.map((s, i): ResolvedSource => ({ id: s, dir: resolve(cwd, s), priority: srcs.length - i }));
+  }
+  if (flags.db) cfg.dbAbsPath = resolve(cwd, flags.db as string);
+  return cfg;
+}
+
+function openStore(cfg: ResolvedConfig): SqliteFtsStore {
+  const store = new SqliteFtsStore(cfg.dbAbsPath);
+  store.init();
+  return store;
+}
+async function runIndex(cfg: ResolvedConfig, store: SqliteFtsStore, sources: RResolvedSource[], force = false) {
+  // Apply the same per-source schema-version / options-hash gate as runIndexAtomic so
+  // the auto-index-on-search path also picks up new structures after an upgrade or a
+  // frontmatter-config change (else the DB stays stale until an explicit `index`).
+  // A source is stamped only after it was walked; skipped/failed ones stay due.
+  let scanned = 0, changed = 0, deleted = 0, chunks = 0;
+  for (const s of sources) {
+    const eff = force || sourceGateIsStale(store, cfg, s.id);
+    const st = await indexSource(store, { root: s.id, dir: s.dir }, indexOptionsFromConfig(cfg, { force: eff, onFirstBatch: eff ? beginForcedSource(store, s.id) : undefined }));
+    if (!st.missing) stampSource(store, cfg, s.id);
+    scanned += st.scanned; changed += st.changed; deleted += st.deleted; chunks += st.chunks;
+  }
+  stampPass(store, cfg);
+  return { scanned, changed, deleted, chunks };
+}
+
+/** Open the docs store for a non-index command WITHOUT ever creating `dbPath` in place:
+ *  an absent DB is built through the atomic first-index path (temp file → no-clobber
+ *  install), or — while another process is building it — reported as still being built
+ *  (exit 75, EX_TEMPFAIL). With no indexable source nothing is built and an empty
+ *  in-memory store answers. See change: fix-kb-index-integrity (D2). */
+async function openStoreForQuery(cfg: ResolvedConfig, sources: RResolvedSource[], flags: Flags): Promise<SqliteFtsStore> {
+  if (!existsSync(cfg.dbAbsPath)) {
+    if (isFirstIndexLive(cfg.dbAbsPath)) {
+      console.log(BUILDING_LINE);
+      process.exit(75);
+    }
+    if (!flags["no-reindex"] && sources.some((s) => existsSync(s.dir))) {
+      await runIndexAtomic({
+        dbPath: cfg.dbAbsPath,
+        sources: sources.map((x) => ({ id: x.id, dir: x.dir })),
+        indexOpts: indexOptionsFromConfig(cfg),
+        gate: cfg,
+        seed: seedOptionsFromConfig(cfg, { noSeed: !!flags["no-seed"], explicitSources: !!(flags.source as string[] | undefined)?.length, customDb: !!flags.db }),
+      });
+    } else {
+      const mem = new SqliteFtsStore(":memory:");
+      mem.init();
+      return mem;
+    }
+  }
+  return openStore(cfg);
+}
+
+/** Resolve sources for a run. --source overrides (filesystem, sync); otherwise
+ *  resolve all configured specs (filesystem sync + remote async + TOFU trust). */
+async function sourcesForRun(cfg: ResolvedConfig, flags: Flags): Promise<RResolvedSource[]> {
+  const srcs = flags.source as string[] | undefined;
+  if (srcs?.length) return srcs.map((s, i) => ({ id: s, dir: resolve(cfg.cwd, s), priority: srcs.length - i, identity: s }));
+  const interactive = process.stdin.isTTY ?? false;
+  return resolveAll(cfg.allSourceSpecs, {
+    cwd: cfg.cwd,
+    cacheDir: cfg.cacheDirAbs,
+    refresh: !!flags.refresh,
+    promptTrust: interactive ? defaultPromptTrust : undefined,
+  });
+}
+
+const HELP = `kb — markdown knowledge base
+Usage:
+  kb init    [--global] [--source <ref>]... [--dry-run] [--force] [--cwd <dir>]
+  kb index   [--source <dir>...] [--db <path>] [--force] [--refresh] [--no-seed]
+             (--no-seed: skip seeding a linked worktree's first index from the main checkout)
+  kb search  "<query>" [--limit N] [--root id] [--doc-type doc|agents|source-md]
+             [--expand-parent|--no-expand-parent] [--expand-graph] [--rerank]
+             [--expand-query] [--json] [--no-reindex] [--source <dir>...] [--db <path>]
+             [--no-source-dedup] [--no-lane-quota] [--no-coverage-rerank] [--verdicts]
+             (--limit bounds distinct SOURCES, not chunks; --verdicts = opt-in trust labels)
+  kb neighbors "<node>" [--depth N] [--rel child_of|links_to|references|has_tag]
+  kb backlinks "<node>"
+  kb get <path> [--section "<heading_path>"]
+  kb agents <path>                  nearest AGENTS.md chain (root→nearest); --fallback-manifest
+  kb dox init [--dry-run]           scaffold a DOX AGENTS.md tree (path rows only)
+  kb dox lint [--json] [--fix] [--source-rows]   audit DOX tree drift
+                                    (--source-rows also reports undocumented .ts/.tsx)
+  kb dox triage [--json] [--limit N]  triage STALE rows vs the git diff since ack
+              [--apply <d.json> [--write]] [--ack <targets.json>]
+  kb dox describe --list [--json] [--dir <path>]   list rows with an empty Purpose cell
+  kb eval    --golden <file.json> [--limit N] [--doc-type ...] [--no-reindex]
+             [--allow-zero] [--verbose] [--json]
+             (--golden accepts a bare array of {q, expect} or an {"items": [...]} object;
+              items outside the configured roots are reported as unreachable;
+              a run with 0 scored items or 0 recall exits non-zero unless --allow-zero)
+  kb config   show resolved config
+Global: --cwd <dir>  --config <file>`;
+
+function main() {
+  const flags = parse(process.argv.slice(2));
+  const cmd = flags._[0];
+  if (!cmd || cmd === "help" || flags.help) {
+    console.log(HELP);
+    return;
+  }
+  if (cmd === "config") {
+    const cfg = cfgFrom(flags);
+    console.log(JSON.stringify({ origin: cfg.origin, dbAbsPath: cfg.dbAbsPath, cacheDirAbs: cfg.cacheDirAbs, sources: cfg.resolvedSources, allSourceSpecs: cfg.allSourceSpecs, maxFileCount: cfg.maxFileCount, indexAgentsFiles: cfg.indexAgentsFiles }, null, 2));
+    return;
+  }
+  if (cmd === "init") {
+    const r = kbInit({
+      global: !!flags.global,
+      force: !!flags.force,
+      dryRun: !!flags["dry-run"],
+      sources: flags.source as string[] | undefined,
+      cwd: (flags.cwd as string) ?? process.cwd(),
+    });
+    if (!flags["dry-run"] && r.wrote) {
+      console.log(`wrote ${r.configPath}`);
+      if (r.gitignoreAdded) console.log(`gitignored ${r.gitignoreAdded} in ${r.gitignorePath}`);
+    }
+    return;
+  }
+
+  if (cmd === "agents") {
+    const cwd = (flags.cwd as string) ?? process.cwd();
+    const { chain, manifest } = agentsChain(cwd, flags._[1] ?? cwd, { claudeMd: true, fallbackManifest: flags["no-fallback-manifest"] ? false : true });
+    if (flags.json) console.log(JSON.stringify({ chain: chain.map((c) => c.rel), manifest }, null, 2));
+    else if (chain.length) for (const c of chain) console.log(c.rel);
+    else if (manifest) console.log(manifest);
+    else console.log("(no AGENTS.md on path and no manifest)");
+    return;
+  }
+  if (cmd === "dox") {
+    const sub = flags._[1];
+    const cwd = (flags.cwd as string) ?? process.cwd();
+    if (sub === "init") {
+      const plan = doxInit({ cwd, dryRun: !!flags["dry-run"] });
+      if (flags["dry-run"]) console.log(`# dry-run dox init\ncreate: ${plan.created.join(", ") || "(none)"}\nappend: ${plan.appended.map((a) => a.file + " +" + a.rows.length).join(", ") || "(none)"}`);
+      else console.log(`created ${plan.created.length} AGENTS.md, appended rows to ${plan.appended.length} files`);
+      return;
+    }
+    if (sub === "lint") {
+      // --source-rows opts into the D9 source-file `missing` arm (off by default
+      // so an existing tree adopts it incrementally). See change: fix-kb-search-retrieval-quality.
+      const r = doxLint({ cwd, json: !!flags.json, fix: !!flags.fix, sourceFileRows: !!flags["source-rows"] });
+      if (flags.json) console.log(JSON.stringify(r, null, 2));
+      else {
+        // Coverage line (design D4, fix-dox-lint-blind-rows): a clean verdict
+        // must be distinguishable from an unread file.
+        console.log(`${r.filesScanned} files, ${r.rowsScanned} rows scanned, ${r.issues.length} findings`);
+        for (const i of r.issues) console.log(`${i.kind}\t${i.agentsFile}${i.path ? "\t" + i.path : ""}\t${i.detail}`);
+      }
+      if (r.issues.length) process.exit(1);
+      return;
+    }
+    if (sub === "triage") {
+      const stalenessFile = (flags["staleness-file"] as string) ?? join(cwd, ".pi/dashboard/kb/dox-staleness.json");
+      if (flags.apply) {
+        const decisions = JSON.parse(readFileSync(flags.apply as string, "utf8"));
+        const r = applyDecisions({ cwd, decisions, write: !!flags.write });
+        for (const s of r.skipped) console.error(`skipped: ${s}`);
+        console.log(`${flags.write ? "applied" : "dry-run"}: ${r.rewritten} rewritten, ${r.kept} kept`);
+        if (!flags.write) console.log("re-run with --write to apply");
+        return;
+      }
+      if (flags.ack) {
+        const targets = JSON.parse(readFileSync(flags.ack as string, "utf8"));
+        console.log(`re-acked ${ackTargets({ cwd, targets, stalenessFile })} entries`);
+        return;
+      }
+      const staleness = readStaleness(stalenessFile);
+      const items = buildWorkItems({ cwd, issues: doxLint({ cwd }).issues, staleness, limit: flags.limit ? Number(flags.limit) : undefined });
+      if (flags.json) { console.log(JSON.stringify(items, null, 2)); return; }
+      const noBase = items.filter((i) => !i.baselineFound);
+      console.log(`stale rows: ${items.length}`);
+      console.log(`  with a recoverable diff : ${items.length - noBase.length}`);
+      console.log(`  no baseline (needs eyes): ${noBase.length}`);
+      for (const i of items) console.log(`  ${i.baselineFound ? "diff" : "????"}\t${i.agentsFile}\t${i.row}`);
+      return;
+    }
+    if (sub === "describe") {
+      // --list is the only v1 op; accept it (and its absence) uniformly.
+      const r = listEmptyPurposeRows({ cwd, dir: typeof flags.dir === "string" ? flags.dir : undefined });
+      if (flags.json) {
+        console.log(JSON.stringify(r, null, 2));
+        return;
+      }
+      if (r.total === 0) {
+        console.log("no empty-purpose rows");
+        return;
+      }
+      console.log(`${r.total} empty-purpose row(s) across ${r.groups.length} AGENTS.md file(s)`);
+      for (const g of r.groups) {
+        console.log(g.agentsPath);
+        for (const s of g.subjects) console.log(`  ${s}`);
+      }
+      return;
+    }
+    console.error(`unknown dox subcommand: ${sub}`); process.exit(2);
+  }
+
+  // index/search/neighbors/backlinks/get/eval need sources + store
+  void runCmd(cmd, flags).catch((e) => { console.error(String(e?.message ?? e)); process.exit(1); });
+}
+
+async function runCmd(cmd: string, flags: Flags): Promise<void> {
+  const cfg = cfgFrom(flags);
+  const isIndex = cmd === "index";
+  if (!cfg.allSourceSpecs.length && isIndex && !(flags.source as string[] | undefined)?.length) {
+    console.error("no sources configured. add sources[] to .pi/dashboard/knowledge_base.json or pass --source <dir>");
+    process.exit(2);
+  }
+  const sources = await sourcesForRun(cfg, flags);
+  if (!sources.length && isIndex) { console.error("no sources resolved"); process.exit(2); }
+
+  if (cmd === "index") {
+    // Atomic path: do NOT openStore(cfg) here — opening pre-creates the DB file
+    // at dbPath (the husk). runIndexAtomic owns store lifecycle (temp+rename on
+    // first index; in-place incremental). See change: harden-kb-index-failure-atomicity.
+    const explicit = !!(flags.source as string[] | undefined)?.length;
+    const t = performance.now();
+    const s = await runIndexAtomic({
+      dbPath: cfg.dbAbsPath,
+      sources: sources.map((x) => ({ id: x.id, dir: x.dir })),
+      indexOpts: indexOptionsFromConfig(cfg, { force: !!flags.force }),
+      gate: cfg,
+      explicit,
+      seed: seedOptionsFromConfig(cfg, { noSeed: !!flags["no-seed"], explicitSources: explicit, customDb: !!flags.db }),
+    });
+    console.log(`indexed ${s.scanned} files (${s.changed} changed, ${s.deleted} deleted, ${s.chunks} chunks) in ${(performance.now() - t).toFixed(0)}ms`);
+    console.log(JSON.stringify(s.counts));
+    return;
+  }
+
+  const store = await openStoreForQuery(cfg, sources, flags);
+  try {
+    if (cmd === "search") {
+      const q = flags._[1];
+      if (!q) { console.error("search needs a query"); process.exit(2); }
+      const limit = posInt(flags.limit, "--limit");
+      const docType = enumFlag(flags["doc-type"], ["doc", "agents", "source-md"], "--doc-type");
+      if (!flags["no-reindex"]) await runIndex(cfg, store, sources); // auto incremental freshness
+      // One shared mapping (design D2, fix-kb-eval-measurement-integrity): the
+      // CLI's flag-derived overrides are the ONLY difference from the tool.
+      const so: SearchOpts = {
+        limit: limit ?? 10,
+        root: flags.root as string | undefined,
+        docType: docType as DocType | undefined,
+        ...searchOptsFromConfig(cfg, {
+          sources,
+          overrides: {
+            sourceDedup: flags["no-source-dedup"] ? false : undefined,
+            laneQuota: flags["no-lane-quota"] ? 0 : undefined,
+            coverageRerank: flags["no-coverage-rerank"] ? false : undefined,
+            expandParent: flags["no-expand-parent"] ? false : flags["expand-parent"] ? true : undefined,
+            expandGraph: flags["expand-graph"] ? true : undefined,
+            rerank: flags.rerank ? true : undefined,
+            queryExpansion: flags["expand-query"] && cfg.queryExpansion.mode === "off" ? "synonym" : undefined,
+          },
+        }),
+      };
+      const hits = store.search(q, so);
+      // Opt-in trust verdicts (arm A): post-search enrichment OUTSIDE the store
+      // (design D10) — labels only, ordering untouched (D1); bodies from disk.
+      // See change: add-kb-trust-verdicts-and-search-guard.
+      if (flags.verdicts) await enrichHits(hits, { cwd: cfg.cwd });
+      if (flags.json) console.log(JSON.stringify(hits, null, 2));
+      else if (hits.length) console.log(renderHits(hits, { leading: "score", parentGlyph: "[parent: ", multiline: false }));
+    } else if (cmd === "neighbors") {
+      const depth = posInt(flags.depth, "--depth") ?? 2;
+      const rel = enumFlag(flags.rel, ["child_of", "links_to", "references", "has_tag"], "--rel");
+      const n = store.neighbors(flags._[1], depth, rel as any);
+      console.log(flags.json ? JSON.stringify(n, null, 2) : n.map((x) => `${x.type}\t${x.name}`).join("\n"));
+    } else if (cmd === "backlinks") {
+      const n = store.backlinks(flags._[1]);
+      console.log(flags.json ? JSON.stringify(n, null, 2) : n.map((x) => `${x.type}\t${x.name}`).join("\n"));
+    } else if (cmd === "get") {
+      // search every resolved root (not just the first) for the path
+      let c = null;
+      for (const s of sources) {
+        c = store.getChunk(s.id, flags._[1], flags.section as string | undefined);
+        if (c) break;
+      }
+      // A path-only fetch of a multi-chunk file must never look like the whole
+      // file. See change: fix-kb-search-retrieval-quality (design D7).
+      const more = c?.suppressedSections ?? 0;
+      console.log(c ? (more > 0 ? `${c.body}\n\n(+${more} more section${more === 1 ? "" : "s"} in this file — pass --section <headingPath> to fetch one)` : c.body) : `(not found: ${flags._[1]})`);
+    } else if (cmd === "eval") {
+      const gf = flags.golden as string | undefined;
+      if (!gf) { console.error("eval needs --golden <file.json>"); process.exit(2); }
+      if (!flags["no-reindex"]) await runIndex(cfg, store, sources);
+      // Fixture contract (design D3): bare array | {items}, item shapes validated.
+      const golden = loadGolden(JSON.parse(readFileSync(resolve(cfg.cwd, gf), "utf8")) as unknown, gf);
+      // Eval measures the TOOL path (spec R1): the extension's option set. Roots
+      // enable repo-relative expect normalization + reachability (design D4).
+      const roots = sources.map((s) => ({ id: s.id, relPrefix: relative(cfg.cwd, s.dir), dir: s.dir }));
+      // Same validation contract as `search`: reject garbage instead of
+      // passing an invalid limit to the backend or an unknown doc-type as an
+      // empty filter (CodeRabbit round, fix-kb-eval-measurement-integrity).
+      const limit = posInt(flags.limit, "--limit") ?? 10;
+      const docType = enumFlag(flags["doc-type"], ["doc", "agents", "source-md"], "--doc-type");
+      const m = evaluate(store, golden, {
+        k: limit,
+        docType: docType as DocType | undefined,
+        verbose: !!flags.verbose,
+        roots,
+        ...searchOptsFromConfig(cfg, { sources, overrides: { expandGraph: false, rerank: false } }),
+      });
+      console.log(JSON.stringify(m, null, flags.json ? 2 : 0));
+      if (flags.verbose && m.unreachablePaths?.length) {
+        for (const p of m.unreachablePaths) console.error(`[kb eval] unreachable: ${p}`);
+      }
+      // Vacuous-run guard (design D5): an all-zero score is a harness fault far
+      // more often than a retrieval fault. Metrics stay on stdout; the failure
+      // signal is the exit code. --allow-zero measures anyway.
+      const why =
+        m.n === 0
+          ? golden.length === 0
+            ? "the golden fixture has no items"
+            : `all ${m.unreachable} of ${golden.length} golden items are unreachable under the configured roots (${roots.map((r) => r.relPrefix || ".").join(", ")}) — check root normalization`
+          : m["Recall@K"] === 0
+            ? `recall is 0 across all ${m.n} scored items — check the fixture shape and root normalization`
+            : null;
+      if (why) {
+        console.error(`[kb eval] VACUOUS RUN: ${why}. Re-run with --allow-zero to measure anyway.`);
+        if (!flags["allow-zero"]) process.exit(1);
+      }
+    } else {
+      console.error(`unknown command: ${cmd}\n\n${HELP}`);
+      process.exit(2);
+    }
+  } finally {
+    store.close();
+  }
+}
+
+main();

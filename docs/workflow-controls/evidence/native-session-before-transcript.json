@@ -1,0 +1,9 @@
+{
+  "runtime": "@earendil-works/pi-coding-agent 1.3.0",
+  "nativeSessionCreated": true,
+  "transcriptExists": false,
+  "realMetadataPersistence": true,
+  "firstTurnFullAccess": true,
+  "liveDefaultReturn": true,
+  "modelCalls": 0
+}

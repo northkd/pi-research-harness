@@ -1,0 +1,36 @@
+{
+  "syntheticData": true,
+  "startedAt": "2026-11-06T11:40:56.687Z",
+  "status": "passed",
+  "runtime": "/workspace/scratch/3fd354af919f/pi-research-harness/.runtime/dashboard-source",
+  "project": "/workspace/scratch/3fd354af919f/pi-research-harness/.runtime/qa-controls-20261106/browser/synthetic-demo",
+  "version": "0.10.0",
+  "clientBuild": {
+    "pluginRegistryHash": "c6c963c24cc16a95927d9b14646df18d3eaba40e30e42738545d2857b6e00a2e",
+    "status": "matched"
+  },
+  "syntheticSessions": [
+    {
+      "id": "c4e77e03-3a08-4684-822f-da171105e59b",
+      "name": "【演示】03 · 数据细节分析",
+      "status": "ended",
+      "synthetic": true,
+      "timingScenario": "pi-stream"
+    },
+    {
+      "id": "b8758ff9-c684-4331-a2bb-d9af8f8c3b60",
+      "name": "【演示】工作 1 · 文献与证据",
+      "status": "ended",
+      "synthetic": true,
+      "timingScenario": "sdk-duration"
+    },
+    {
+      "id": "36580540-087c-40b1-9058-58657985c582",
+      "name": "【演示】工作 2 · 结果与评审",
+      "status": "ended",
+      "synthetic": true,
+      "timingScenario": "legacy-timestamps"
+    }
+  ],
+  "endedAt": "2026-11-06T11:41:17.532Z"
+}

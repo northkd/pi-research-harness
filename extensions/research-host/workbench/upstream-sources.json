@@ -1,0 +1,134 @@
+{
+  "package": "@blackbelt-technology/pi-agent-dashboard",
+  "version": "0.10.0",
+  "changes": [
+    "Host supplies the local-operator identity predicate",
+    "Standalone error class retains statusCode and code"
+  ],
+  "files": [
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/access/verified-read.ts",
+      "sha256": "2a35357bb4c22b4f8f087d2a7180a3dcaf6b80cf785ddce93757c839cc2ded67"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/identity/host-resources.ts",
+      "sha256": "5875e0739defcf66a50b52e9201b6ec46f56813db12418c66ce6a264f4d0a2f7"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/pending/pending-plugin-ref-registry.ts",
+      "sha256": "fa9668c68d34515191a4d2ddd70398f62951976570f6412edc177da2c57ffa1e"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/res-workflow/access-mode-service.ts",
+      "sha256": "f2a76c67965110c99e7ff397140cf1099dd3dec6c6606b7bc65bd6658b30d5f6"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/res-workflow/access.ts",
+      "sha256": "64827c5cb1287de1d1d3f81746f4f671bbabaed995f87803db454c0aabd0b0d3"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/res-workflow/history-candidates.ts",
+      "sha256": "bcad6257ced95fee28aa842ecc61fb564b885062f8530f844be63bb30e11fe0c"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/res-workflow/participants.ts",
+      "sha256": "d7b55f0e4ffd71ef5019775e25efc939baae5233b0010ed0f50ace34d6f28d4d"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/res-workflow/research-budget-service.ts",
+      "sha256": "6b7c302f8b0ff3c280491f9676b4717f9cb4b0c4dea6dc9b52d4ec2eb8a876a2"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/res-workflow/safe-files.ts",
+      "sha256": "62e6c4f24b120c0e50616914b76f5c1c7d38463c721f0e2c39880b92d2662352"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/res-workflow/task-permission-service.ts",
+      "sha256": "db3a601817ea2aeedb7bf6390ae960cd8e99278561847768fb136960c41d384b"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/session/plugin-refs.ts",
+      "sha256": "612de3fa6cd864859c073ee24fe7634f8483c06c1b9bfebfae196b8e3de7b9f8"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/cwd-guard.ts",
+      "sha256": "12161f53bd72c40304a0e0d236d34f596ab45f5656e1771944412f3d2989263c"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/managed-paths.ts",
+      "sha256": "1f2ae08c04dc7a284ae6ade1e5eef1c3f1cbb38993ca286e36056b85cdac6363"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/binary-lookup.ts",
+      "sha256": "092da72bc15776ec5947f1a28e27c17727dcbe27c8ead6951022a7c7e8993b06"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/check-rollup.ts",
+      "sha256": "88ff8799300df3d9091b747e4d761122e34f4d5dc1c54939fb9c467086f300b4"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/ensure-bundled-git.ts",
+      "sha256": "d077e08f71debfba7811539c3d5fe45547ffa66121407c9b00e7ac53ccd10ea3"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/ensure-windows-path.ts",
+      "sha256": "69fe5a1cdc8c3a31262bf820f1702865d2dc3491f26e340a70b6e4c2bb7f90c3"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/env-path-key.ts",
+      "sha256": "a4b34c99a45c0ac2486abb50fc761baffc685f88d4164eb25bd08ffaa1f99390"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/exec.ts",
+      "sha256": "5d080f8556b25b78f840e0dac2b22545ebace9ffb1adb4796e95ed8ac3416d3e"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/git-source.ts",
+      "sha256": "e29aa5f21d701a5c35ca70d8442cc47ecb5cabfa22bf4cb5781bb64269e1952e"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/git.ts",
+      "sha256": "b61052d1bf18df577ccb9d2c8e3575901599559ecd46419dc6b04ba0df122343"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/paths.ts",
+      "sha256": "4d8643f93b9b27ccea0ea9b7a168011712ca2a2ed20a8d65031b7cca225bc9be"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/runner.ts",
+      "sha256": "f2ac4799495d2256523652e79f95a5b2878f0c682da6edcc9f6c16bf291f416f"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/platform/select-git-source.ts",
+      "sha256": "46de79d2b13bd37a65299c243984ac78712f27d2c268e651744f948dd3819a4f"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/res-workflow.ts",
+      "sha256": "4747d9236e3cd65afa647e40a8be005a46a691385703bd8922ee1f94783d3487"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/research-access-mode.ts",
+      "sha256": "5d029c11e26af3a3d84707f258daf5033fcaaa4f7626d79d2c8440c8c96e1b38"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/research-budget.ts",
+      "sha256": "29b9ad8543777a9f58135d1acf863cea7884ce213d4dcee419e952a69f23a464"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/research-session.ts",
+      "sha256": "dfaa2a81e5cb5638086cfbc54850d52844b8d0b58f229b96396bab77fbfb1da2"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/research-task-permissions.ts",
+      "sha256": "c3fd88fe685730e8945d19f1400e02d72ea1cca417bb4cd218e7bd52239d1217"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/session-creation.ts",
+      "sha256": "69610eb4e52d82beb4501414ada9a5fccbe8cacc44410a06a09f95c982f9e7ab"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-shared/src/session-meta.ts",
+      "sha256": "5e5664aba3e0ebe46aac1660ede0c51d45740f7b854a6d2216a6111c3a89bbf0"
+    }
+  ]
+}

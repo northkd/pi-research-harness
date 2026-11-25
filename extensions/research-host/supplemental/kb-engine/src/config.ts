@@ -1,0 +1,429 @@
+import { supplementalHostDir } from "../../runtime-home.mjs";
+// Config layering (design §7): project `.pi/dashboard/knowledge_base.json`
+// → global `~/.pi/dashboard/knowledge_base.json` → built-in defaults.
+// Project file is used whole; absent fields fall back to global, then defaults.
+// No file-count cap by default (requirement #1).
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+import { DEFAULT_FACET_KEYS, DEFAULT_SEARCHABLE_KEYS, type FacetKeyConfig } from "./frontmatter.js";
+import type { IndexOptions } from "./indexer.js";
+
+function expandTilde(p: string): string {
+  return p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
+}
+
+export interface SourceConfig {
+  kind?: "filesystem" | "npm" | "git" | "https"; // Phase 1 implements filesystem
+  ref: string;
+  priority?: number;
+  subdir?: string;
+  pin?: string;
+  refresh?: "on-index" | "manual" | { ttlMs: number };
+}
+export interface RankingConfig {
+  fieldWeights: { headingPath: number; heading: number; body: number };
+  proximityBoost: boolean;
+  diversity: { enabled: boolean; lambda: number };
+  /** Collapse hits to one per `(root, path)` (design D1). */
+  sourceDedup: boolean;
+  /** Share of the page reserved for the `agents` doc-type lane, 0..1 (design D3).
+   *  0 disables the quota. SWEPT over the bundled fixtures — see
+   *  openspec/changes/fix-kb-search-retrieval-quality/measurements.md. */
+  laneQuota: number;
+  /** Relative score margin that lets the reserved `agents` lane take result
+   *  slot 1, 0..1 (change fix-kb-search-lane-composition, design D2/D3).
+   *  `0` disables the rule and restores the pre-change interleaving exactly.
+   *  The running-share quota is structurally incapable of taking slot 1
+   *  (`(0+1)/(0+1) <= share` is false for every share < 1), so rank 1 needs
+   *  its own knob. Inert whenever there is no reserved lane: an explicit
+   *  `doc_type` or `laneQuota: 0` zeroes `laneShare` at the call site, so
+   *  `interleaveLanes` — and this rule inside it — is never reached. */
+  laneLeadMargin: number;
+  /** IDF-weighted coverage rerank over the candidate pool (design D4).
+   *  Implemented, DEFAULT OFF: on the bundled fixtures it costs markdown-intent
+   *  R@10 0.620 → 0.472 to buy source-intent 0.423 → 0.462, a net regression. */
+  coverageRerank: boolean;
+}
+export interface ExpandConfig {
+  parent: boolean;
+  graph: boolean;
+}
+export interface RerankConfig {
+  enabled: boolean;
+  model: string;
+  candidateK: number;
+}
+export interface QueryExpansionConfig {
+  mode: "off" | "prf" | "synonym" | "agent";
+  /** RM3-style pseudo-relevance-feedback tuning (design D4). */
+  prf: { terms: number; topK: number; dfCeiling: number };
+}
+export interface DirectoryLevelAgentsConfig {
+  enabled: boolean;
+  claudeMd: boolean;
+  mode: "pull" | "push";
+  fallbackManifest: boolean;
+}
+export interface FrontmatterConfig {
+  searchableKeys: string[]; // frontmatter values indexed as searchable meta
+  facetKeys: FacetKeyConfig[]; // whitelisted facet keys (+ optional declared type)
+}
+/** kb search-guard enforcement mode (arm B). Shipped default `warn` (resolved
+ *  at planning): a guard that is off does nothing about the measured 10:1
+ *  under-use; `block` can refuse tool calls and is therefore NEVER a default —
+ *  reachable only by explicit config. The KB_GUARD_MODE env override may
+ *  select `off`/`warn` only (it can weaken, never enable blocking — D14). */
+export type GuardMode = "off" | "warn" | "block";
+export interface ReadDisciplineConfig {
+  guard: { mode: GuardMode };
+}
+/** Per-turn DOX doctrine delivery (change: inject-dox-doctrine-and-describe).
+ *  `inject: "kb"` appends the READ doctrine to the system prompt; `write`
+ *  additionally appends the WRITE discipline. `inject: "off"` suppresses both
+ *  and makes `write` inert. */
+export interface DoctrineConfig {
+  inject: "kb" | "off";
+  write: boolean;
+}
+/** Forge flavours the git scope can talk to. */
+export type ForgeKind = "github" | "gitlab" | "gitea";
+/** `git` scope group (change: add-kb-git-forge-scope, design G8). `forge.hosts`
+ *  and `forge.gitea.tokenEnv` are honoured from the GLOBAL layer only. */
+export interface GitConfig {
+  enabled: boolean;
+  remote: string;
+  searchWaitMs: number;
+  commits: { maxInitial: number; maxPathsPerCommit: number };
+  forge: {
+    enabled: boolean;
+    minSyncIntervalSeconds: number;
+    hintedMinSyncIntervalSeconds: number;
+    rateFloorPercent: number;
+    firstSyncWindowDays: number;
+    firstSyncMaxItems: number;
+    pagesPerSync: number;
+    leaseSeconds: number;
+    hosts: Record<string, ForgeKind>;
+    gitea: { tokenEnv: string };
+  };
+}
+export interface KbConfig {
+  sources: SourceConfig[];
+  roots?: Array<{ path: string; priority?: number }>; // legacy alias → filesystem sources
+  sourceCacheDir: string;
+  include: string[];
+  exclude: string[];
+  extensions: string[];
+  maxFileCount: number | null;
+  maxDepth: number | null;
+  respectGitignore: boolean;
+  tokenizer: string;
+  trigram: boolean;
+  indexAgentsFiles: boolean;
+  includeSourceMarkdown: boolean;
+  chunking: { minHeadingsForStructural: number; minChunkChars: number; maxChunkChars: number; breadcrumbInBody: boolean };
+  dedup: { exactContentCollapse: boolean; preferHigherPriorityRoot: boolean };
+  graph: { wikilinks: boolean; headingTree: boolean; frontmatter: boolean };
+  directoryLevelAgents: DirectoryLevelAgentsConfig;
+  frontmatter: FrontmatterConfig;
+  doxEnforcement: boolean; // opt-in Phase-2 hook Job 2 (default OFF)
+  readDiscipline: ReadDisciplineConfig;
+  doctrine: DoctrineConfig;
+  ranking: RankingConfig;
+  expand: ExpandConfig;
+  rerank: RerankConfig;
+  queryExpansion: QueryExpansionConfig;
+  git: GitConfig;
+  /** Seed a linked worktree's first index from the main checkout's index (default true). */
+  seedFromMainWorktree: boolean;
+  dbPath: string;
+}
+
+export interface ResolvedSource {
+  id: string; // stored on chunks.root
+  dir: string; // absolute
+  priority: number;
+}
+export interface ResolvedConfig extends KbConfig {
+  cwd: string;
+  dbAbsPath: string;
+  cacheDirAbs: string;
+  allSourceSpecs: SourceConfig[]; // roots[] legacy + sources[] (for async resolveAll)
+  resolvedSources: ResolvedSource[]; // filesystem-only, sync (remote need async resolveAll)
+  origin: "project" | "global" | "defaults";
+  /** Highest layer that supplied a `doctrine` KEY (`{}` counts) — distinct from
+   *  `origin`, which is file-presence. Callers use it to detect first contact. */
+  doctrineSource: "project" | "global" | "none";
+}
+
+export const DEFAULTS: KbConfig = {
+  sources: [],
+  get sourceCacheDir() { return join(supplementalHostDir(), "kb", "sources"); },
+  // Widened for AsciiDoc together with the indexer walk regex + chunker dispatch
+  // (design D4) — widening one gate alone indexes zero extra files.
+  include: ["**/*.md", "**/*.adoc", "**/*.asciidoc"],
+  exclude: ["**/node_modules/**", "**/archive/**"],
+  extensions: [".md", ".adoc", ".asciidoc"],
+  maxFileCount: null, // no cap
+  maxDepth: null,
+  respectGitignore: true,
+  tokenizer: "porter unicode61",
+  trigram: false,
+  indexAgentsFiles: true,
+  includeSourceMarkdown: true,
+  chunking: { minHeadingsForStructural: 1, minChunkChars: 120, maxChunkChars: 4000, breadcrumbInBody: true },
+  dedup: { exactContentCollapse: true, preferHigherPriorityRoot: true },
+  graph: { wikilinks: true, headingTree: true, frontmatter: true },
+  // Pull mode: `kb agents <path>` walks root→nearest AGENTS.md on demand. Safe —
+  // no per-turn injection. Push mode stays gated behind the context-cost spike
+  // (see change migrate-file-index-to-agents-tree design §5).
+  directoryLevelAgents: { enabled: true, claudeMd: true, mode: "pull", fallbackManifest: true },
+  frontmatter: { searchableKeys: DEFAULT_SEARCHABLE_KEYS, facetKeys: DEFAULT_FACET_KEYS },
+  doxEnforcement: false,
+  readDiscipline: { guard: { mode: "warn" } },
+  doctrine: { inject: "kb", write: false },
+  ranking: {
+    fieldWeights: { headingPath: 10, heading: 3, body: 1 },
+    proximityBoost: true,
+    diversity: { enabled: true, lambda: 0.7 },
+    sourceDedup: true,
+    // 0.5 = the largest reserved share with NO markdown-intent regression
+    // (R@10 0.630 vs 0.611 unquota'd) while source-intent rises 0.317 → 0.500.
+    laneQuota: 0.5,
+    coverageRerank: false,
+    // Chosen by measurement over both golden sets — see
+    // openspec/changes/fix-kb-search-lane-composition/measurements.md.
+    laneLeadMargin: 0,
+  },
+  expand: { parent: true, graph: false },
+  rerank: { enabled: false, model: "ms-marco-MiniLM-L-6-v2", candidateK: 50 },
+  // PRF is implemented engine-side but DEFAULT OFF: it is gated on coverage
+  // rerank (which measures as a net regression), and adds ~3x search latency.
+  queryExpansion: { mode: "off", prf: { terms: 6, topK: 10, dfCeiling: 0.1 } },
+  git: {
+    enabled: true,
+    remote: "origin",
+    searchWaitMs: 2000,
+    commits: { maxInitial: 50000, maxPathsPerCommit: 200 },
+    forge: {
+      enabled: true,
+      minSyncIntervalSeconds: 600,
+      hintedMinSyncIntervalSeconds: 60,
+      rateFloorPercent: 20,
+      firstSyncWindowDays: 365,
+      firstSyncMaxItems: 5000,
+      pagesPerSync: 5,
+      leaseSeconds: 60,
+      hosts: {},
+      gitea: { tokenEnv: "GITEA_TOKEN" },
+    },
+  },
+  seedFromMainWorktree: true,
+  dbPath: ".pi/dashboard/kb/index.db",
+};
+
+// Nested object keys that need one-level field fill-in (not wholesale replace),
+// so a partial `{ranking:{proximityBoost:false}}` keeps default fieldWeights/diversity.
+const NESTED_KEYS = ["chunking", "dedup", "graph", "directoryLevelAgents", "frontmatter", "readDiscipline", "doctrine", "ranking", "expand", "rerank", "queryExpansion"] as const;
+
+/** Stable hash of the frontmatter routing config. A change forces a full reindex
+ *  (design D6) since existing property rows/meta chunks reflect the old routing. */
+export function frontmatterConfigHash(fm: FrontmatterConfig): string {
+  const norm = {
+    searchableKeys: [...fm.searchableKeys].sort(),
+    facetKeys: [...fm.facetKeys].map((f) => ({ key: f.key, type: f.type ?? "string" })).sort((a, b) => a.key.localeCompare(b.key)),
+  };
+  return createHash("sha256").update(JSON.stringify(norm)).digest("hex").slice(0, 16);
+}
+
+/** The slice of a resolved config the index gate hashes. */
+export interface IndexGateConfig {
+  frontmatter: FrontmatterConfig;
+  includeSourceMarkdown?: boolean;
+}
+
+/** Hash of every option that changes what an UNCHANGED file indexes to: the
+ *  frontmatter routing config and `includeSourceMarkdown` (it flips a file's
+ *  `doc_type`; unset normalizes to `true`, as the indexer reads it). Selection-only
+ *  options (include/exclude/extensions/gitignore/agents) are deliberately NOT in it:
+ *  an unchanged file keeps its rows and the next walk adds/prunes the rest.
+ *  See change: fix-kb-index-integrity (D6). */
+export function indexOptionsHash(cfg: IndexGateConfig): string {
+  const norm = {
+    fm: frontmatterConfigHash(cfg.frontmatter),
+    includeSourceMarkdown: cfg.includeSourceMarkdown !== false,
+  };
+  return createHash("sha256").update(JSON.stringify(norm)).digest("hex").slice(0, 16);
+}
+
+/** The ONE derivation of indexer options from a resolved config — every docs writer
+ *  (`kb index`, CLI auto-index, kb-extension reindex, dashboard reindex job) uses it,
+ *  so none can silently drop `frontmatter` (custom facet keys). */
+export function indexOptionsFromConfig(cfg: ResolvedConfig, overrides: Partial<IndexOptions> = {}): IndexOptions {
+  return {
+    indexAgentsFiles: cfg.indexAgentsFiles,
+    includeSourceMarkdown: cfg.includeSourceMarkdown,
+    include: cfg.include,
+    exclude: cfg.exclude,
+    extensions: cfg.extensions,
+    frontmatter: cfg.frontmatter,
+    respectGitignore: cfg.respectGitignore,
+    cwd: cfg.cwd,
+    ...overrides,
+  };
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** Recursive plain-object merge (right wins on leaves). Used for the `git`
+ *  group, whose nested levels (`commits`, `forge`, `forge.gitea`) must each keep
+ *  siblings from earlier layers. */
+function deepMerge(a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...a };
+  for (const [k, v] of Object.entries(b)) out[k] = isPlainObject(v) && isPlainObject(out[k]) ? deepMerge(out[k] as Record<string, unknown>, v) : v;
+  return out;
+}
+
+/** Layer configs left→right, deep-merging the known nested object keys. */
+export function mergeConfig(...layers: Array<Partial<KbConfig> | null | undefined>): Partial<KbConfig> {
+  const out: Record<string, unknown> = {};
+  for (const layer of layers) {
+    if (!layer) continue;
+    for (const [k, v] of Object.entries(layer)) {
+      if (k === "git" && isPlainObject(v) && isPlainObject(out[k])) {
+        out[k] = deepMerge(out[k] as Record<string, unknown>, v);
+      } else if ((NESTED_KEYS as readonly string[]).includes(k) && v && typeof v === "object" && !Array.isArray(v) && out[k] && typeof out[k] === "object") {
+        out[k] = { ...(out[k] as object), ...(v as object) };
+      } else {
+        out[k] = v;
+      }
+    }
+  }
+  return out as Partial<KbConfig>;
+}
+
+/** Validate a parsed config shape; throw with a precise message on violation. */
+export function validateConfig(c: Partial<KbConfig>, origin = "config"): KbConfig {
+  const merged: KbConfig = mergeConfig(DEFAULTS, c) as KbConfig;
+  const err = (msg: string) => new Error(`invalid KB ${origin}: ${msg}`);
+  if (!Array.isArray(merged.sources)) throw err("sources must be an array");
+  for (const s of merged.sources) {
+    if (typeof s !== "object" || s === null || typeof s.ref !== "string") throw err("each source needs a string `ref`");
+    const k = s.kind ?? "filesystem";
+    if (!/^(filesystem|npm|git|https)$/.test(k)) throw err(`source kind "${k}" unknown`);
+  }
+  if (typeof merged.maxFileCount !== "number" && merged.maxFileCount !== null) throw err("maxFileCount must be a number or null");
+  if (typeof merged.dbPath !== "string" || !merged.dbPath) throw err("dbPath must be a non-empty string");
+  if (typeof merged.seedFromMainWorktree !== "boolean") throw err("seedFromMainWorktree must be a boolean");
+  if (!/^(off|prf|synonym|agent)$/.test(merged.queryExpansion.mode)) throw err(`queryExpansion.mode "${merged.queryExpansion.mode}" unknown`);
+  const gm = merged.readDiscipline?.guard?.mode;
+  if (gm !== undefined && !/^(off|warn|block)$/.test(gm)) throw err(`readDiscipline.guard.mode "${gm}" unknown (off | warn | block)`);
+  const doc = merged.doctrine as Partial<DoctrineConfig> | null | undefined;
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) throw err("doctrine must be an object ({ inject, write })");
+  if (doc.inject !== undefined && !/^(kb|off)$/.test(doc.inject as string)) throw err(`doctrine.inject "${doc.inject}" unknown (kb | off)`);
+  if (doc.write !== undefined && typeof doc.write !== "boolean") throw err("doctrine.write must be a boolean");
+  const lq = merged.ranking.laneQuota;
+  if (typeof lq !== "number" || !Number.isFinite(lq) || lq < 0 || lq > 1) throw err("ranking.laneQuota must be a number in [0,1]");
+  const llm = merged.ranking.laneLeadMargin;
+  if (typeof llm !== "number" || !Number.isFinite(llm) || llm < 0 || llm > 1) throw err("ranking.laneLeadMargin must be a number in [0,1]");
+  validateGit(merged.git, err);
+  const fm = merged.frontmatter;
+  if (!fm || !Array.isArray(fm.searchableKeys) || fm.searchableKeys.some((k) => typeof k !== "string")) throw err("frontmatter.searchableKeys must be a string array");
+  if (!Array.isArray(fm.facetKeys)) throw err("frontmatter.facetKeys must be an array");
+  for (const f of fm.facetKeys) {
+    if (typeof f !== "object" || f === null || typeof f.key !== "string") throw err("each frontmatter.facetKeys entry needs a string `key`");
+    if (f.type != null && !/^(string|number|date)$/.test(f.type)) throw err(`frontmatter facet key "${f.key}" has unknown type "${f.type}"`);
+  }
+  return merged;
+}
+
+function validateGit(g: GitConfig | undefined, err: (m: string) => Error): void {
+  if (!isPlainObject(g)) throw err("git must be an object");
+  const posInt = (key: string, v: unknown) => {
+    if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) throw err(`${key} must be a positive number`);
+  };
+  if (typeof g.enabled !== "boolean") throw err("git.enabled must be a boolean");
+  if (typeof g.remote !== "string" || !g.remote.trim()) throw err("git.remote must be a non-empty string");
+  posInt("git.searchWaitMs", g.searchWaitMs);
+  posInt("git.commits.maxInitial", g.commits?.maxInitial);
+  posInt("git.commits.maxPathsPerCommit", g.commits?.maxPathsPerCommit);
+  const f = g.forge;
+  if (!isPlainObject(f)) throw err("git.forge must be an object");
+  if (typeof f.enabled !== "boolean") throw err("git.forge.enabled must be a boolean");
+  for (const k of ["minSyncIntervalSeconds", "hintedMinSyncIntervalSeconds", "firstSyncWindowDays", "firstSyncMaxItems", "pagesPerSync", "leaseSeconds"] as const) posInt(`git.forge.${k}`, f[k]);
+  if (typeof f.rateFloorPercent !== "number" || !Number.isFinite(f.rateFloorPercent) || f.rateFloorPercent < 0 || f.rateFloorPercent > 100) throw err("git.forge.rateFloorPercent must be a number in [0,100]");
+  if (f.hintedMinSyncIntervalSeconds > f.minSyncIntervalSeconds) throw err("git.forge.hintedMinSyncIntervalSeconds must not exceed git.forge.minSyncIntervalSeconds");
+  if (!isPlainObject(f.hosts)) throw err("git.forge.hosts must be an object mapping host → github|gitlab|gitea");
+  for (const [h, kind] of Object.entries(f.hosts)) if (!/^(github|gitlab|gitea)$/.test(String(kind))) throw err(`git.forge.hosts["${h}"] "${String(kind)}" unknown (github | gitlab | gitea)`);
+  if (typeof f.gitea?.tokenEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(f.gitea.tokenEnv)) throw err("git.forge.gitea.tokenEnv must be an environment variable name");
+}
+
+/** Project-layer `git.forge.hosts` / `git.forge.gitea.tokenEnv` would let an
+ *  untrusted clone add a host or pick which env var is read as a token (design
+ *  G3/G8). Drop them and warn once per config file. */
+const warnedProjectGit = new Set<string>();
+function stripGlobalOnlyGit(project: Partial<KbConfig> | null, where: string): Partial<KbConfig> | null {
+  if (!project || !isPlainObject(project.git)) return project;
+  const forge = (project.git as { forge?: Record<string, unknown> }).forge;
+  if (!isPlainObject(forge)) return project;
+  const dropped: string[] = [];
+  const nextForge: Record<string, unknown> = { ...forge };
+  if ("hosts" in nextForge) { delete nextForge.hosts; dropped.push("git.forge.hosts"); }
+  if (isPlainObject(nextForge.gitea) && "tokenEnv" in nextForge.gitea) {
+    const { tokenEnv: _drop, ...rest } = nextForge.gitea;
+    nextForge.gitea = rest;
+    dropped.push("git.forge.gitea.tokenEnv");
+  }
+  if (!dropped.length) return project;
+  if (!warnedProjectGit.has(where)) {
+    warnedProjectGit.add(where);
+    console.warn(`[kb] ignoring ${dropped.join(", ")} from project config ${where}: honoured from the global config only`);
+  }
+  return { ...project, git: { ...(project.git as object), forge: nextForge } } as Partial<KbConfig>;
+}
+
+export function projectConfigPath(cwd: string): string {
+  return join(cwd, ".pi", "dashboard", "knowledge_base.json");
+}
+export function globalConfigPath(): string {
+  return join(supplementalHostDir(), "knowledge_base.json");
+}
+
+function readJson(path: string): Partial<KbConfig> | null {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as Partial<KbConfig>;
+  } catch (e) {
+    throw new Error(`invalid KB config at ${path}: ${(e as Error).message}`);
+  }
+}
+
+/** Merge: defaults < global < project (field-level fill-in). */
+export function loadConfig(cwd: string, opts: { configPath?: string } = {}): ResolvedConfig {
+  const projectPath = opts.configPath ?? projectConfigPath(cwd);
+  const rawProject = readJson(projectPath);
+  const project = stripGlobalOnlyGit(rawProject, projectPath);
+  const global = readJson(globalConfigPath());
+  const origin: ResolvedConfig["origin"] = project ? "project" : global ? "global" : "defaults";
+  // KEY-presence (a non-null object, `{}` included) — NOT file-presence. A
+  // project file holding only `readDiscipline` has recorded no doctrine choice.
+  const doctrineSource: ResolvedConfig["doctrineSource"] =
+    project?.doctrine !== undefined ? "project" : global?.doctrine !== undefined ? "global" : "none";
+  const merged = validateConfig(mergeConfig(DEFAULTS, global, project), origin);
+
+  // legacy roots[] → filesystem sources
+  const fromRoots: SourceConfig[] = (merged.roots ?? []).map((r) => ({ kind: "filesystem", ref: r.path, priority: r.priority }));
+  const allSourceSpecs: SourceConfig[] = [...fromRoots, ...merged.sources];
+
+  const resolvedSources: ResolvedSource[] = allSourceSpecs
+    .filter((s) => (s.kind ?? "filesystem") === "filesystem")
+    .map((s) => {
+      const base = isAbsolute(s.ref) ? s.ref : resolve(cwd, s.ref);
+      return { id: s.ref, dir: s.subdir ? join(base, s.subdir) : base, priority: s.priority ?? 0 };
+    });
+
+  const dbAbsPath = isAbsolute(merged.dbPath) ? merged.dbPath : resolve(cwd, merged.dbPath);
+  const cacheDirAbs = expandTilde(merged.sourceCacheDir);
+  return { ...merged, cwd, dbAbsPath, cacheDirAbs, allSourceSpecs, resolvedSources, origin, doctrineSource };
+}

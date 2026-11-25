@@ -1,0 +1,47 @@
+Context offload follow-up validation — 2026-11-06
+
+npm test (complete run):
+ℹ tests 308
+ℹ suites 3
+ℹ pass 308
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6888.883638
+ℹ tests 64
+ℹ suites 0
+ℹ pass 64
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9081.124219
+
+Focused dispatch projection, native tool gate, registration barrier and stage-session tests (overlap with npm test):
+ℹ {"scenario":"24-completed-or-failed-long-CJK-receipts","oldModelBytes":1726420,"newModelBytes":8051,"reductionPercent":99.53,"synthetic":true,"tokenMeasurement":false}
+ℹ tests 58
+ℹ suites 0
+ℹ pass 58
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5754.985909
+
+Native Vitest targeted suite:
+Test Files  3 passed (3)
+Tests  9 passed (9)
+Duration  18.14s (transform 14.33s, setup 128ms, import 14.41s, tests 6.60s, environment 0ms)
+
+Build: NODE_OPTIONS=--max-old-space-size=4096 pnpm run build
+Successful client Vite build and team plugin app build; existing large-chunk warning retained.
+Overlay verify: 627 files; changed 0.
+Isolated native deployment: real server, local native authentication, matched client build, owned-process cleanup.
+Browser: 29 passed, 0 failed; real app, synthetic research/demo state, no model requests.
+Expected browser conditions: unavailable optional browser plugin routes, ended-session-only routes, one Monaco cancellation on editor unmount; no unexpected API failures.
+TypeScript: 61 existing diagnostics in 5 files, 0 new, 0 resolved vs fb696b1; global typecheck remains unsuccessful.
+Syntax: passed.
+
+These groups overlap and must not be summed. No provider/model execution, total-token benchmark or 10-hour research job was performed.
+Current screenshots were visually reviewed at desktop and 360 px; this follow-up stores the browser report rather than duplicating unchanged UI image assets.

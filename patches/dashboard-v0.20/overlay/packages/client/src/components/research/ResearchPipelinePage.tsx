@@ -1,0 +1,712 @@
+/** Formal research files and owner-scoped execution observations remain separate. */
+import {
+  mdiArrowLeft,
+  mdiCircleOutline,
+  mdiAccountGroup,
+  mdiLightningBolt,
+  mdiChartBoxOutline,
+  mdiFileDocumentCheckOutline,
+  mdiHistory,
+  mdiViewGridOutline,
+  mdiViewSplitVertical,
+  mdiRefresh,
+  mdiFolderOutline,
+  mdiInformationOutline,
+} from "@mdi/js";
+import { Icon } from "@mdi/react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useApiBase } from "../../lib/api/api-context.js";
+import { useI18n } from "../../lib/i18n/i18n.js";
+import { useOptionalSplitWorkspace } from "../split/SplitWorkspaceContext.js";
+import { projectResearch, type ConfiguredRole, type ResearchExecution, type ResearchSnapshot, type StageId } from "./research-projection.js";
+import { useResearchLoopLive } from "./use-research-loop-live.js";
+import { ResearchAgentDetail, instanceKey } from "./ResearchAgentDetail.js";
+import { ResWorkflowAdoption } from "./ResWorkflowAdoption.js";
+import { ResearchStartGuide } from "./ResearchStartGuide.js";
+import { executionRoleName, ResearchExecutionPanels, type ResearchExecutionPanelsHandle } from "./ResearchExecutionPanels.js";
+import { ResearchMainAgentControls, useResearchMainAgent } from "./ResearchMainAgentControls.js";
+import {
+  getCollaborationQueueData,
+  ResearchCollaborationMetaControls,
+  ResearchCollaborationPanel,
+  ResearchDispatchQueueDrawer,
+} from "./ResearchCollaborationPanel.js";
+import { useResearchCollaboration } from "./use-research-collaboration.js";
+import { ResearchAccessControls } from "./ResearchAccessControls.js";
+import { ResearchClaimPanels } from "./ResearchClaimPanels.js";
+import { ResearchOverviewAndBudget, STAGES } from "./ResearchOverviewAndBudget.js";
+import { CollapsibleSection } from "./CollapsibleSection.js";
+import { ResearchPersistentDrawer, ResearchStageOverview, ResearchTaskOverview } from "./ResearchWorkspaceSummary.js";
+import "./research-workspace.css";
+
+const EMPTY: ResearchSnapshot = { state: null, attempts: [], events: [], receipt: null };
+const savedOverviewChoice = (key: string): { key: string; open: boolean } | null => {
+  try { const saved = window.localStorage.getItem(key); return saved === "open" || saved === "closed" ? { key, open: saved === "open" } : null; } catch { return null; }
+};
+
+export type ResearchTabKey = "teams" | "workflow" | "overview" | "claims" | "audit" | "all";
+
+interface TabDef {
+  key: ResearchTabKey;
+  label: string;
+  icon: string;
+  badge?: string | number;
+  hasActivity?: boolean;
+}
+
+export function ResearchPipelinePage({
+  cwd,
+  onBack,
+  embedded = false,
+  activeSessionId,
+  refreshSignal,
+  connectionGeneration,
+  resyncWatch,
+  onOpenArtifact,
+  onOpenSource,
+  surface = "legacy",
+  onOpenAgents,
+  onOpenConversation,
+  visible = true,
+}: {
+  cwd: string;
+  onBack?: () => void;
+  embedded?: boolean;
+  activeSessionId?: string;
+  refreshSignal?: string;
+  connectionGeneration?: number;
+  resyncWatch?: () => void;
+  onOpenArtifact?: (path: string) => void;
+  onOpenSource?: (adoptionId: string, sourceId: string) => void;
+  surface?: "legacy" | "workbench" | "agents";
+  onOpenAgents?: () => void;
+  onOpenConversation?: () => void;
+  visible?: boolean;
+}) {
+  const { t } = useI18n(), apiBase = useApiBase();
+  const splitWorkspace = useOptionalSplitWorkspace();
+  const collaboration = useResearchCollaboration(cwd, visible, connectionGeneration);
+  const { totalQueued } = getCollaborationQueueData(collaboration.snapshot);
+  const [queueOpen, setQueueOpen] = useState(totalQueued > 0);
+  const prevTotalQueuedRef = useRef(totalQueued);
+  useEffect(() => {
+    if (prevTotalQueuedRef.current === 0 && totalQueued > 0) setQueueOpen(true);
+    prevTotalQueuedRef.current = totalQueued;
+  }, [totalQueued]);
+  const mainAgent = useResearchMainAgent({ cwd, visible, connectionGeneration, refreshSignal, managed: {
+    selectedId: collaboration.snapshot?.currentMainSessionId ?? null, pending: collaboration.pending,
+    available: collaboration.snapshot?.adopted === true, error: collaboration.error,
+    select: id => { void collaboration.change({ action: "select-main", sessionId: id }); },
+  } });
+  const stageLauncher = useRef<ResearchExecutionPanelsHandle>(null);
+  const { snapshot, adoption, adopted, loading, refreshing, error, checkedAt, refresh, workbench, observationStatus, observationError } = useResearchLoopLive({ cwd, refreshSignal, connectionGeneration, resyncWatch });
+  const projection = useMemo(() => projectResearch(snapshot ?? EMPTY, workbench), [snapshot, workbench]);
+  const state = snapshot?.state, attempts = snapshot?.attempts ?? [], claims = state?.claims ?? [];
+  const objective = state?.charter?.objective?.trim() || null;
+  const [viewStage, setViewStage] = useState<StageId | null>(null);
+  const [selected, setSelection] = useState<{ scope: string; role: ConfiguredRole; execution?: ResearchExecution; stage: StageId | null } | null>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  const overviewStorageKey = `res_workflow_task_overview:${JSON.stringify([apiBase, cwd])}`;
+  const [overviewChoice, setOverviewChoice] = useState(() => savedOverviewChoice(overviewStorageKey));
+  const overviewOpen = overviewChoice?.key === overviewStorageKey ? overviewChoice.open : workspaceWidth >= 1100;
+  const setOverviewOpen = (open: boolean) => {
+    setOverviewChoice({ key: overviewStorageKey, open });
+    try { window.localStorage.setItem(overviewStorageKey, open ? "open" : "closed"); } catch { /* Explicit state still persists for this mounted workspace. */ }
+  };
+  useEffect(() => { setOverviewChoice(savedOverviewChoice(overviewStorageKey)); }, [overviewStorageKey]);
+  useLayoutEffect(() => {
+    const node = workspaceRef.current;
+    if (!node || !visible) return;
+    const measure = () => { const width = node.getBoundingClientRect().width || node.clientWidth; if (width > 0) setWorkspaceWidth(width); };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(node);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, [loading, visible, surface]);
+  const [intakeOpen, setIntakeOpen] = useState(false);
+  const [intakeVisited, setIntakeVisited] = useState(false);
+  const [showAllAttempts, setShowAllAttempts] = useState(false);
+  const [showAllActions, setShowAllActions] = useState(false);
+  const openIntake = () => { setIntakeVisited(true); setIntakeOpen(true); };
+
+  // Default to "all" in Vitest test suites so all sections are simultaneously queryable;
+  // in live browser, default to "teams" or persisted user tab choice.
+  const [savedTab, setActiveTab] = useState<ResearchTabKey>(() => {
+    if (surface !== "legacy") {
+      try {
+        const saved = window.localStorage.getItem(`res_workflow_workbench_tab:${cwd}`);
+        if (saved && ["workflow", "overview", "claims", "audit", "all"].includes(saved)) return saved as ResearchTabKey;
+      } catch { /* A blocked browser store must not prevent opening a project. */ }
+      return "workflow";
+    }
+    const isTestEnv = typeof process !== "undefined" && Boolean((process as any).env?.VITEST);
+    if (isTestEnv) return "all";
+    if (typeof window !== "undefined" && window.localStorage) {
+      const saved = window.localStorage.getItem("res_workflow_active_tab");
+      if (saved && ["teams", "workflow", "overview", "claims", "audit", "all"].includes(saved)) {
+        return saved as ResearchTabKey;
+      }
+    }
+    return "teams";
+  });
+  const activeTab = surface === "agents" ? "teams" : surface === "workbench" && savedTab === "teams" ? "workflow" : savedTab;
+  const [visitedTabs, setVisitedTabs] = useState<ResearchTabKey[]>([]);
+  const shows = (tab: ResearchTabKey) => activeTab === tab || activeTab === "all";
+  const keeps = (tab: ResearchTabKey) => shows(tab) || visitedTabs.includes(tab);
+  useEffect(() => { setVisitedTabs(previous => [...new Set([...previous, ...(activeTab === "all" ? ["teams", "workflow", "overview", "claims", "audit"] as ResearchTabKey[] : [activeTab])])]); }, [activeTab]);
+
+  const handleTabChange = (key: ResearchTabKey) => {
+    setActiveTab(key);
+    setSelection(null);
+    try { window.localStorage.setItem(surface === "legacy" ? "res_workflow_active_tab" : `res_workflow_workbench_tab:${cwd}`, key); } catch { /* Tab navigation still works without persistence. */ }
+  };
+
+  const scope = JSON.stringify([apiBase, cwd, connectionGeneration, adoption?.id, state?.charter]);
+  const selection = selected?.scope === scope ? selected : null;
+  useEffect(() => { setViewStage(null); setSelection(null); setIntakeOpen(false); setIntakeVisited(false); setShowAllAttempts(false); setShowAllActions(false); }, [scope]);
+  useEffect(() => { setIntakeOpen(false); }, [surface]);
+  const selectedStage = viewStage ?? projection.stage;
+  const currentStage = STAGES.find(stage => stage.id === projection.stage);
+  const stageIndex = STAGES.findIndex(stage => stage.id === projection.stage);
+  const observationStale = observationStatus !== "current";
+  const legacyInstances = projection.runs.flatMap(run => run.steps.map(step => ({ run, step })));
+  const chosenLegacy = selection ? legacyInstances.filter(row =>
+    row.run.runId === selection.execution?.workflowRunId && row.step.key === selection.execution?.workflowKey ||
+    row.step.agent === selection.role.name && (selection.stage === null || row.step.stage === selection.stage)) : [];
+  const chosenObserved = selection ? projection.executions.filter(row => row.source === "observation" && (
+    row.id === selection.execution?.id || executionRoleName(row) === selection.role.name
+    && (selection.stage === null || row.stage === selection.stage || !row.stage))) : [];
+  if (selection?.execution?.kind === "pi-session" && !chosenObserved.some(row => row.id === selection.execution?.id)) chosenObserved.push(selection.execution);
+  const initialLegacy = selection?.execution?.workflowRunId ? chosenLegacy.find(row => row.run.runId === selection.execution?.workflowRunId && row.step.key === selection.execution?.workflowKey) : undefined;
+  if (loading) return <div className="flex h-full items-center justify-center text-sm text-[var(--text-tertiary)]">正在加载研究状态…</div>;
+
+  const isAnyExecuting = projection.executions.some(row => !(observationStale && row.source === "observation") && ["streaming", "started", "running"].includes(row.status));
+
+  const tabs: TabDef[] = [
+    {
+      key: "teams",
+      label: "Agent 协作网络",
+      icon: mdiAccountGroup,
+      badge: projection.executions.length > 0 ? projection.executions.length : undefined,
+      hasActivity: isAnyExecuting,
+    },
+    {
+      key: "workflow",
+      label: "工作流进度",
+      icon: mdiLightningBolt,
+      badge: currentStage ? `${stageIndex + 1}/5` : undefined,
+      hasActivity: isAnyExecuting,
+    },
+    {
+      key: "overview",
+      label: "研究总览",
+      icon: mdiChartBoxOutline,
+    },
+    {
+      key: "claims",
+      label: "主张与评审",
+      icon: mdiFileDocumentCheckOutline,
+      badge: claims.length > 0 ? claims.length : undefined,
+    },
+    {
+      key: "audit",
+      label: "历史与审计",
+      icon: mdiHistory,
+      badge: attempts.length > 0 ? attempts.length : undefined,
+    },
+    {
+      key: "all",
+      label: "全部看板",
+      icon: mdiViewGridOutline,
+    },
+  ];
+
+  return (
+    <div
+      ref={workspaceRef}
+      data-testid="research-pipeline"
+      data-surface={surface}
+      className={`${surface === "legacy" ? "win11-page" : "research-workspace"} @container flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden`}
+    >
+      {surface !== "legacy" && <header className="research-workspace-heading">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <p className="research-workspace-breadcrumb" title={cwd}>{cwd.split(/[\\/]/).filter(Boolean).slice(-2).join(" / ") || cwd}</p>
+          <h1>{surface === "agents" ? "Agent 协作" : "研究工作台"}</h1>
+        </div>
+        <div className="research-workspace-actions">
+          {surface === "workbench" && <button type="button" className="research-workspace-action primary" onClick={openIntake}>项目设置</button>}
+          <button type="button" className="research-workspace-action" aria-pressed={overviewOpen} onClick={() => setOverviewOpen(!overviewOpen)}>运行概览</button>
+          <button type="button" className="research-workspace-action" onClick={refresh} disabled={refreshing} aria-label="刷新状态"><Icon path={mdiRefresh} size={0.6} className={refreshing ? "animate-spin" : ""} /></button>
+          <span data-testid="research-sync-status" className="inline-flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)] whitespace-nowrap">
+            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${refreshing ? "bg-[var(--accent-primary)] animate-pulse" : error || observationStale ? "bg-[var(--accent-orange)]" : "bg-[var(--accent-green)]"}`} />
+            {refreshing ? "同步中" : error ? "待同步" : observationStale ? "待同步" : "已同步"}
+          </span>
+        </div>
+      </header>}
+      {/* =========================================================================
+          Windows 11 Command Bar Header (Acrylic Top Bar)
+          ========================================================================= */}
+      {surface === "legacy" && <header className="win11-acrylic-bar flex shrink-0 flex-wrap items-center justify-between gap-2.5 px-4 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {!embedded && onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              aria-label="返回"
+              className="win11-btn p-1.5"
+            >
+              <Icon path={mdiArrowLeft} size={0.75} />
+            </button>
+          )}
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] bg-[var(--accent-soft)] text-[var(--accent-text)]">
+            <Icon path={mdiFolderOutline} size={0.65} />
+          </div>
+          <div className="min-w-0 flex-1">
+            {!embedded && <h1 className="text-sm font-semibold leading-tight">res-workflow 科研工作台</h1>}
+            <p className="truncate font-mono text-[11.5px] text-[var(--text-secondary)]" title={cwd}>
+              {cwd}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Windows 11 Segmented Split Proportion Control */}
+          {splitWorkspace && (
+            <div className="win11-card-subtle flex items-center gap-1 p-1 text-xs">
+              {splitWorkspace.split.mode === "full" ? (
+                <button
+                  type="button"
+                  onClick={() => splitWorkspace.updateSplit({ mode: "split", ratio: 0.5 })}
+                  className="flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-semibold text-[var(--accent-text)] hover:bg-[var(--bg-hover)] transition-colors"
+                  title="开启双栏分屏：左侧看 Session 实时内容，右侧看工作台"
+                >
+                  <Icon path={mdiViewSplitVertical} size={0.55} />
+                  <span>分屏对照 Session</span>
+                </button>
+              ) : (
+                <>
+                  <span className="px-1.5 text-[11px] font-medium text-[var(--text-tertiary)]">
+                    分屏:
+                  </span>
+                  {(
+                    [
+                      { ratio: 0.65, label: "65:35 会话", title: "会话优先：左侧 Session 占 65%，右侧工作台占 35%" },
+                      { ratio: 0.5, label: "50:50 对半", title: "均衡对半：左右各占 50%" },
+                      { ratio: 0.35, label: "35:65 工作台", title: "工作台优先：左侧 Session 占 35%，右侧工作台占 65%" },
+                    ] as const
+                  ).map((preset) => {
+                    const active = Math.abs(splitWorkspace.split.ratio - preset.ratio) < 0.05;
+                    return (
+                      <button
+                        key={preset.ratio}
+                        type="button"
+                        onClick={() => splitWorkspace.updateSplit({ ratio: preset.ratio })}
+                        className={`rounded px-2 py-0.5 text-[11px] font-medium transition-all ${
+                          active
+                            ? "bg-[var(--accent-solid)] text-white font-semibold shadow-xs"
+                            : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                        }`}
+                        title={preset.title}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => splitWorkspace.setMode("full")}
+                    className="rounded px-2 py-0.5 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-all"
+                    title="全屏最大化展开工作台"
+                  >
+                    全宽
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Sync Status & Refresh */}
+          <div className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+            <span data-testid="research-sync-status" className="hidden sm:inline">
+              {refreshing ? "正在同步" : error ? "科研记录待同步" : "科研记录每 5 秒同步"}
+            </span>
+            {checkedAt && (
+              <time
+                className="font-mono text-[11px] text-[var(--text-tertiary)]"
+                title={`科研文件最近核对：${checkedAt}`}
+              >
+                {new Date(checkedAt).toLocaleTimeString("zh-CN")}
+              </time>
+            )}
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={refreshing}
+              className="win11-btn px-2.5 py-1 text-xs"
+            >
+              <Icon path={mdiRefresh} size={0.55} className={refreshing ? "animate-spin" : ""} />
+              <span>刷新</span>
+            </button>
+          </div>
+        </div>
+      </header>}
+
+      {/* =========================================================================
+          Windows 11 Pivot Tab Navigation Bar (3px Bottom Accent Pill)
+          ========================================================================= */}
+      {surface !== "agents" && <nav
+        aria-label="科研工作流导航标签"
+        role="tablist"
+        className={surface === "legacy" ? "flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-2 scrollbar-none" : "research-workspace-nav"}
+      >
+        {tabs.filter(tab => surface === "legacy" || tab.key !== "teams").map((tab) => {
+          const isActive = activeTab === tab.key;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              data-testid={`research-tab-${tab.key}`}
+              onClick={() => handleTabChange(tab.key)}
+              className={surface !== "legacy" ? "" : `win11-pivot-tab whitespace-nowrap ${
+                isActive ? "win11-pivot-tab-active" : ""
+              }`}
+            >
+              <Icon
+                path={tab.icon}
+                size={0.65}
+                className={isActive ? "text-[var(--accent-primary)]" : "text-[var(--text-tertiary)]"}
+              />
+              <span>{tab.label}</span>
+              {tab.badge !== undefined && (
+                <span
+                  className={`research-tab-count rounded-full px-1.5 py-0.5 text-[10px] font-mono leading-none ${
+                    isActive
+                      ? "bg-[var(--accent-soft)] text-[var(--accent-text)] font-bold"
+                      : "bg-[var(--bg-surface)] text-[var(--text-secondary)]"
+                  }`}
+                >
+                  {tab.badge}
+                </span>
+              )}
+              {tab.hasActivity && (
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--accent-green)] opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--accent-green)]" />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>}
+
+      {error && (
+        <div
+          role="alert"
+          className="shrink-0 border-b border-[var(--severity-warning-border)] bg-[var(--severity-warning-bg)] px-4 py-2 text-xs text-[var(--severity-warning-fg)]"
+        >
+          暂未同步：{error}{state ? "；保留上次成功读取的正式记录。" : ""}
+        </div>
+      )}
+
+      {/* =========================================================================
+          Main Tab Content Viewport (Mica Canvas with Generous Breathing Room)
+          ========================================================================= */}
+      <div className={surface === "legacy" ? "contents" : "research-workspace-layout"}>
+      <div className={surface === "legacy" ? "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-5" : "research-workspace-main"}>
+        <div className="research-execution-controls">
+          <ResearchMainAgentControls
+            key={mainAgent.scope}
+            controller={mainAgent}
+            cwd={cwd}
+            visible={visible}
+            connectionGeneration={connectionGeneration}
+            refreshSignal={refreshSignal}
+            onRebound={refresh}
+            accessSlot={<ResearchAccessControls cwd={cwd} connectionGeneration={connectionGeneration} />}
+            metaSlot={
+              collaboration.snapshot ? (
+                <ResearchCollaborationMetaControls
+                  controller={collaboration}
+                  queueOpen={queueOpen}
+                  onToggleQueue={() => setQueueOpen(value => !value)}
+                />
+              ) : undefined
+            }
+          />
+        </div>
+        <ResearchDispatchQueueDrawer controller={collaboration} queueOpen={queueOpen} />
+        {surface === "workbench" && !adopted && <div className="research-intake-hint"><div><strong>接入已有研究资料</strong><p>选择目录资料与历史会话，核对来源后确认接入。</p></div><button type="button" className="research-workspace-action" onClick={openIntake}>开始接入</button></div>}
+        {surface === "workbench" && (activeTab === "workflow" || activeTab === "all") && <ResearchStageOverview projection={projection} objective={objective} viewStage={viewStage} onSelectStage={setViewStage} onStartStage={stage => stageLauncher.current?.openStage(stage)} onOpenArtifact={onOpenArtifact} />}
+        {/* TAB 1: Agent 协作网络 (Teams View) */}
+        {keeps("teams") && (
+          <div hidden={!shows("teams")}>
+            <ResearchCollaborationPanel
+              controller={collaboration}
+              visible={visible && shows("teams")}
+              projection={projection}
+              stale={observationStale}
+              hideInlineToolbar
+              onAgent={(role, execution) => setSelection({ scope, role, execution, stage: null })}
+            />
+          </div>
+        )}
+
+        {/* TAB 2: 工作流进度 (Workflow Pipeline View) */}
+        {keeps("workflow") && (
+          <div hidden={!shows("workflow")}>
+            <ResearchExecutionPanels
+              ref={stageLauncher}
+              mode="workflow"
+              compactStages={surface !== "legacy"}
+              visible={visible && shows("workflow")}
+              cwd={cwd}
+              projection={projection}
+              stage={selectedStage}
+              includeUnstaged={viewStage === null}
+              stale={observationStale}
+              activeSessionId={activeSessionId}
+              mainAgentId={mainAgent.selectedId}
+              onAgent={(role, execution) => setSelection({ scope, role, execution, stage: selectedStage })}
+            />
+          </div>
+        )}
+
+        {/* TAB 3: 研究总览 */}
+        {keeps("overview") && (
+          <div hidden={!shows("overview")} className="space-y-4">
+            {/* Windows 11 Hero Card: Current Stage & Research Objective */}
+            {(surface === "legacy" || activeTab === "overview") && <section className="win11-card p-5">
+              <div className="flex items-start gap-3.5">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-[var(--accent-soft)] text-[var(--accent-text)]">
+                  <Icon path={currentStage?.icon ?? mdiCircleOutline} size={0.95} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded bg-[var(--bg-secondary)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-secondary)] border border-[var(--border-primary)]">
+                      {currentStage ? `阶段 ${stageIndex + 1} / 5 · ${currentStage.label}` : "实际阶段未登记"}
+                    </span>
+                  </div>
+                  <h2 data-testid="research-current-stage" className="mt-1.5 text-base font-semibold text-[var(--text-primary)]">
+                    {currentStage?.short ?? (adopted ? "已接入，研究阶段尚未登记" : "尚未登记研究阶段")}
+                  </h2>
+                  <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
+                    {currentStage?.desc ?? "先查看实际执行记录；没有阶段标记的任务直接显示，不归入默认阶段。"}
+                  </p>
+                </div>
+              </div>
+              {!state && (
+                <p className="mt-3 text-xs text-[var(--text-secondary)]">
+                  {error ? "尚无法读取研究状态" : "该目录尚未建立研究目标"}
+                </p>
+              )}
+              <div className="win11-card-subtle mt-3.5 p-3 text-xs leading-relaxed">
+                <strong className="text-[var(--text-primary)]">研究目标：</strong>
+                <span className="text-[var(--text-secondary)]">
+                  {objective ?? "未记录研究目标（state.json 缺少 charter.objective）"}
+                </span>
+              </div>
+            </section>}
+
+            {/* Merged Overview and Budget */}
+            <ResearchOverviewAndBudget
+              cwd={cwd}
+              viewStage={viewStage}
+              onSelectStage={setViewStage}
+              projection={projection}
+              state={state}
+              attempts={attempts}
+              claims={claims}
+              adopted={adopted}
+              adoptionCwd={adoption?.cwd}
+              connectionGeneration={connectionGeneration}
+              onRefresh={refresh}
+              workbench={workbench}
+              observationStale={observationStale}
+              showStageSelector={surface === "legacy"}
+            />
+
+            {snapshot && surface === "legacy" && (
+              <ResWorkflowAdoption
+                key={`adoption:${scope}`}
+                cwd={cwd}
+                adopted={adopted}
+                adoption={adoption}
+                charter={state?.charter}
+                onRefresh={refresh}
+                onOpenSource={onOpenSource}
+              />
+            )}
+
+            {/* Windows 11 InfoBar: Formal Records vs Execution Observations */}
+            <div
+              role="note"
+              data-testid="schematic-notice"
+              className="win11-card p-3 text-xs"
+            >
+              <div className="flex items-start gap-2">
+                <Icon path={mdiInformationOutline} size={0.7} className="mt-0.5 shrink-0 text-[var(--accent-primary)]" />
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="font-semibold text-[var(--text-primary)]">正式科研记录与执行观测分别同步</span>
+                    <span
+                      data-testid="research-observation-status"
+                      className={observationStale ? "font-medium text-[var(--severity-warning-fg)]" : "text-[11px] text-[var(--text-secondary)]"}
+                    >
+                      · {observationError ??
+                        (observationStatus === "current"
+                          ? "执行观测每 5 秒自动更新。"
+                          : observationStatus === "loading"
+                          ? "正在读取执行观测…"
+                          : "当前执行观测尚不可用；正式科研记录独立保留。")}
+                    </span>
+                  </div>
+                  <p className="text-[11px] leading-snug text-[var(--text-secondary)]">
+                    阶段、主张和验收依据正式文件；会话及原生任务依据有来源的执行观测。配置不会补成实际调用，执行结束不代表验收或发表。
+                  </p>
+                  {workbench && (
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 border-t border-[var(--border-subtle)] pt-1 font-mono text-[10.5px] text-[var(--text-tertiary)]">
+                      {workbench && (
+                        <span className="break-all">
+                          观测更新：{new Date(workbench.updatedAt).toLocaleString("zh-CN")} · 心跳：{new Date(workbench.heartbeatAt).toLocaleTimeString("zh-CN")}
+                          {workbench.coverage.partial ? ` · 覆盖不完整：${workbench.coverage.reasons.join("；")}` : ""}
+                        </span>
+                      )}
+                      {workbench?.configurationSource && (
+                        <span className="break-all">
+                          配置来源：{workbench.configurationSource.kind} · SHA-256 {workbench.configurationSource.sha256}
+                          {observationStale ? "（观测已过期）" : ""}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: 主张与评审 (Claims & Peer Review View) */}
+        {keeps("claims") && (
+          <div hidden={!shows("claims")}>
+            <ResearchClaimPanels claims={claims} reviews={projection.reviews} onOpenArtifact={onOpenArtifact} />
+          </div>
+        )}
+
+        {/* TAB 5: 历史与审计 (History & Audit Ledger View) */}
+        {keeps("audit") && (
+          <div hidden={!shows("audit")} className="space-y-3">
+            <CollapsibleSection
+              id="research-attempts-ledger"
+              title={`尝试记录 · ${attempts.length} 条`}
+              isUpdating={false}
+              defaultOpen={true}
+              subtitle="正式 ledger.jsonl 历史记录与实验结果流水"
+            >
+              {!attempts.length ? (
+                <div className="win11-card-subtle p-3 text-center text-xs text-[var(--text-secondary)]">
+                  暂无尝试记录。
+                </div>
+              ) : (
+                <ol className="space-y-1.5 text-xs">
+                  {(showAllAttempts ? attempts : attempts.slice(-12)).slice().reverse().map((attempt) => (
+                    <li key={attempt.seq} className="win11-card-subtle p-2.5 space-y-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-[var(--text-primary)]">
+                          #{attempt.seq} · {attempt.kind}
+                        </span>
+                        <span className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10.5px] text-[var(--text-secondary)]">
+                          {attempt.signal}
+                        </span>
+                      </div>
+                      <p className="break-words leading-snug text-[var(--text-primary)]">{attempt.action}</p>
+                      {attempt.observed && (
+                        <p className="mt-1 break-words border-t border-[var(--border-subtle)] pt-1 text-[11px] text-[var(--text-secondary)]">
+                          观测结果：{attempt.observed}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {attempts.length > 12 && <button type="button" className="research-show-more" onClick={() => setShowAllAttempts(value => !value)}>{showAllAttempts ? "仅显示最近 12 条" : `查看全部 ${attempts.length} 条尝试记录`}</button>}
+            </CollapsibleSection>
+
+            {!!workbench?.actions?.length && (
+              <CollapsibleSection
+                id="research-observed-actions"
+                title={`已观测研究动作 · ${workbench.actions.length} 条`}
+                isUpdating={isAnyExecuting}
+                defaultOpen={true}
+                subtitle="已观测的研究行为记录（不代替科学验收结果）"
+              >
+                <ul className="space-y-2 text-xs">
+                  {(showAllActions ? workbench.actions : workbench.actions.slice(-12)).slice().reverse().map((action) => (
+                    <li
+                      key={action.id}
+                      className="win11-card-subtle flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-[var(--text-primary)]">{action.action}</span>
+                        <span className="rounded bg-[var(--bg-tertiary)] border border-[var(--border-primary)] px-2 py-0.5 text-[11px] text-[var(--text-secondary)]">
+                          {action.status}
+                        </span>
+                        {action.claimId && (
+                          <span className="font-mono text-[11px] text-[var(--accent-text)]">
+                            {action.claimId}
+                          </span>
+                        )}
+                      </div>
+                      <time className="font-mono text-[11px] text-[var(--text-tertiary)]">
+                        {new Date(action.at).toLocaleString("zh-CN")}
+                      </time>
+                    </li>
+                  ))}
+                </ul>
+                {workbench.actions.length > 12 && <button type="button" className="research-show-more" onClick={() => setShowAllActions(value => !value)}>{showAllActions ? "仅显示最近 12 条" : `查看全部 ${workbench.actions.length} 条观测动作`}</button>}
+              </CollapsibleSection>
+            )}
+
+            <ResearchStartGuide
+              key={`guide:${scope}`}
+              cwd={cwd}
+              objective={objective}
+              hasHistory={adopted || attempts.length > 0 || !!projection.currentRun || projection.executions.length > 0}
+              compact
+            />
+          </div>
+        )}
+      </div>
+      {surface !== "legacy" && overviewOpen && <ResearchTaskOverview projection={projection} claims={claims} observation={workbench} stale={observationStale} activeSessionId={activeSessionId} checkedAt={checkedAt} onClose={() => setOverviewOpen(false)} onOpenAgents={surface === "workbench" ? onOpenAgents : undefined} onOpenConversation={onOpenConversation} onOpenBudget={surface === "workbench" ? () => handleTabChange("overview") : undefined} />}
+      </div>
+
+      {surface !== "legacy" && intakeVisited && snapshot && <ResearchPersistentDrawer open={visible && intakeOpen && surface === "workbench"} title="资料接入与项目设置" onClose={() => setIntakeOpen(false)}>
+        <ResWorkflowAdoption key={`adoption:${scope}`} cwd={cwd} adopted={adopted} adoption={adoption} charter={state?.charter} onRefresh={refresh} onOpenSource={onOpenSource} />
+      </ResearchPersistentDrawer>}
+
+      {/* Drilldown Modal: Active across all tabs */}
+      {selection && (
+        <ResearchAgentDetail
+          key={`${scope}:${selection.role.name}:${selection.execution?.id ?? ""}`}
+          role={selection.role}
+          instances={chosenLegacy}
+          initialInstance={initialLegacy ? instanceKey(initialLegacy) : undefined}
+          executions={chosenObserved}
+          allExecutions={projection.executions}
+          cwd={cwd}
+          initialExecution={selection.execution?.kind === "pi-session" || selection.execution?.source === "observation" ? selection.execution.id : undefined}
+          observationsStale={observationStale}
+          visible={visible}
+          onClose={() => setSelection(null)}
+          onOpenArtifact={onOpenArtifact}
+          onSelectExecution={(role, execution) =>
+            setSelection({ scope, role, execution, stage: selectedStage })
+          }
+        />
+      )}
+    </div>
+  );
+}

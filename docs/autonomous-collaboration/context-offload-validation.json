@@ -1,0 +1,121 @@
+{
+  "schema": "pi-research-context-offload-validation.v1",
+  "date": "2026-11-06",
+  "branch": "feat/autonomous-collaboration-20261106",
+  "baselineCommit": "fb696b1627c2dc647516464a1dfdbd650417d8ec",
+  "dashboardUpstreamCommit": "65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0",
+  "environment": {
+    "os": "Linux",
+    "node": "24.22.1",
+    "npm": "11.9.0",
+    "pnpm": "11.25.0",
+    "chromium": "141.0.7390.37",
+    "buildNodeHeapMiB": 4096
+  },
+  "overlay": {
+    "files": 627,
+    "runtimeVerify": "passed",
+    "changedOnVerify": 0,
+    "manifestSha256": "132f89065c4087ab07729bbc76d78f917cd86e40d5ca10bcca6f8438d43dff71"
+  },
+  "testedExtensionSha256": {
+    "extensions/research-loop/src/dispatch-context.mjs": "90e32dedea8ed5925d0a72ba3821bdb462eee3213881ab757b657881e617cf7f",
+    "extensions/research-loop/src/workbench-dispatch-tool.mjs": "97228114877fbcb4922ef6cc7958fbd73a1f8f23f1e013b2b4eed860753b73d0",
+    "extensions/research-loop/src/workbench-context.mjs": "836dbbfd8aa2a71c193cc319a8b78246a2afd1ff8797c754def89abc90912a00",
+    "extensions/research-loop/src/workbench-session-tool.mjs": "18fe1347cd79daf006bfb2c20234acb39e890c5c81a7e3e176532b7f55cb8f4b",
+    "extensions/research-loop/src/task-permissions.mjs": "2cdbde56aed3ccf09e30ae3cfea48850ff800f7217128c328b9265c2b6643663",
+    "extensions/research-loop/src/delegation-policy.mjs": "dc94efa3acb7c2e4ca7456200337e7340525cc18900a3c82befc5e5c0138cea0",
+    "extensions/mainline-supervision/src/policy.mjs": "d0c584eea0bbca2ba6c7ae577c724e1963b565d08d24514c1293ccb28f53e094"
+  },
+  "build": {
+    "command": "NODE_OPTIONS=--max-old-space-size=4096 pnpm run build",
+    "status": "passed",
+    "existingLargeChunkWarning": true
+  },
+  "nativeDeployment": {
+    "status": "passed",
+    "nativeAuthentication": true,
+    "isolatedTemporaryHome": true,
+    "host": "127.0.0.1",
+    "clientBuild": {
+      "pluginRegistryHash": "c6c963c24cc16a95927d9b14646df18d3eaba40e30e42738545d2857b6e00a2e",
+      "status": "matched"
+    },
+    "ownedProcessesCleanedUp": true,
+    "syntheticEndedSessions": 3,
+    "modelRequests": 0,
+    "syntheticMoneyRecorded": false,
+    "finishedAt": "2026-11-06T06:06:26.228Z"
+  },
+  "tests": [
+    {
+      "name": "Harness offline",
+      "command": "npm test",
+      "passed": 308,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "name": "Mainline supervision offline",
+      "command": "npm test (supervision phase)",
+      "passed": 64,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "name": "Focused projection, native gate and registration integration",
+      "passed": 58,
+      "failed": 0,
+      "skipped": 0,
+      "includedIn": "Harness offline",
+      "scope": "Production projector/native tool/event-wiring and durable queues; process spawning, model execution and transport replaced by fixtures."
+    },
+    {
+      "name": "Native prompt registry, task permissions and YOLO event wiring",
+      "passed": 9,
+      "failed": 0,
+      "files": 3,
+      "environment": {
+        "PI_DASHBOARD_NO_MDNS": "1"
+      },
+      "command": "PI_DASHBOARD_NO_MDNS=1 npm run test:parallel -- --config vitest.config.ts --root packages/server src/__tests__/research-session-context-budget.test.ts src/__tests__/research-task-permissions.test.ts src/__tests__/event-wiring-agent-yolo.test.ts --reporter=dot"
+    },
+    {
+      "name": "Native service and browser interactions",
+      "passed": 29,
+      "failed": 0,
+      "syntheticData": true,
+      "scope": "Real built app/server/native auth; synthetic ended sessions, collaboration and authorization UI, no model calls."
+    }
+  ],
+  "typecheck": {
+    "status": "failed-existing-diagnostics",
+    "diagnostics": 61,
+    "files": 5,
+    "newDiagnostics": 0,
+    "resolvedDiagnostics": 0,
+    "comparison": "evidence/context-offload-typescript-comparison.json"
+  },
+  "syntheticContextMeasurement": {
+    "command": "node scripts/measure-dispatch-context.mjs",
+    "evidence": "evidence/context-budget.json",
+    "reproducedExactly": true,
+    "unit": "UTF-8 bytes of model-facing text",
+    "modelTokenMeasurement": false,
+    "totalCostMeasurement": false
+  },
+  "evidence": {
+    "browser": "evidence/context-offload-browser-report.json",
+    "testSummary": "evidence/context-offload-test-summary.txt",
+    "typeDiagnostics": "evidence/context-offload-typescript-diagnostics.txt"
+  },
+  "scopeNotes": [
+    "Test groups overlap and must not be summed.",
+    "Semantic task decomposition is performed by the coordinator model; the executor enforces declared schedules, dependencies and result contracts.",
+    "No real model/provider or continuous ten-hour job was run.",
+    "Context limits bound future tool/memory injections and do not remove existing conversation history.",
+    "The first-decision gate is per session and charter; historical plans/atomic decisions can satisfy it, so it is not a per-user-message task classifier.",
+    "Native initial-prompt registration ordering is tested; existing prompt queue TTL, host-restart persistence and first-prompt delivery ACK were not changed.",
+    "No production host was modified."
+  ]
+}

@@ -1,0 +1,348 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { buildDelegationGuidance, mergeDelegationEventRestrictions } from './delegation-policy.mjs';
+import { readResearchCharterBinding } from './charter-binding.mjs';
+import { researchHostPaths } from './research-host-paths.mjs';
+
+export const WORKBENCH_CONTEXT_SECTION = 'res_workflow_records';
+/** Covers the complete memory block, including source references and omission
+ * notices. The fixed record/delegation protocol outside that block is separate. */
+export const WORKBENCH_MEMORY_MAX_BYTES = 8 * 1024;
+const HISTORY_PREVIEW_MAX_BYTES = 1024;
+const LEDGER_TAIL_MAX_BYTES = 16 * 1024;
+const STATE_SOURCE = '.pi/research-loop/state.json';
+const MEMORY_END = '【Research Memory end】';
+const STAGES = new Set(['1-idea', '2-experiment', '3-review', '4-summary', '5-writing']);
+const HASH = /^sha256:[a-f0-9]{64}$/;
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
+const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
+const digest = value => createHash('sha256').update(value).digest('hex');
+const charterDigest = value => 'sha256:' + digest(JSON.stringify(value));
+
+function canonical(file) {
+  if (typeof file !== 'string' || !path.isAbsolute(file) || path.resolve(file) !== file || fs.realpathSync(file) !== file) throw new Error('unsafe context path');
+  return file;
+}
+
+/** Context metadata never follows symlinks, blocks on FIFOs or accepts torn records. */
+function readJson(file, maximum = 128 * 1024) {
+  canonical(file);
+  let fd;
+  try {
+    const before = fs.lstatSync(file);
+    if (!before.isFile() || before.isSymbolicLink() || before.size > maximum || before.nlink !== 1) throw new Error('unsafe context file');
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.ino !== before.ino || opened.dev !== before.dev || opened.size > maximum) throw new Error('changed context file');
+    const buffer = Buffer.alloc(opened.size + 1);
+    let count = 0;
+    while (count < buffer.length) { const read = fs.readSync(fd, buffer, count, buffer.length - count, null); if (!read) break; count += read; }
+    const bytes = buffer.subarray(0, count), raw = bytes.toString('utf8');
+    const after = fs.fstatSync(fd), named = fs.lstatSync(file);
+    const stamp = stat => JSON.stringify([stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs, stat.mode, stat.nlink]);
+    if (count !== opened.size || count > maximum || !Buffer.from(raw).equals(bytes) || stamp(before) !== stamp(after) || stamp(after) !== stamp(named) || fs.realpathSync(file) !== file) throw new Error('changed context file');
+    const value = JSON.parse(raw);
+    if (!object(value)) throw new Error('invalid context record');
+    return value;
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+function sessionHeader(file) {
+  canonical(file);
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+    const info = fs.fstatSync(fd);
+    if (!info.isFile() || info.nlink !== 1) throw new Error('unsafe session header');
+    const buffer = Buffer.alloc(16 * 1024);
+    const read = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const end = buffer.indexOf(10, 0);
+    if (end < 0 || end >= read) throw new Error('incomplete session header');
+    const header = JSON.parse(buffer.subarray(0, end).toString('utf8'));
+    const named = fs.lstatSync(file);
+    if (named.isSymbolicLink() || named.ino !== info.ino || named.dev !== info.dev || !object(header) || header.type !== 'session') throw new Error('changed session header');
+    return header;
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+function joined(value, cwd) {
+  return object(value) && value.canonicalCwd === cwd && typeof value.joinedAt === 'string' && Number.isFinite(Date.parse(value.joinedAt)) && ['manual', 'adoption', 'spawn'].includes(value.via);
+}
+
+/** History is only a small lead-session preview, never a full ledger read. */
+function readRecentFindings(cwd) {
+  let fd;
+  try {
+    const file = canonical(path.join(cwd, 'ledger.jsonl'));
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+    const before = fs.fstatSync(fd);
+    if (!before.isFile() || before.nlink !== 1) return '';
+    const start = Math.max(0, before.size - LEDGER_TAIL_MAX_BYTES);
+    const buffer = Buffer.alloc(before.size - start);
+    let count = 0;
+    while (count < buffer.length) {
+      const read = fs.readSync(fd, buffer, count, buffer.length - count, start + count);
+      if (!read) break;
+      count += read;
+    }
+    const after = fs.fstatSync(fd), named = fs.lstatSync(file);
+    if (count !== buffer.length || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || named.isSymbolicLink() || named.ino !== before.ino || named.dev !== before.dev) return '';
+    let raw = buffer.toString('utf8');
+    // The tail can begin inside a UTF-8 character or a JSON record. Only whole
+    // records are eligible; an oversized last record stays available by reference.
+    if (start > 0) raw = raw.includes('\n') ? raw.slice(raw.indexOf('\n') + 1) : '';
+    return raw.trim().split('\n').filter(Boolean).slice(-3).map(line => {
+      try {
+        const item = JSON.parse(line);
+        if (!object(item)) return '';
+        const text = (value, fallback = '') => typeof value === 'string' ? value : fallback;
+        return `- [${text(item.kind, '尝试')}] ${text(item.action)}: ${text(item.observed) || text(item.lesson)} (信号: ${text(item.signal, '未知')})`;
+      } catch { return ''; }
+    }).filter(Boolean).join('\n');
+  } catch { return ''; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+/** Diagnose membership separately from charter proof. Only ready returns authority. */
+export function inspectWorkbenchRecordContext(ctx, options = {}) {
+  try { return inspectContext(ctx, options); }
+  catch { return { status: 'unavailable', error: 'research-workbench-proof-unavailable' }; }
+}
+
+function inspectContext(ctx, { env = process.env, privateDir = researchHostPaths({ env }).workbenchDir, expectedOwnerKey } = {}) {
+  const notJoined = { status: 'not-joined', error: 'research-workbench-session-not-joined' };
+  const cwd = canonical(ctx?.cwd);
+  const sessionId = ctx?.sessionManager?.getSessionId?.();
+  const sessionFile = ctx?.sessionManager?.getSessionFile?.();
+  if (!ID.test(sessionId ?? '') || typeof sessionFile !== 'string' || !path.isAbsolute(sessionFile) || path.resolve(sessionFile) !== sessionFile || !sessionFile.endsWith('.jsonl')) return notJoined;
+  let header;
+  try { header = sessionHeader(sessionFile); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    // Pi delays JSONL persistence until its first assistant response. The SDK's
+    // own in-memory header can prove identity; prompt/body fields cannot.
+    canonical(path.dirname(sessionFile));
+    header = ctx.sessionManager.getHeader?.();
+    if (header === undefined || header === null) return { status: 'unavailable', error: 'research-workbench-proof-unavailable' };
+  }
+  if (!object(header) || header.type !== 'session' || header.id !== sessionId || header.cwd !== cwd) return notJoined;
+  const meta = readJson(sessionFile.slice(0, -6) + '.meta.json');
+  if (meta.id !== undefined && meta.id !== sessionId || meta.cwd !== undefined && meta.cwd !== cwd || meta.originDeviceId || meta.pluginHidden === true || meta.archiveOnEnd === true || meta.driver && meta.driver !== 'pi') return notJoined;
+  const persisted = meta.pluginRefs?.['res-workflow']?.resWorkflow;
+  if (meta.resWorkflow !== undefined && !joined(meta.resWorkflow, cwd) || persisted !== undefined && !joined(persisted, cwd)) return notJoined;
+  if (!joined(persisted ?? meta.resWorkflow, cwd)) return notJoined;
+  if (persisted && meta.resWorkflow && !isDeepStrictEqual(persisted, meta.resWorkflow)) return notJoined;
+  const principal = meta.principalOwner;
+  if (principal !== undefined && (!object(principal) || typeof principal.iss !== 'string' || !principal.iss || typeof principal.sub !== 'string' || !principal.sub)) return notJoined;
+  // Unowned local Pi sessions can belong to either historical host-local realm.
+  // Both require complete host-private proof; a named principal never falls back.
+  const owners = (principal ? [[principal.iss, principal.sub]] : [['host', 'inert-operator'], ['urn:pi-dashboard:local-operator', 'local-operator']]).map(owner => JSON.stringify(owner));
+  if (expectedOwnerKey !== undefined && !owners.includes(expectedOwnerKey)) return notJoined;
+  const results = owners.filter(ownerKey => expectedOwnerKey === undefined || expectedOwnerKey === ownerKey).map(ownerKey => ({ ownerKey, binding: readResearchCharterBinding({ privateDir, cwd, ownerKey }) }));
+  const candidates = results.filter(result => ['current', 'stale'].includes(result.binding.status));
+  if (candidates.length !== 1 || results.some(result => result.binding.status === 'unavailable')) return { status: 'unavailable', membership: true, error: 'research-workbench-proof-unavailable' };
+  const { binding, ownerKey } = candidates[0];
+  const adoptionId = binding.adoptionId, hash = binding.currentCharterHash;
+  const researchSession = meta.researchSession ?? meta.pluginRefs?.['res-workflow']?.researchSession;
+  const persistedSession = meta.pluginRefs?.['res-workflow']?.researchSession;
+  const collaborator = object(researchSession) && researchSession.schema === 'pi-research-session.v1' && researchSession.workflowCwd === cwd && researchSession.charterHash === hash && researchSession.adoptionId === adoptionId && ID.test(researchSession.parentSessionId ?? '') && (researchSession.readOnly === undefined || researchSession.readOnly === true);
+  // A stale/malformed child is not a lead. In particular its read-only assignment
+  // must never disappear just because the workspace binding has been renewed.
+  if (researchSession !== undefined && (!collaborator || meta.researchSession && persistedSession && !isDeepStrictEqual(meta.researchSession, persistedSession))) return { status: 'assignment-stale', membership: true, error: 'research-workbench-assignment-stale', binding };
+  if (binding.status === 'stale') return { status: 'charter-stale', membership: true, error: 'research-workbench-charter-binding-stale', binding };
+  const state = readJson(path.join(cwd, '.pi', 'research-loop', 'state.json'), 256 * 1024);
+  if (charterDigest(state.charter) !== hash) return { status: 'unavailable', membership: true, error: 'research-workbench-proof-unavailable' };
+  const includeHistory = !collaborator && env?.PI_SUBAGENT_CHILD !== '1';
+  const memory = {
+    objective: state.charter?.objective,
+    successCriteria: state.charter?.successCriteria ?? [],
+    constraints: state.charter?.constraints ?? [],
+    nonGoals: state.charter?.nonGoals ?? [],
+    claimsCount: Array.isArray(state.claims) ? state.claims.length : 0,
+    acceptedClaims: includeHistory && Array.isArray(state.claims) ? state.claims.filter(c => c?.acceptance?.verdict === 'accepted').slice(0, 3).map(c => c.statement) : [],
+    recentFindings: includeHistory ? readRecentFindings(cwd) : '',
+    historyPolicy: includeHistory ? 'bounded-lead-preview' : 'references-only',
+  };
+  const context = { ...(collaborator ? { researchSession: {
+    parentSessionId: researchSession.parentSessionId, rootSessionId: researchSession.rootSessionId,
+    origin: researchSession.origin, spawnToken: researchSession.spawnToken, depth: researchSession.depth,
+    role: researchSession.role, readOnly: researchSession.readOnly === true,
+    declaredTasks: researchSession.tasks?.length ?? 0,
+    // Field presence is authoritative: malformed dispatcher metadata is not a direct assignment.
+    dispatcherManaged: Object.hasOwn(researchSession, 'dispatchId') || Object.hasOwn(researchSession, 'taskId') || Object.hasOwn(researchSession, 'tasks'),
+  } } : {}), sessionId, adoptionId, charterHash: hash, charterRevision: state.charter.revision, stage: STAGES.has(state.stage) ? state.stage : null, memory };
+  return { status: 'ready', context, binding, ownerKey };
+}
+
+/** Compatibility for readers that only consume verified execution context. */
+export function readWorkbenchRecordContext(ctx, options = {}) {
+  return inspectWorkbenchRecordContext(ctx, options).context ?? null;
+}
+
+export function requireWorkbenchRecordContext(ctx, options = {}, notJoinedCode = 'research-workbench-session-not-joined') {
+  const result = inspectWorkbenchRecordContext(ctx, options);
+  if (result.status === 'ready') return result.context;
+  throw new Error(result.status === 'not-joined' ? notJoinedCode : result.error);
+}
+
+function utf8Prefix(value, maximum) {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.length <= maximum) return value;
+  let end = Math.max(0, maximum);
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+function memoryField(label, value, source, count) {
+  const prefix = label + '\n';
+  const notice = `\n[truncated=true; ${count === undefined ? 'field prefix only' : `list prefix only, ${count} entries total`}; read ${source} in full.]`;
+  const full = prefix + value;
+  const minimum = Math.min(Buffer.byteLength(full), Buffer.byteLength(prefix + notice));
+  return {
+    size: Buffer.byteLength(full), minimum,
+    render(maximum) {
+      if (Buffer.byteLength(full) <= maximum) return full;
+      return prefix + utf8Prefix(value, maximum - Buffer.byteLength(prefix + notice)) + notice;
+    },
+  };
+}
+
+/** Bounded excerpts are navigation aids, never replacements for a frozen charter. */
+export function buildWorkbenchMemory(context, memory = context?.memory ?? {}, options = {}) {
+  const memSource = object(memory) ? memory : {};
+  const header = [
+    '【科研工作流深度记忆与上下文注入 (Research Memory)】',
+    `Memory block budget: ${WORKBENCH_MEMORY_MAX_BYTES} UTF-8 bytes, including references/notices. The fixed record and delegation guidance outside this block is separate.`,
+    `Authority: ${STATE_SOURCE}#/charter, relative to this verified workbench; hash=${HASH.test(context?.charterHash ?? '') ? context.charterHash : 'unavailable'}; revision=${Number.isSafeInteger(context?.charterRevision) ? context.charterRevision : 'unknown'}.`,
+    'A truncated field is incomplete: read its exact source field before acting on its scope or claiming its criteria are met. No omitted goal, criterion or constraint is waived. History previews are optional; fetch only evidence relevant to the current assignment.',
+  ].join('\n');
+  const list = (key, label) => {
+    const source = `${STATE_SOURCE}#/charter/${key}`;
+    const values = memSource[key];
+    const text = Array.isArray(values) ? values.length ? values.map((value, index) => `  - [${index}] ${typeof value === 'string' ? value : `[non-text value; read ${source}/${index}]`}`).join('\n') : '[none recorded]' : `[not loaded; read ${source}]`;
+    return memoryField(`${label}：`, text, source, Array.isArray(values) ? values.length : undefined);
+  };
+  const fields = [
+    memoryField('当前研究核心目标：', typeof memSource.objective === 'string' ? memSource.objective : `[not loaded; read ${STATE_SOURCE}#/charter/objective]`, `${STATE_SOURCE}#/charter/objective`),
+    list('successCriteria', '验收成功准则'),
+    list('constraints', '任务约束'),
+    list('nonGoals', '非目标与边界'),
+  ];
+  const child = !!context?.researchSession || (options.env ?? process.env)?.PI_SUBAGENT_CHILD === '1' || memSource.historyPolicy === 'references-only';
+  const historySource = `${STATE_SOURCE}#/claims (statement, evidence, acceptance.verdict) and ledger.jsonl (action, observed, lesson, signal)`;
+  const count = Number.isSafeInteger(memSource.claimsCount) && memSource.claimsCount >= 0 ? memSource.claimsCount : 'unknown';
+  const history = child
+    ? memoryField('History references only for this child:', `Historical claims and ledger text are not injected. Read task-relevant fields from ${historySource}.`, historySource)
+    : memoryField(`已记录主张：${count} 条；lead history preview (at most ${HISTORY_PREVIEW_MAX_BYTES} UTF-8 bytes):`, [
+      Array.isArray(memSource.acceptedClaims) && memSource.acceptedClaims.length ? `已通过内部验收主张 (up to 3): ${memSource.acceptedClaims.slice(0, 3).filter(value => typeof value === 'string').join('；')}` : '',
+      typeof memSource.recentFindings === 'string' && memSource.recentFindings ? `最新尝试记录与观测证据 (up to 3 complete tail records):\n${memSource.recentFindings}` : '',
+      `Read relevant full records from ${historySource}; a missing preview does not mean no record exists.`,
+    ].filter(Boolean).join('\n'), historySource);
+  const sections = [...fields, history];
+  // Reserve every field's exact omission notice before allocating excerpts.
+  // Objective/criteria/constraints/non-goals get all spare capacity before history.
+  const grants = sections.map(section => section.minimum);
+  const overhead = Buffer.byteLength(header) + Buffer.byteLength(MEMORY_END) + sections.length + 1;
+  let available = WORKBENCH_MEMORY_MAX_BYTES - overhead - grants.reduce((sum, value) => sum + value, 0);
+  const weights = [3, 4, 2, 1], share = available;
+  for (let index = 0; index < fields.length; index++) {
+    const extra = Math.min(fields[index].size - grants[index], Math.floor(share * weights[index] / 10));
+    grants[index] += extra; available -= extra;
+  }
+  for (let index = 0; index < fields.length; index++) {
+    const extra = Math.min(fields[index].size - grants[index], available);
+    grants[index] += extra; available -= extra;
+  }
+  const last = sections.length - 1;
+  grants[last] += Math.min(Math.max(0, Math.min(history.size, HISTORY_PREVIEW_MAX_BYTES) - grants[last]), available);
+  return [header, ...sections.map((section, index) => section.render(grants[index])), MEMORY_END].join('\n');
+}
+
+export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?? {}, options = {}) {
+  // Direct callers may pass context.memory. Never serialize that unbounded
+  // payload again beside its budgeted rendering (the hook already separates it).
+  const { memory: _memory, budget: _budget, ...recordContext } = object(context) ? context : {};
+  const mem = buildWorkbenchMemory(recordContext, memory, options);
+  const delegation = buildDelegationGuidance({
+    selectedTools: options.selectedTools,
+    restrictions: options.restrictions,
+    env: options.env,
+  });
+
+  return [
+    'This Pi session is joined to the confirmed res-workflow research workbench.',
+    'The lead is the single user-facing research owner: submit the initial decomposition directly through research_dispatch, which owns the one native confirmation for this frozen goal. Do not pre-confirm the same plan with ask_user. Main and branch owners arrange later in-scope tasks without repeated approval; retain the goal approval across reload. Use the native task graph and durable research_communication channel, with no mandatory coordinator. Return to the user for genuinely new scope/authority or an unresolved ownership decision, and reuse a decision already given.',
+    'The host schedules and monitors workers. Routine progress stays in host records; task/plan completion and actionable exceptions notify the lead. While waiting, end the turn or do independent authorized research instead of polling statuses/resources or reading harness implementation. On delivery, verify the referenced evidence and scientific coverage; completion alone is not acceptance. Escalate a platform fault with its concise error rather than turning the research session into harness maintenance.',
+    `Verified current record context: ${JSON.stringify(recordContext)}`,
+    mem,
+    '',
+    delegation,
+    '',
+    '【工作流五大阶段自动识别与推进】',
+    '阶段推进准则：',
+    '- 1-idea (探索与构思)：文献调研、方案发散、科研问题收窄；',
+    '- 2-experiment (实验与验证)：可判定实验设计、数值模拟、DFT/AIMD 运行与原始数据产出；',
+    '- 3-review (评审与自检)：跨模型族交叉对抗评审、假收敛排查、反例寻找；',
+    '- 4-summary (主张与闭环)：主张与实验证据逐条核对、边界确认；',
+    '- 5-writing (撰写与定稿)：论文撰写、引用真实性审计、产物打包。',
+    '当您检测到对话与任务已进入对应阶段时，请及时调用 research_loop action="stage" 推进阶段状态。',
+    '',
+    'Keep the workbench synchronized through the existing research_loop tool while doing the user-authorized research. This section does not authorize starting or restarting research, replacing the charter, installing software, or publishing.',
+    'Before completing a turn that actually finishes a meaningful research attempt, call research_loop action="log" with a stable attemptId, expectedCharterHash equal to this context charterHash, the actionText, kind, expected, observed, lesson, signal and project-relative evidence paths. Reuse the same attemptId only to retry the same already-completed attempt. Do not count every tool call, file read, status query or model response as a scientific attempt.',
+    'Record an actual stage change with action="stage". Do not select a stage merely because the dashboard has a template for it. Use action="narrow" only for an explicit evidence-backed narrowing decision.',
+    'When the evidence supports stating or revising a research claim, call action="claim" with a stable id, statement, evidence, limitations and the actual supported/partially_supported/refuted/undetermined/failed status. Check existing records first. Do not re-upsert an unchanged accepted claim or generate claims from a task-completed signal.',
+    'After a real review, record review-round with its observed reviewer model and response, then review-gate with the actual author model. For each claim acceptance use claim-gate with the actual cross-family jury, completed counterexample evidence and unresolved obligations. Missing evidence means undetermined or blocked, never accepted. A tool success or native subagent completed status is not scientific acceptance.',
+    'Only explicit user authorization permits action="publish". Internal acceptance does not authorize publication.',
+    'Routine research_loop runs do not require a research budget. Observe actual usage from saved model responses; missing failures and retries remain unknown. Start a run only when the user has authorized that work.',
+    'Use action="status" to inspect existing records when needed. Preserve existing research and return to the current task; do not restart a workflow to make an empty panel look populated.',
+  ].join('\n');
+}
+
+const restrictionBySession = new Map();
+
+/** Keep a user's opt-out/read-only/export limit across neutral follow-up turns. */
+function restrictionsFor(event, ctx, input = false) {
+  const sessionId = ctx?.sessionManager?.getSessionId?.();
+  if (typeof sessionId !== 'string' || !sessionId) return undefined;
+  const restrictions = mergeDelegationEventRestrictions(restrictionBySession.get(sessionId), event, input);
+  if (!restrictionBySession.has(sessionId) && restrictionBySession.size >= 64) restrictionBySession.delete(restrictionBySession.keys().next().value);
+  restrictionBySession.set(sessionId, restrictions);
+  return restrictions;
+}
+
+/** New sessions load the hook once; each turn revalidates live membership and metadata. */
+export function registerWorkbenchContext(pi, options = {}) {
+  pi.on('input', (event, ctx) => {
+    if (readWorkbenchRecordContext(ctx, options)) restrictionsFor(event, ctx, true);
+  });
+  pi.on('before_agent_start', (event, ctx) => {
+    const opts = event?.systemPromptOptions;
+    if (!object(opts)) return undefined;
+    if (object(opts.sections)) delete opts.sections[WORKBENCH_CONTEXT_SECTION];
+    if (opts.cwd !== undefined && opts.cwd !== ctx?.cwd) return undefined;
+    try {
+      const inspection = inspectWorkbenchRecordContext(ctx, options);
+      const context = inspection.context;
+      if (!context) {
+        if (['charter-stale', 'assignment-stale'].includes(inspection.status)) {
+          if (!object(opts.sections)) opts.sections = {};
+          const bindingAction = options.contextOptions?.env?.PI_RESEARCH_HOST_DIR || process.env.PI_RESEARCH_HOST_DIR
+            ? 'Use the operator-controlled pi-research host target bind command'
+            : 'Use the dashboard target-binding action';
+          opts.sections[WORKBENCH_CONTEXT_SECTION] = `Research workbench membership is present, but execution is blocked: ${inspection.error}. Main-session selection does not change target binding or child assignments. Preserve all workflow/scientific records; do not recreate the workflow or edit hashes. ${inspection.status === 'charter-stale' ? bindingAction + ' to explicitly continue this existing workflow at the current charter; then re-read research_dispatch status.' : 'This child belongs to an older assignment. Do not resume its research or convert it into a lead; a fresh assignment under the current target is required.'}`;
+        }
+        return undefined;
+      }
+      const { memory, ...restContext } = context;
+      if (!object(opts.sections)) opts.sections = {};
+      opts.sections[WORKBENCH_CONTEXT_SECTION] = buildWorkbenchRecordProtocol(restContext, memory, {
+        selectedTools: opts.selectedTools,
+        restrictions: restrictionsFor(event, ctx),
+        env: options.env,
+      });
+    } catch { /* Missing, revoked, changed or partially written records do not abort Pi. */ }
+    return undefined;
+  });
+}

@@ -1,0 +1,87 @@
+{
+  "schema": "pi-research-model-config-source.v1",
+  "adaptation": "Deployed pi-agent-settings writer bundled as standalone ESM; proper-lockfile imported statically so runtime has no Dashboard dependency.",
+  "outputSha256": "cc30416aaca8d1e3220203651bd132d8ca6bb3ddab2ffbeb917c19b6c9d88136",
+  "sources": [
+    {
+      "source": "pi-dashboard-shared/src/managed-paths.ts",
+      "sha256": "1f2ae08c04dc7a284ae6ade1e5eef1c3f1cbb38993ca286e36056b85cdac6363"
+    },
+    {
+      "source": "pi-dashboard-shared/src/platform/paths.ts",
+      "sha256": "4d8643f93b9b27ccea0ea9b7a168011712ca2a2ed20a8d65031b7cca225bc9be"
+    },
+    {
+      "source": "pi-dashboard-shared/src/dashboard-paths.ts",
+      "sha256": "7970cdd903b14c5ba5683925f22e941ea5f3212d770f96fe8b0e0d83dddc6753"
+    },
+    {
+      "source": "pi-dashboard-shared/src/pi-settings-keys.ts",
+      "sha256": "14533303f44095abf602e93c43714f3ab80d0760429166cb1bd80ae360bbbec7"
+    },
+    {
+      "source": "pi-dashboard-shared/src/pi-settings-schema.ts",
+      "sha256": "f525e0116c10c7462eda6271293641b72d710245ecacdca1660b96063139be1d"
+    },
+    {
+      "source": "pi-dashboard-shared/src/role-schema.ts",
+      "sha256": "5b111559bbba2740c17aa517f1727331fc681176d194a5bb5a060fd3d5fdf38a"
+    },
+    {
+      "source": "graceful-fs/polyfills.js",
+      "sha256": "66ea1687ed5edf39d67296d26edccc8da695d9a869303a78d0e580cd770aca27"
+    },
+    {
+      "source": "graceful-fs/legacy-streams.js",
+      "sha256": "60a6a7ecf7c3e55a3ffaae13433b6cff388b7205bba6daf393c863f77a949e36"
+    },
+    {
+      "source": "graceful-fs/clone.js",
+      "sha256": "7258eca52e65d69845759503f9fdd66c252f40e5eafb76db5d481172e31ac9ed"
+    },
+    {
+      "source": "graceful-fs/graceful-fs.js",
+      "sha256": "7da35669b6b6b0e4aafee31674c033f2cebb0c8f9ae010f709dcc185d3f17786"
+    },
+    {
+      "source": "proper-lockfile/node_modules/retry/lib/retry_operation.js",
+      "sha256": "eaca13037da35523326c8870e39c4fd236c4f38b5822a2af0f33d0f4e0b21d02"
+    },
+    {
+      "source": "proper-lockfile/node_modules/retry/lib/retry.js",
+      "sha256": "4388d78729faa0dea430e2a7fa572aee6a15a407da05097b41ee44106d336616"
+    },
+    {
+      "source": "proper-lockfile/node_modules/retry/index.js",
+      "sha256": "003f04e5fb5913675c886ac938e9b7bbd33754eb17ee8f00e074e1bf888bec1e"
+    },
+    {
+      "source": "proper-lockfile/node_modules/signal-exit/signals.js",
+      "sha256": "ae538fdae683d6fa2e14579da06df10fb7a66378cfa50971956fb68c2c86c727"
+    },
+    {
+      "source": "proper-lockfile/node_modules/signal-exit/index.js",
+      "sha256": "7cc6f6a1e14dec79dc23f6afd7caca1319189747144e1a33af77616c21d9e9de"
+    },
+    {
+      "source": "proper-lockfile/lib/mtime-precision.js",
+      "sha256": "eb5adf91a21715b50f39438cdcda52043d551ccb5fe530681364c474c7206218"
+    },
+    {
+      "source": "proper-lockfile/lib/lockfile.js",
+      "sha256": "c517a976f7a31c8b1768cb8e7ac9936aee70299ae762548495016a79d64a6434"
+    },
+    {
+      "source": "proper-lockfile/lib/adapter.js",
+      "sha256": "c95e2408b91b70e02c625a9b1a42e0c793140dbe6c1bff8cc183bb88bc267c6c"
+    },
+    {
+      "source": "proper-lockfile/index.js",
+      "sha256": "c11869aa340b61757c2e7a6739a1d423495fe627ac0a54cb44f8c47c393e2fdd"
+    },
+    {
+      "source": "pi-dashboard-server/src/pi-agent-settings.ts",
+      "sha256": "78e965c66a72bad20a2d10c8d8bd4cc627648f609d398822ab2fe8598e14bb4a"
+    }
+  ]
+}

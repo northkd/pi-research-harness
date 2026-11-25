@@ -1,0 +1,2873 @@
+/**
+ * Server ↔ Browser WebSocket protocol messages.
+ */
+import type { CardSectionPrefs, FocusProfile } from "./card-sections.js";
+import type {
+  PluginActionMessage,
+  PluginEventBroadcast,
+  PluginIntentsMessage,
+} from "./dashboard-plugin/intent-types.js";
+import type { DisplayPrefs, PartialDisplayPrefs } from "./display-prefs.js";
+import type { AutoNameOutcome, NotifyLevel } from "./protocol.js";
+import type { QuestionsUpdateMessage } from "./question-types.js";
+import type { ThinkingLevel } from "./role-schema.js";
+import type { GroupByMode, LaneId } from "./session-group-by.js";
+import type { ScienceViewFrameMessage, ScienceViewInputMessage, ScienceViewStatusMessage, ScienceViewSubscribeMessage, ScienceViewUnsubscribeMessage } from "./science-viewer.js";
+import type { TerminalSession } from "./terminal-types.js";
+import type {
+  CommandInfo,
+  DashboardEvent,
+  DashboardSession,
+  DecoratorDescriptor,
+  ExtensionUiModule,
+  FileEntry,
+  FlowInfo,
+  FollowUpEntryView,
+  GoalRecord,
+  ImageContent,
+  ModelInfo,
+  OpenSpecData,
+  OpenSpecGroup,
+  PiSessionInfo,
+  ViewTarget,
+} from "./types.js";
+
+export type {
+  BatchAnswer,
+  BatchQuestion,
+  BatchResult,
+  InteractiveMethod,
+  NotifyLevel,
+} from "./protocol.js";
+// Batch ask_user contracts live in protocol.ts; re-export so browser-side
+// consumers import from one place. See change: redesign-ask-user-question-cards.
+export type { QuestionsUpdateMessage };
+
+// ── Configurable chat display ───────────────────────────────────────
+// See change: configurable-chat-display.
+
+/**
+ * Server → browser: broadcast on every successful PATCH of global
+ * display preferences. Browsers update their store and re-render.
+ */
+export interface DisplayPrefsUpdatedMessage {
+  type: "display_prefs_updated";
+  prefs: DisplayPrefs;
+}
+
+/**
+ * Server → browser: the bind-vs-trust reachability fact changed (the operator
+ * saved a new `bindHost`, or edited the trusted entries). Pushed so the Security
+ * page advisory converges without a reload or a panel reopen, and REPLAYED on
+ * connect so a browser that was disconnected during the change still converges.
+ * See change: warn-unreachable-trusted-networks.
+ */
+export interface ReachabilityUpdatedMessage {
+  type: "reachability_updated";
+  reachability: import("./bind-reachability.js").BindReachability;
+}
+
+/**
+ * Server → browser: a config section changed over PUT /api/config. Clients
+ * re-hydrate the affected settings without a reload (the OpenSpec fleet
+ * switches gate live folder-section rendering). NOT replayed on connect —
+ * connect-time state comes from the normal snapshot + /api/config fetch.
+ * See change: add-openspec-init-affordances.
+ */
+export interface ConfigUpdatedMessage {
+  type: "config_updated";
+  section: string;
+}
+
+/**
+ * Browser → server: write the sparse per-session override.
+ * `override: null` clears the field from `.meta.json`.
+ */
+export interface SetSessionDisplayPrefsBrowserMessage {
+  type: "setSessionDisplayPrefs";
+  sessionId: string;
+  override: PartialDisplayPrefs | null;
+}
+
+/**
+ * Browser → server: persist the per-session collapse state of the
+ * PROCESS subcard's background-processes drawer.
+ * See change: persist-process-drawer-collapse.
+ */
+export interface SetSessionProcessDrawerBrowserMessage {
+  type: "set_session_process_drawer";
+  sessionId: string;
+  collapsed: boolean;
+}
+
+/**
+ * Browser → server: replace a session's full user-owned tag list. The server
+ * normalizes the list (`normalizeTags`) before persist. Whole-array replace
+ * (last-write-wins). See change: add-session-tags.
+ */
+export interface SetSessionTagsBrowserMessage {
+  type: "set_session_tags";
+  sessionId: string;
+  tags: string[];
+}
+
+/**
+ * Browser → server: strip a single user tag from every session that carries
+ * it. The server normalizes the inbound tag first; a blank/whitespace-only
+ * tag (normalizes to empty) is a no-op. Fan-out reuses the per-session
+ * normalize → update → broadcast path (one `session_updated` per changed
+ * session). Bridges never send this. See change: sidebar-tag-collapse-and-delete.
+ */
+export interface RemoveTagGloballyBrowserMessage {
+  type: "remove_tag_globally";
+  tag: string;
+}
+
+// ── Server → Browser ────────────────────────────────────────────────
+
+export interface SessionAddedMessage {
+  type: "session_added";
+  session: DashboardSession;
+  /**
+   * Echoed `requestId` from the originating browser `spawn_session` /
+   * `resume_session` (when known). Lets the client auto-select / dismiss
+   * placeholder by exact correlation, replacing the cwd-FIFO heuristic.
+   * Absent for server-initiated spawns (auto-resume, headless reload).
+   * See change: spawn-correlation-token.
+   */
+  spawnRequestId?: string;
+  /**
+   * Set on a RECONCILED add — a `session_added` rebuilt from CURRENT server
+   * state after a shed registry frame (debt-register flush), never on the
+   * original broadcast. Tells the client to upsert the row and clear a
+   * matching spawn placeholder WITHOUT stealing navigation: the add is a
+   * late repair, and `pendingSpawnsRef` entries have no TTL, so navigating
+   * would yank the user off whatever they had since opened.
+   * See change: close-registry-frame-shed-gaps.
+   */
+  reconciled?: boolean;
+}
+
+export interface SessionUpdatedMessage {
+  type: "session_updated";
+  sessionId: string;
+  updates: Partial<DashboardSession>;
+}
+
+export interface SessionRemovedMessage {
+  type: "session_removed";
+  sessionId: string;
+}
+
+/**
+ * A session transitioned to `archived` and was evicted from the live set.
+ * Distinct from `session_removed`, whose client handler intentionally keeps
+ * the row (ended, transcript preserved). The client deletes the id from its
+ * `sessions` Map and sets the folder's archived count in one step.
+ * See change: archive-sessions-lazy-load.
+ */
+export interface SessionArchivedMessage {
+  type: "session_archived";
+  sessionId: string;
+  /** Folder group key the archived session now counts under. */
+  cwd: string;
+  /** New archived count for that folder group key. */
+  count: number;
+}
+
+/**
+ * A folder's archived count changed (restore, delete or pin re-key). Sent
+ * whenever the count changes EXCEPT the archive transition itself, which
+ * carries the count on `session_archived` instead.
+ * See change: archive-sessions-lazy-load.
+ */
+export interface ArchivedCountUpdatedMessage {
+  type: "archived_count_updated";
+  cwd: string;
+  count: number;
+}
+
+/**
+ * A session's process outlived its shutdown.
+ *
+ * Emitted alongside `session_removed`, never instead of it: the record IS
+ * released (retaining it would wedge the session in the UI and stall the E2E
+ * reap, which awaits `session_removed` per session), but the client must not be
+ * told the shutdown was clean when a ~127 MB `pi` is still resident. Only
+ * reachable when a process survives SIGTERM → SIGKILL.
+ *
+ * See change: fix-tmux-session-shutdown-leak.
+ */
+export interface SessionOrphanedMessage {
+  type: "session_orphaned";
+  sessionId: string;
+  /** The process still resident after the full escalation ladder. */
+  pid: number;
+}
+
+export interface EventMessage {
+  type: "event";
+  sessionId: string;
+  seq: number;
+  event: DashboardEvent;
+}
+
+export interface EventReplayMessage {
+  type: "event_replay";
+  sessionId: string;
+  events: Array<{ seq: number; event: DashboardEvent }>;
+  isLast: boolean;
+}
+
+/**
+ * Describes the shape of a WINDOWED replay: a head segment, a gap, a tail
+ * segment. Sent once per subscriber immediately after `session_state_reset` /
+ * asset replay and BEFORE the first `event_replay`, on full-stream paths only
+ * — a genuine delta subscribe never emits it, so a transient reconnect cannot
+ * reset a client's in-progress gap browsing.
+ *
+ * ZERO-GAP SEMANTICS: this message is emitted ONLY when a window was actually
+ * applied. A full stream that fits entirely inside the budget emits NOTHING —
+ * not a `gapCount: 0` announcement. Same rationale as excluding deltas: a
+ * client mid-gap-browsing that received a zero-gap announcement would have its
+ * gap bookkeeping silently reset. `gapCount` is therefore always `>= 1` on the
+ * wire; the field is typed as a plain number only because `0` remains the
+ * meaningful "no window" value in the client's own state.
+ * See change: lazy-load-session-history (D5).
+ */
+export interface SessionHistoryWindowMessage {
+  type: "history_window";
+  sessionId: string;
+  /**
+   * Last seq of the head segment. `>= 1` in a `head-tail` window; exactly `0`
+   * in a `tail-only` one, where `0` means "nothing above the gap" rather than
+   * "no window". The invariant widened from `>= 1` to `>= 0`.
+   * See change: add-tail-only-replay-window (D2).
+   */
+  headMaxSeq: number;
+  /** First seq of the tail segment. */
+  tailMinSeq: number;
+  /**
+   * Events elided between head and tail that the store ACTUALLY HOLDS — never
+   * the seq distance, which overstates a middle-trimmed store. 0 = no window.
+   */
+  gapCount: number;
+  /** Lowest gap seq the store can still serve. */
+  oldestGapSeq: number;
+  /**
+   * SHAPE of this window, ANNOUNCED rather than inferred from a
+   * `headMaxSeq === 0` sentinel: the client needs the answer in three places
+   * (auto-load on scroll at all, floor the request at `oldestGapSeq`, and
+   * whether exhaustion removes the divider or resolves to a terminus) and it
+   * never sees `memoryLimits`.
+   *
+   * OPTIONAL and additive: an older client that ignores it falls back to
+   * `head-tail`, which is what a server that never sets the mode always sends.
+   * See change: add-tail-only-replay-window (D2a).
+   */
+  windowShape?: "head-tail" | "tail-only";
+}
+
+/**
+ * Client request for an explicit seq RANGE inside the gap described by
+ * `history_window`. A range — not a `beforeSeq` cursor — because the gap is
+ * bounded on both sides and the client knows both bounds.
+ * See change: lazy-load-session-history (D6).
+ */
+export interface HistoryBackfillRequestMessage {
+  type: "history_backfill";
+  sessionId: string;
+  /** Inclusive. */
+  fromSeq: number;
+  /** Inclusive. */
+  toSeq: number;
+}
+
+/**
+ * Exactly ONE of these is sent per `history_backfill`, including every refusal
+ * path — a dropped request would strand the client pending with no retry.
+ * See change: lazy-load-session-history (D6, D9).
+ */
+export interface HistoryBackfillResultMessage {
+  type: "history_backfill_result";
+  sessionId: string;
+  events: Array<{ seq: number; event: DashboardEvent }>;
+  servedFrom: number;
+  servedTo: number;
+  /** Still-servable events in the gap; 0 = nothing more. Client stop rule. */
+  remainingGapCount: number;
+  error?: "not_subscribed" | "in_flight" | "out_of_range" | "stale_generation";
+}
+
+export interface BrowserCommandsListMessage {
+  type: "commands_list";
+  sessionId: string;
+  commands: CommandInfo[];
+}
+
+export interface BrowserFlowsListMessage {
+  type: "flows_list";
+  sessionId: string;
+  flows: FlowInfo[];
+}
+
+export interface BrowserExtensionUiRequestMessage {
+  type: "extension_ui_request";
+  sessionId: string;
+  requestId: string;
+  method: string;
+  params: Record<string, unknown>;
+}
+
+export interface BrowserUiDismissMessage {
+  type: "ui_dismiss";
+  sessionId: string;
+  requestId: string;
+}
+
+export interface BrowserFilesListMessage {
+  type: "files_list";
+  sessionId: string;
+  query: string;
+  files: FileEntry[];
+}
+
+export interface BrowserOpenSpecUpdateMessage {
+  type: "openspec_update";
+  cwd: string;
+  data: OpenSpecData;
+}
+
+/**
+ * Server → browser reply to one `openspec_get`. `final:false` is the immediate
+ * cold-cache placeholder (a final reply follows); `final:true` is the last
+ * reply for this `requestId`. `data` has the same shape as an `openspec_update`
+ * payload so the client applies it identically.
+ * See change: fix-connect-snapshot-frame-loss (D6).
+ */
+export interface OpenSpecGetResultMessage {
+  type: "openspec_get_result";
+  requestId: string;
+  cwd: string;
+  data: OpenSpecData;
+  final: boolean;
+}
+
+/**
+ * Folder-HEAD branch update. Broadcast by the server folder-head poll /
+ * watcher when a folder group key's git HEAD is first observed or changes.
+ * `branch` is the branch name, the short SHA for detached HEAD, or `null`
+ * when the folder is not a git repository. `cwd` is the resolved folder
+ * group key (matches the client's `group.cwd`).
+ * See change: refresh-folder-header-branch.
+ */
+export interface BrowserGitHeadUpdateMessage {
+  type: "git_head_update";
+  cwd: string;
+  branch: string | null;
+}
+
+/**
+ * Per-repo OpenSpec change-grouping update. Broadcast after every successful
+ * write to `<cwd>/openspec/groups/groups.json`, debounced 100 ms per cwd.
+ * Full payload (no incremental delta) so client logic stays simple.
+ * See change: add-openspec-change-grouping.
+ */
+export interface BrowserOpenSpecGroupsUpdateMessage {
+  type: "openspec_groups_update";
+  cwd: string;
+  groups: OpenSpecGroup[];
+  assignments: Record<string, string>;
+  /**
+   * Persisted per-group manual change ordering (`groupId` → ordered
+   * `changeName[]`, with `__ungrouped__` for the implicit column). Absent on
+   * older servers; clients fall back to the default sort.
+   * See change: redesign-openspec-board.
+   */
+  changeOrder?: Record<string, string[]>;
+}
+
+/**
+ * Folder-scoped goals update. Broadcast after every successful mutation of
+ * the per-folder goals file (`~/.pi/dashboard/goals/<folderHash>.json`),
+ * debounced 100 ms per cwd. Full payload (no incremental delta).
+ * See change: add-goals-folder-page.
+ */
+export interface BrowserGoalsUpdateMessage {
+  type: "goals_update";
+  cwd: string;
+  goals: GoalRecord[];
+}
+
+export interface BrowserModelsListMessage {
+  type: "models_list";
+  sessionId: string;
+  models: ModelInfo[];
+  /**
+   * Per-provider refresh failures forwarded verbatim from the bridge. Absent on
+   * a clean refresh and on older bridges.
+   * See change: upgrade-model-selector-primitives.
+   */
+  refreshErrors?: import("./protocol.js").ProviderRefreshError[];
+}
+
+export interface ModelsRefreshedMessage {
+  type: "models_refreshed";
+}
+
+export interface BrowserRolesListMessage {
+  type: "roles_list";
+  sessionId: string;
+  roles: Record<string, string>;
+  presets: Array<{ name: string; roles: Record<string, string> }>;
+  activePreset: string | null;
+  /**
+   * Built-in (seeded default) role names, equal to `DEFAULT_ROLE_NAMES`.
+   * Forwarded verbatim from the bridge's `roles_list`. The Roles panel reads
+   * it to split roles into Built-in vs Custom and to show "＋ Add custom role".
+   * Additive/optional; older clients ignore it.
+   * See change: fix-builtin-role-names-relay.
+   */
+  builtinRoleNames?: string[];
+}
+
+export interface SessionsListBrowserMessage {
+  type: "sessions_list";
+  sessionId: string;
+  cwd: string;
+  sessions: PiSessionInfo[];
+}
+
+export interface ResumeResultBrowserMessage {
+  type: "resume_result";
+  sessionId: string;
+  success: boolean;
+  message: string;
+  /** Echoed from input `resume_session.requestId` when provided. */
+  requestId?: string;
+  /**
+   * For `mode: "fork"` only — populated once the new fork's bridge has
+   * registered and been correlated. Absent for `mode: "continue"` (the
+   * sessionId is unchanged across the respawn).
+   * See change: spawn-correlation-token.
+   */
+  newSessionId?: string;
+  /**
+   * Optional structured failure classifier. Known values:
+   *   - `"FORK_EMPTY_SESSION"`: fork attempted on a session whose
+   *     `sessionFile` does not exist on disk yet (e.g., freshly spawned,
+   *     no messages persisted).
+   * Old clients that don't read this field still get the human-readable
+   * `message`. See change: fix-fork-empty-session-silent-timeout.
+   */
+  code?: string;
+  /**
+   * Interpolation variables for the client-side translation of `code`
+   * (`err.<domain>.<code>`). Additive; ignored by old clients.
+   * See change: make-all-ui-text-i18n.
+   */
+  vars?: Record<string, string | number>;
+}
+
+export interface SpawnResultBrowserMessage {
+  type: "spawn_result";
+  cwd: string;
+  success: boolean;
+  message: string;
+  /** Echoed from input `spawn_session.requestId` when provided. */
+  requestId?: string;
+  /** Spawned process PID when known (headless strategies); informational. */
+  pid?: number;
+  /** Stable failure classifier for client translation. Additive. See change: make-all-ui-text-i18n. */
+  code?: string;
+  /** Interpolation vars for `err.<domain>.<code>`. Additive. */
+  vars?: Record<string, string | number>;
+}
+
+/**
+ * Failure classification codes for spawn errors.
+ * Set on every `{ success: false }` path inside process-manager and the
+ * session-action-handler. Additive — clients that do not know a code fall
+ * back to the `message` string.
+ * See change: spawn-failure-diagnostics.
+ */
+export type SpawnFailureCode =
+  | "DIR_MISSING"
+  | "PI_NOT_FOUND"
+  | "WIN_PI_CMD_ONLY"
+  | "WT_MISSING"
+  | "TMUX_MISSING"
+  | "PI_CRASHED"
+  | "SPAWN_ERRNO"
+  | "PREFLIGHT_FAILED"
+  | "REGISTER_TIMEOUT";
+
+/**
+ * A single reason from the synchronous spawn preflight check.
+ * See change: spawn-failure-diagnostics.
+ */
+export interface PreflightReason {
+  code: string;
+  message: string;
+}
+
+/**
+ * Emitted when a session spawn fails — either because `spawnPiSession` threw,
+ * returned `{ success: false }`, or the spawned child crashed immediately.
+ * Carries enough context for the UI to render a retryable error banner
+ * instead of leaving the user staring at a silent empty state.
+ */
+export interface SpawnErrorMessage {
+  type: "spawn_error";
+  cwd: string;
+  strategy: string;
+  message: string;
+  /** Up to ~2 KB tail of stderr captured from the failed child, if any. */
+  stderr?: string;
+  /** Structured failure classifier. Additive — old clients ignore this field. See change: spawn-failure-diagnostics. */
+  code?: SpawnFailureCode;
+  /** Preflight failure reasons. Only set when code === "PREFLIGHT_FAILED". See change: spawn-failure-diagnostics. */
+  reasons?: PreflightReason[];
+  /** Interpolation vars for `err.<domain>.<code>`. Additive. See change: make-all-ui-text-i18n. */
+  vars?: Record<string, string | number>;
+}
+
+/**
+ * Emitted when a spawned pi session never sends `session_register` within
+ * the configured `spawnRegisterTimeoutMs` window.
+ * See change: spawn-failure-diagnostics.
+ */
+export interface SpawnRegisterTimeoutMessage {
+  type: "spawn_register_timeout";
+  cwd: string;
+  /** Present for headless spawns; absent for tmux/wt/wsl-tmux. */
+  pid?: number;
+  /** Last 4 KB of the per-session stderr log, if available. */
+  stderrTail?: string;
+  /** The effective watchdog timeout in ms — so the UI can render e.g. "30s". See change: spawn-failure-diagnostics (fix W2). */
+  timeoutMs?: number;
+  /**
+   * The browser `requestId` of the spawn that timed out, when known (looked up
+   * from the server's `spawnToken → requestId` map). Lets the folder home
+   * re-enable Start for exactly its own spawn. See change: redesign-directory-home-split.
+   */
+  requestId?: string;
+}
+
+/**
+ * Emitted when pi finally registers AFTER the watchdog already fired.
+ * The UI uses it to auto-clear the timeout banner for the given cwd.
+ * See change: spawn-failure-diagnostics.
+ */
+export interface SpawnRegisterRecoveredMessage {
+  type: "spawn_register_recovered";
+  cwd: string;
+  pid?: number;
+}
+
+export interface SessionsReorderedMessage {
+  type: "sessions_reordered";
+  cwd: string;
+  sessionIds: string[];
+}
+
+/**
+ * Server → browser reply to one `sessions_page` request: the next batch of a
+ * session group's ended sessions that the snapshot window excluded. `order`
+ * lists the ids of `sessions` in the group's ended-sequence order; `hasMore`
+ * is true when further non-window ended sessions remain beyond this page.
+ * See change: fix-connect-snapshot-frame-loss (D5/D9).
+ */
+export interface SessionsPageResultMessage {
+  type: "sessions_page_result";
+  cwd: string;
+  sessions: DashboardSession[];
+  order: string[];
+  hasMore: boolean;
+}
+
+/**
+ * One row of the in-memory archive index. Built at boot from a sidecar and
+ * served by the archived listing/search endpoints without disk IO. `endedAt`
+ * falls back to the sidecar mtime at build time so every row sorts.
+ * See change: archive-sessions-lazy-load.
+ */
+export interface ArchivedSessionSummary {
+  id: string;
+  name?: string;
+  firstMessage?: string;
+  cwd: string;
+  /** Display folder group path (pin > worktree main > cwd). */
+  groupPath: string;
+  gitWorktree?: { mainPath: string; name: string };
+  endedAt: number;
+  archivedAt: number;
+  sessionFile: string;
+  /**
+   * Paired-device id of the host the session RAN on, carried through archiving.
+   * Absent means local (same encoding as `DashboardSession.originDeviceId`).
+   *
+   * Without it an archived session's origin is unknowable — and `sessionFile`
+   * here is a path on the ORIGIN host, which on a same-username machine names a
+   * real but unrelated local file (#E15). Old rows lack it and read as local,
+   * which is what they were before remote origins existed.
+   * See change: serve-retained-remote-transcripts.
+   */
+  originDeviceId?: string;
+  /**
+   * How much of this REMOTE session's transcript the dashboard retained.
+   * Stamped ONLY by the single-row read (`GET /api/sessions/archived/:id`),
+   * never by the listing — the listing would pay a store read per row for a
+   * state only the opened session renders.
+   *
+   * It cannot ride the usual path: completeness reaches live sessions via a
+   * `session_updated` broadcast, which the client drops for any session absent
+   * from its live map — and an archived session is absent by construction.
+   * See change: serve-retained-remote-transcripts (task 2.2).
+   */
+  retainedTranscript?: "complete" | "incomplete" | "absent";
+  /**
+   * Human owner `(iss, sub)` carried through archiving so an archived session
+   * stays owner-gated (§8.1 / D11). Without it an archived session would read
+   * as ownerless and become invisible to its own owner under an active
+   * resolver. Absent ⇒ ownerless (inert-era / automation), same as live.
+   * See change: add-multi-user-identity-plane.
+   */
+  principalOwner?: { iss: string; sub: string };
+  /** Preserve plugin service declarations; user-hidden alone is not a service. */
+  pluginHidden?: boolean;
+  archiveOnEnd?: boolean;
+  /** Host association projection; archive membership never restores a session. */
+  resWorkflow?: DashboardSession["resWorkflow"];
+  pluginRefs?: DashboardSession["pluginRefs"];
+}
+
+/**
+ * Atomic on-connect snapshot of the server's full session registry and
+ * per-cwd ordering. Replaces the legacy per-session `session_added` loop
+ * + per-cwd `sessions_reordered` loop that the gateway used to emit on
+ * each browser WS connect. Client SHALL replace its `sessions` Map and
+ * `sessionOrderMap` with this payload (no merging) so stale ids from a
+ * previous server lifetime are dropped atomically.
+ *
+ * Live updates after the snapshot continue using the incremental
+ * `session_added` / `session_updated` / `session_removed` /
+ * `sessions_reordered` messages.
+ *
+ * See change: fix-stale-sessions-on-reconnect.
+ */
+export interface SessionsSnapshotMessage {
+  type: "sessions_snapshot";
+  /** Every non-archived session known to the server, alive AND ended. */
+  sessions: DashboardSession[];
+  /** cwd → ordered session ids. Only non-empty arrays are included. */
+  orders: Record<string, string[]>;
+  /**
+   * Session group key → count of ended sessions for that group regardless of
+   * the snapshot window, for every group with ≥1 ended session. A group whose
+   * ended sessions all fall outside the window still renders a stub folder
+   * group from this count. See change: fix-connect-snapshot-frame-loss (D4).
+   */
+  endedTotals: Record<string, number>;
+  /**
+   * Folder group key → archived-session count, from the in-memory archive
+   * index. Folders with count 0 are omitted. See change:
+   * archive-sessions-lazy-load.
+   */
+  archivedCountByCwd: Record<string, number>;
+}
+
+export interface PinnedDirsUpdatedMessage {
+  type: "pinned_dirs_updated";
+  paths: string[];
+}
+
+/**
+ * Server → browser broadcast of the full favorite-model label list after any
+ * favorite/unfavorite mutation. Labels are `"provider/id"` strings. Mirrors
+ * `pinned_dirs_updated`. See change: enrich-model-selector-capabilities-favorites.
+ */
+export interface FavoriteModelsUpdatedMessage {
+  type: "favorite_models_updated";
+  labels: string[];
+}
+
+// ── Workspaces (folder-workspaces) ───────────────────────────────────
+
+/**
+ * Named, server-persisted, collapsible container grouping one or more
+ * folders. Membership is authoritative and orthogonal to pinning — a
+ * folder may be in `folders[]` and `pinnedDirectories` independently.
+ * Single-membership: a folder belongs to ≤1 workspace.
+ * See change: folder-workspaces.
+ */
+export interface Workspace {
+  id: string;
+  name: string;
+  collapsed: boolean;
+  folders: string[];
+}
+
+/** Server → browser: full workspace list snapshot (sent on subscribe + every mutation). */
+export interface WorkspacesUpdatedMessage {
+  type: "workspaces_updated";
+  workspaces: Workspace[];
+}
+
+/**
+ * Server → browser: full collapsed-folder-key list snapshot (sent on connect +
+ * every mutation). Mirrors `workspaces_updated` for the folder half of the
+ * sidebar. Sent unconditionally on connect — including when empty — because it
+ * doubles as the "initial state has arrived" signal the one-shot legacy
+ * migration waits on. See change: persist-folder-collapse-server-side.
+ */
+export interface CollapsedFoldersUpdatedMessage {
+  type: "collapsed_folders_updated";
+  collapsedFolders: string[];
+  /** Accordion pinned-open folders (mutually exclusive with collapsed). Absent from older servers. */
+  expandedFolders?: string[];
+}
+
+/**
+ * Server → browser: full session-card section visibility snapshot. Sent on
+ * every mutation and on every connect (incl. `{}`, so a reconnect replaces
+ * stale client state).
+ * See change: configurable-session-card-sections.
+ */
+export interface CardSectionsUpdatedMessage {
+  type: "card_sections_updated";
+  cardSections: CardSectionPrefs;
+}
+
+/**
+ * Server → browser: aggregate session-list grouping prefs snapshot (sent on
+ * connect right after `collapsed_folders_updated`, before any folder-group
+ * materializing message, and on every real mutation). Keys of `folderGroupBy`
+ * and the folder half of `collapsedLanes` (`<pathKey>::<laneId>`) are
+ * canonical `pathKey` folder keys. See change: session-list-group-by.
+ */
+export interface GroupByPrefsUpdatedMessage {
+  type: "group_by_prefs_updated";
+  defaultGroupBy: GroupByMode;
+  folderGroupBy: Record<string, GroupByMode>;
+  collapsedLanes: string[];
+}
+
+export interface TerminalAddedMessage {
+  type: "terminal_added";
+  terminal: TerminalSession;
+}
+
+export interface TerminalRemovedMessage {
+  type: "terminal_removed";
+  terminalId: string;
+}
+
+/**
+ * A `create_terminal` / `open_inline_terminal` was refused because a PTY cap is
+ * reached. Sent only to the requesting socket. See change: harden-server-capability-bounds (D3).
+ */
+export interface TerminalLimitReachedMessage {
+  type: "terminal_limit_reached";
+  scope: "global" | "owner";
+  limit: number;
+  cwd: string;
+  /** True when the refused request was an inline-terminal open. */
+  inline: boolean;
+}
+
+/**
+ * A `pin_directory` / `add_folder_to_workspace` / `move_folder_to_workspace` from a
+ * non-local socket was refused: the path is outside the shared roots. Sent only to
+ * the requesting socket. See change: harden-server-capability-bounds (D1b).
+ */
+export interface FolderRefusedMessage {
+  type: "folder_refused";
+  path: string;
+  reason: "outside_allowed_roots";
+}
+
+export interface TerminalUpdatedMessage {
+  type: "terminal_updated";
+  terminalId: string;
+  updates: Partial<TerminalSession>;
+}
+
+/** Tells the browser to reset accumulated state for a session (bridge reconnected). */
+export interface SessionStateResetMessage {
+  type: "session_state_reset";
+  sessionId: string;
+}
+
+// ── PromptBus protocol (Server → Browser) ───────────────────────────
+
+export interface BrowserPromptRequestMessage {
+  type: "prompt_request";
+  sessionId: string;
+  promptId: string;
+  prompt: {
+    question: string;
+    /** Interactive method, incl. "batch". See InteractiveMethod in protocol.ts. */
+    type: string;
+    options?: string[];
+    defaultValue?: string;
+    pipeline?: string;
+    /** For type: "batch", carries questions: BatchQuestion[]. */
+    metadata?: Record<string, unknown>;
+  };
+  component: {
+    type: string;
+    props: Record<string, unknown>;
+  };
+  placement: string;
+  /**
+   * Correlation token echoed by the bridge on a `prompt_resync_request` reply,
+   * so the server routes the re-emitted prompt to the requesting socket as a
+   * blocking frame instead of the guarded fan-out. Absent on a live prompt.
+   * See change: fix-pending-prompt-lost-on-replay (D4).
+   */
+  __resyncRequestId?: string;
+}
+
+/**
+ * Server → Browser notification. Render-only: the client appends an
+ * `interactiveUi` row to `messages` and never an `interactiveRequests` entry.
+ * See change: split-notify-from-prompt-request.
+ */
+export interface BrowserNotifyMessage {
+  type: "notify";
+  sessionId: string;
+  notifyId: string;
+  message: string;
+  level?: NotifyLevel;
+  /** Emit time, epoch ms. Stamped by the bridge; the server backfills its receipt time when absent/invalid. See change: collapse-and-order-notify-rows. */
+  ts?: number;
+}
+
+export interface BrowserPromptDismissMessage {
+  type: "prompt_dismiss";
+  sessionId: string;
+  promptId: string;
+}
+
+export interface BrowserPromptCancelMessage {
+  type: "prompt_cancel";
+  sessionId: string;
+  promptId: string;
+}
+
+/** Progress event streamed during a package install/remove/update/move operation.
+ *
+ * `moveId` is set when this progress event is part of a move operation
+ * (which composes install + remove). Clients group events by `moveId`
+ * to display a single composite progress affordance instead of two
+ * separate operations. Consumers that ignore the field continue to
+ * render install + remove independently — graceful degradation.
+ *
+ * See change: unify-package-management-ui.
+ */
+export interface PackageProgressMessage {
+  type: "package_progress";
+  operationId: string;
+  /** Optional move grouping id when emitted as part of a move. */
+  moveId?: string;
+  event: {
+    type: "start" | "progress" | "complete" | "error";
+    action: "install" | "remove" | "update" | "clone" | "pull" | "move";
+    source: string;
+    message?: string;
+  };
+}
+
+/** Progress event streamed during a pi core package update. */
+export interface PiCoreUpdateProgressMessage {
+  type: "pi_core_update_progress";
+  name: string;
+  phase: "start" | "output" | "complete" | "error";
+  message?: string;
+}
+
+/** Sent when a full pi core update batch finishes. */
+export interface PiCoreUpdateCompleteMessage {
+  type: "pi_core_update_complete";
+  results: Array<{ name: string; success: boolean; error?: string }>;
+  sessionsReloaded: number;
+}
+
+/**
+ * Runtime-overlay staging events (Settings → Updates). `progress` streams the
+ * stager phases; `staged` / `failed` end a staging job.
+ * See change: electron-runtime-overlay-updates.
+ */
+export type RuntimeUpdateMessage =
+  | {
+      type: "runtime_update_progress";
+      version: string;
+      phase: "fetch" | "install" | "verify" | "materialize" | "done" | "error";
+      message?: string;
+    }
+  | { type: "runtime_update_staged"; version: string }
+  | { type: "runtime_update_failed"; version: string; message: string };
+
+/**
+ * Streamed during the +Worktree dialog's post-create dependency install
+ * step. Only sent to the browser that initiated the worktree-create or
+ * existing-row install, identified by `requestId`. Throttled to <= 4/sec
+ * per requestId, each event carrying the most recent <= 4 KB tail of
+ * combined stdout/stderr.
+ *
+ * See change: generalize-worktree-init-hook (renamed from worktree_bootstrap_*).
+ */
+/**
+ * Trust scope chosen at confirm time for `POST /api/git/worktree/init`.
+ * `session` = ephemeral (server memory, gone on restart); `project` = persisted
+ * (today's behavior). Omitted → `project` (backward compatible). Any other value
+ * is rejected `bad_request` by the server — no upward coercion.
+ * See change: add-session-scoped-init-trust.
+ */
+export type WorktreeInitTrustScope = "session" | "project";
+
+export interface WorktreeInitProgressMessage {
+  type: "worktree_init_progress";
+  requestId: string;
+  cwd: string;
+  /** Most recent <= 4 KB of combined stdout/stderr. */
+  line: string;
+}
+
+/** Emitted exactly once when the worktree-init hook completes successfully. */
+export interface WorktreeInitDoneMessage {
+  type: "worktree_init_done";
+  requestId: string;
+  cwd: string;
+  durationMs: number;
+}
+
+/** Emitted exactly once when the init hook fails or fails to spawn. */
+export interface WorktreeInitFailedMessage {
+  type: "worktree_init_failed";
+  requestId: string;
+  cwd: string;
+  /** Stable classifier: `script_nonzero_exit` | `spawn_error` | `agent_failed` | `agent_incomplete`. */
+  code: string;
+  /** Short human hint when we recognized the failure family. */
+  message: string;
+  /** Last <= 4 KB of combined output. */
+  stderr: string;
+}
+
+/** Sent when a package operation finishes (success or failure). */
+export interface PackageOperationCompleteMessage {
+  type: "package_operation_complete";
+  operationId: string;
+  /** Optional composite grouping id; set on every event of a composite move/reset op. */
+  moveId?: string;
+  action: "install" | "remove" | "update" | "move" | "reset";
+  source: string;
+  scope: "global" | "local";
+  success: boolean;
+  error?: string;
+  /** Number of sessions reloaded (only on success). */
+  sessionsReloaded?: number;
+  /** Set on a composite move OR reset op when install succeeded but remove
+   * failed. Move: the package now exists in BOTH scopes. Reset: the published
+   * spec installed but the local/git entry is still registered. Either way the
+   * UI should surface a recovery action (POST /api/packages/remove of the
+   * still-present entry). */
+  partialSuccess?: {
+    installed: boolean;
+    removed: boolean;
+    removeError?: string;
+  };
+}
+
+// ── Extension UI System (Phase 1: management-modal slot) ───────────
+// See change: add-extension-ui-modal.
+
+/** Server → browser: cached extension-declared UI modules for a session. */
+export interface BrowserUiModulesListMessage {
+  type: "ui_modules_list";
+  sessionId: string;
+  modules: ExtensionUiModule[];
+}
+
+/** Server → browser: row data for a `view.dataEvent`. */
+export interface BrowserUiDataListMessage {
+  type: "ui_data_list";
+  sessionId: string;
+  event: string;
+  items: unknown[];
+}
+
+// ── Extension UI System (Phase 2: live in-page decorations) ──
+// See change: add-extension-ui-decorations.
+
+/**
+ * Server → browser: a live decorator descriptor (forwarded verbatim from the
+ * extension). `removed: true` instructs the client to unmount the matching
+ * descriptor.
+ */
+export interface BrowserExtUiDecoratorMessage {
+  type: "ext_ui_decorator";
+  sessionId: string;
+  descriptor: DecoratorDescriptor;
+  removed?: boolean;
+}
+
+/**
+ * Server → browser: register a base64-encoded image asset under a content
+ * hash for the given session. Forwarded verbatim from the bridge's
+ * `asset_register` message and replayed to reconnecting browsers (in
+ * chronological position relative to its referencing `message_update` /
+ * `message_end`). The client populates a per-session `Map<hash,{data,mime}>`
+ * consumed by the `MarkdownContent` `pi-asset:` resolver.
+ * See change: chat-markdown-local-images-and-math.
+ */
+export interface BrowserAssetRegisterMessage {
+  type: "asset_register";
+  sessionId: string;
+  hash: string;
+  mimeType: string;
+  data: string;
+}
+
+/**
+ * Server → browser: a `plugin_action` arrived for a `pluginId` with no
+ * registered handler. Surfaced to the sender so the action is never silently
+ * dropped. Best-effort out-of-band signal (plugin_action is fire-and-forget,
+ * not correlated). See change: fix-plugin-action-fanout-and-handlers.
+ */
+export interface PluginActionErrorMessage {
+  type: "plugin_action_error";
+  /** The pluginId that had no registered handler. */
+  pluginId: string;
+  /** The action that could not be delivered (echoed for client branching). */
+  action?: string;
+  /** Human-readable error description. */
+  error: string;
+}
+
+/**
+ * Server → browser: a `retry_session` could not be delivered (unknown or
+ * disconnected session, or a bridge lacking the handler). Structured
+ * negative-ack, mirroring `plugin_action_error` — never a silent drop. The
+ * client re-enables the one-shot Retry control and surfaces a toast on receipt.
+ * See change: replace-dashboard-retry-command-with-protocol-message.
+ */
+export interface RetrySessionErrorMessage {
+  type: "retry_session_error";
+  sessionId: string;
+  /** Human-readable error description. */
+  error: string;
+}
+
+/**
+ * Server → browser: an `archive_session` was rejected (running, interrupted,
+ * unknown id, archive unavailable, or a persist failure). Sent to the requester
+ * only — never a silent drop; the client surfaces a toast and changes no state.
+ * See change: fix-orphaned-ended-session-archive.
+ */
+export interface ArchiveSessionErrorMessage {
+  type: "archive_session_error";
+  sessionId: string;
+  /** Human-readable error description. */
+  error: string;
+}
+
+/**
+ * Server → browser: a pin / unpin / workspace change could not be mirrored into
+ * pi trust (snapshot or choice write failed) — the operation was refused or
+ * only partly applied. Never a silent drop. See change: mirror-dashboard-trust-to-pi.
+ */
+export interface PiTrustMirrorErrorMessage {
+  type: "pi_trust_mirror_error";
+  op: "pin" | "unpin" | "workspace";
+  path: string;
+  error: string;
+}
+
+/**
+ * Server → browser: a plugin server asked the viewers of `sessionId` to open
+ * (or focus) the plugin tab `path` (`<pathPrefix>:<rest>`, prefix owned by the
+ * calling plugin — enforced by the host). A client acts only while on that
+ * session's chat or editor route. See change: add-browser-editor-pane-tab (D5).
+ */
+export interface EditorTabOpenMessage {
+  type: "editor_tab_open";
+  sessionId: string;
+  path: string;
+}
+
+/** Sent when a plugin's config changes; carries only that plugin's namespace. */
+export interface PluginConfigUpdateMessage {
+  type: "plugin_config_update";
+  /** Plugin id that was updated. */
+  id: string;
+  /**
+   * Only this plugin's namespace config (plugins.<id>.*).
+   * Never contains other plugins' configs.
+   */
+  config: unknown;
+}
+
+/**
+ * Server → browser: broadcast just before the server restarts/shuts down so a
+ * browser-side `useAsyncAction(confirm: "ws")` can correlate its restart click.
+ * Mirrors the bridge-facing `ServerRestartingExtensionMessage` (protocol.ts).
+ * `requestId` echoes the optional client correlation id from `POST /api/restart`;
+ * additive + optional so clients/bridges that omit it are unaffected.
+ * See change: add-async-action-feedback.
+ */
+export interface ServerRestartingMessage {
+  type: "server_restarting";
+  reason: "restart" | "shutdown";
+  quiesceMs: number;
+  requestId?: string;
+}
+
+/**
+ * Server → browser: cold-start recovery offer. Broadcast once, to all
+ * connected clients, when ≥1 session was interrupted by an unclean host
+ * shutdown and the `reopenSessionsAfterShutdown` setting is `"ask"`. The
+ * client renders this as a sticky notification in the top-right toast stack
+ * (no auto-timeout); accepting routes each candidate through `resume_session`.
+ * See change: reopen-sessions-after-shutdown.
+ */
+export interface RecoveryCandidate {
+  sessionId: string;
+  name?: string;
+  cwd?: string;
+  model?: string;
+  /** Server boot id under which the session was last seen running. */
+  liveEpoch?: number;
+}
+export interface RecoveryOfferMessage {
+  type: "recovery_offer";
+  candidates: RecoveryCandidate[];
+  /**
+   * Epoch-ms deadline until which each candidate's process liveness is still
+   * being resolved (the Class-2 bridge-reattach grace window). While
+   * `Date.now() < graceUntil` the offer is shown but Reopen is NOT actionable —
+   * a still-alive bridge may reattach and retract the candidate, and reopening
+   * it early would double-spawn pi for one sessionId. Absent/past ⇒ liveness is
+   * finalized and Reopen is active. See change: fix-recovery-offer-bridge-liveness-gate.
+   */
+  graceUntil?: number;
+}
+
+/**
+ * Browser → server: durable dismissal of a cold-start recovery offer. Sent
+ * when the user clicks the offer's dismiss (×) action. The server consumes
+ * the on-disk liveness marker (`setLiveness(file, {live:false})`) for each
+ * listed session so it is never re-classified as a recovery candidate, and
+ * clears its held pending offer so `onConnect` replay stops. Mirrors Chrome
+ * consuming its crash sentinel on dismiss.
+ * See change: fix-recovery-offer-dismiss-and-phantom-reopen.
+ */
+export interface RecoveryDismissMessage {
+  type: "recovery_dismiss";
+  sessionIds: string[];
+}
+
+/**
+ * Server → browser: automatic session naming failed for `sessionId`. Forwarded
+ * from the bridge's `auto_name_error`; the client renders a one-shot toast
+ * ("Couldn't auto-name session: <reason>"). See change: add-auto-session-naming.
+ */
+export interface AutoNameErrorBrowserMessage {
+  type: "auto_name_error";
+  sessionId: string;
+  reason: string;
+}
+
+/**
+ * Server → browser: the last auto-naming attempt outcome for `sessionId`,
+ * forwarded from the bridge's deduplicated `auto_name_outcome`. Rendered in
+ * Settings → Diagnostics so a silent stop is discoverable without reading
+ * `server.log`. See change: fix-auto-naming-reasoning-model (design D9).
+ */
+export interface AutoNameOutcomeBrowserMessage {
+  type: "auto_name_outcome";
+  sessionId: string;
+  outcome: AutoNameOutcome;
+  reason: string;
+  modelRef?: string;
+  at: number;
+}
+
+export type ServerToBrowserMessage =
+  | import("./thinking-translation.js").ThinkingTranslationFrame
+  | ServerRestartingMessage
+  | AutoNameErrorBrowserMessage
+  | AutoNameOutcomeBrowserMessage
+  | RecoveryOfferMessage
+  | PluginConfigUpdateMessage
+  | EditorTabOpenMessage
+  | PluginActionErrorMessage
+  | RetrySessionErrorMessage
+  | ArchiveSessionErrorMessage
+  | PiTrustMirrorErrorMessage
+  | SessionAddedMessage
+  | SessionUpdatedMessage
+  | SessionRemovedMessage
+  | SessionArchivedMessage
+  | ArchivedCountUpdatedMessage
+  | SessionOrphanedMessage
+  | EventMessage
+  | EventReplayMessage
+  | SessionHistoryWindowMessage
+  | HistoryBackfillResultMessage
+  | BrowserCommandsListMessage
+  | BrowserFlowsListMessage
+  | BrowserExtensionUiRequestMessage
+  | BrowserUiDismissMessage
+  | BrowserFilesListMessage
+  | BrowserOpenSpecUpdateMessage
+  | OpenSpecGetResultMessage
+  | BrowserGitHeadUpdateMessage
+  | SessionsPageResultMessage
+  | BrowserOpenSpecGroupsUpdateMessage
+  | BrowserGoalsUpdateMessage
+  | BrowserModelsListMessage
+  | SessionsListBrowserMessage
+  | ResumeResultBrowserMessage
+  | SpawnResultBrowserMessage
+  | SpawnErrorMessage
+  | SpawnRegisterTimeoutMessage
+  | SpawnRegisterRecoveredMessage
+  | SessionsReorderedMessage
+  | SessionsSnapshotMessage
+  | PinnedDirsUpdatedMessage
+  | FavoriteModelsUpdatedMessage
+  | WorkspacesUpdatedMessage
+  | CollapsedFoldersUpdatedMessage
+  | GroupByPrefsUpdatedMessage
+  | CardSectionsUpdatedMessage
+  | TerminalAddedMessage
+  | TerminalRemovedMessage
+  | TerminalLimitReachedMessage
+  | FolderRefusedMessage
+  | TerminalUpdatedMessage
+  | SessionStateResetMessage
+  | PackageProgressMessage
+  | PackageOperationCompleteMessage
+  | PiCoreUpdateProgressMessage
+  | PiCoreUpdateCompleteMessage
+  | RuntimeUpdateMessage
+  | ForceKillResultMessage
+  | BrowserRolesListMessage
+  | ProcessListUpdateMessage
+  | ServersDiscoveredMessage
+  | ServersUpdatedMessage
+  | BrowserPromptRequestMessage
+  | BrowserNotifyMessage
+  | BrowserPromptDismissMessage
+  | BrowserPromptCancelMessage
+  | QuestionsUpdateMessage
+  | ModelsRefreshedMessage
+  | WorktreeInitProgressMessage
+  | WorktreeInitDoneMessage
+  | WorktreeInitFailedMessage
+  | BrowserUiModulesListMessage
+  | BrowserUiDataListMessage
+  | BrowserExtUiDecoratorMessage
+  | BrowserAssetRegisterMessage
+  | PluginIntentsMessage
+  | PluginEventBroadcast
+  | DisplayPrefsUpdatedMessage
+  | ReachabilityUpdatedMessage
+  | ConfigUpdatedMessage
+  | QueueUpdateToBrowserMessage
+  | PromptReceivedToBrowserMessage
+  | CanvasIntentMessage
+  | CanvasServerChipMessage
+  | FileChangedMessage
+  | BrowserRelayFrameMessage
+  | ScienceViewFrameMessage
+  | ScienceViewStatusMessage
+  | BrowserRelayStatusMessage
+  | BrowserHostChallengeMessage
+  | BrowserHostRegisteredMessage
+  | BrowserHostConnectMessage
+  | BrowserHostConnectCancelMessage
+  | BrowserHostRelayDataMessage
+  | BrowserHostRelayCloseMessage
+  | BrowserHostTeeMessage
+  | GrantChannelMessage
+  | GrantRequestMessage
+  | GrantDismissMessage
+  | PairPendingChangedMessage
+  | ServicesChangedMessage;
+
+/**
+ * Server push: drive the per-session auto-canvas surface (change: auto-canvas).
+ *
+ * Two phases (Decision 1 two-phase open):
+ *   - `eager`  — the first qualifying candidate mid-turn; open immediately
+ *                (subject to the client viewport gate — mobile surfaces a chip
+ *                instead of yanking chat).
+ *   - `settle` — fired at `agent_end`; the turn's winning target owns the slot.
+ *
+ * `target` is the normalized winning `ViewTarget` (file/url), or `null` when the
+ * turn produced nothing renderable. `mode` maps to the lifecycle state
+ * (`replace` transient vs `pin` kept). Servers never arrive here — they use
+ * `canvas_server_chip`.
+ */
+export interface CanvasIntentMessage {
+  type: "canvas_intent";
+  sessionId: string;
+  phase: "eager" | "settle";
+  target: ViewTarget | null;
+  mode?: "replace" | "pin";
+  title?: string;
+}
+
+/**
+ * Server push: surface a declared-server confirm chip (Decision 4). Carries
+ * ONLY the port — NO announced host (SSRF gate: the client probes
+ * `127.0.0.1:port` on tap, never a host the agent named). No pre-tap fetch.
+ */
+export interface CanvasServerChipMessage {
+  type: "canvas_server_chip";
+  sessionId: string;
+  port: number;
+  title?: string;
+  /**
+   * True = the chip expired at the turn boundary / server-exit and MUST become
+   * non-actionable (S32). When set, `port` echoes the expired chip's port; the
+   * client drops it. Absent/false = surface a fresh, tappable chip.
+   */
+  expire?: boolean;
+}
+
+/**
+ * Server push: an open editor-pane file changed on disk (agent edit or
+ * external change), detected by the narrow open-files watch. The pane shows a
+ * per-tab "changed on disk" banner offering Refresh (no auto-reload).
+ * See change: split-editor-workspace.
+ */
+export interface FileChangedMessage {
+  type: "file_changed";
+  sessionId: string;
+  /** Path relative to the session cwd. */
+  path: string;
+}
+
+// ── Browser → Server ────────────────────────────────────────────────
+
+export interface SubscribeMessage {
+  type: "subscribe";
+  sessionId: string;
+  lastSeq?: number;
+}
+
+export interface UnsubscribeMessage {
+  type: "unsubscribe";
+  sessionId: string;
+}
+
+export interface SendPromptToBrowserMessage {
+  type: "send_prompt";
+  sessionId: string;
+  text: string;
+  images?: ImageContent[];
+  /** Delivery mode: "steer" (after current turn) or "followUp" (after agent finishes). Defaults to "followUp" when absent. See change: add-steering-message. */
+  delivery?: "steer" | "followUp";
+  /**
+   * Optional model pick (`provider/id`) applied to the resumed pi (continue
+   * only; the server drops it for forks and live sessions). Validated
+   * server-side. See change: redesign-directory-home-split.
+   */
+  model?: string;
+  /** Optional thinking-level pick, same rules as `model`. */
+  thinkingLevel?: ThinkingLevel;
+}
+
+export interface AbortToBrowserMessage {
+  type: "abort";
+  sessionId: string;
+}
+
+/**
+ * Browser → server: re-drive a settled-error turn as a first-class protocol
+ * message. Replaces the legacy `send_prompt` sentinel `/__dashboard_retry`,
+ * which smuggled a control signal through the user-prompt channel. The server
+ * forwards a `retry_session` to the owning bridge, which re-drives the turn via
+ * `pi.sendMessage({ customType: "pi-dashboard:retry", display: false },
+ * { triggerTurn: true })`. See change:
+ * replace-dashboard-retry-command-with-protocol-message.
+ */
+export interface RetrySessionBrowserMessage {
+  type: "retry_session";
+  sessionId: string;
+}
+
+// ── Follow-up queue mutation (bridge-owned buffer) ──────────────────
+//
+// Pi's ExtensionAPI (verified through 0.76.0) exposes no queue-mutation
+// primitives to extensions. The bridge owns `bridgeFollowUp: string[]`
+// authoritatively and never forwards dashboard-queued follow-ups to pi
+// until the drain loop ships them on `agent_end`. All mutation messages
+// below target the bridge buffer ONLY — never pi.
+// See change: rework-mid-turn-prompt-queue (spec mid-turn-prompt-queue).
+//
+// NOTE: the old pi-mutation message types from the deleted Phase 3
+// architecture (clear_steering_queue, clear_followup_slot,
+// edit_followup_slot) STAY PERMANENTLY DELETED. The names below for
+// edit/remove/promote_followup_entry are REUSED with new
+// bridge-buffer-only semantics — they no longer touch pi.
+
+export interface ClearFollowupEntriesFromBrowserMessage {
+  type: "clear_followup_entries";
+  sessionId: string;
+  /** `"all"` empties the bridge buffer; `number[]` splices listed indices (sorted descending bridge-side to avoid index drift). */
+  indices: number[] | "all";
+}
+
+/**
+ * Replaces the TEXT of `bridgeFollowUp[index]`; the entry's buffered images are
+ * preserved. Mutates bridge buffer only — no pi call. The former `images` field
+ * was retired in `fix-bridge-followup-image-drop` (design D5): the browser never
+ * holds the bytes after the initial `send_prompt`, so it was unpopulatable.
+ */
+export interface EditFollowupEntryFromBrowserMessage {
+  type: "edit_followup_entry";
+  sessionId: string;
+  index: number;
+  text: string;
+}
+
+/** Splices `bridgeFollowUp[index]`. Mutates bridge buffer only — no pi call. */
+export interface RemoveFollowupEntryFromBrowserMessage {
+  type: "remove_followup_entry";
+  sessionId: string;
+  index: number;
+}
+
+/** Moves `bridgeFollowUp[index]` to position 0 via splice + unshift. Silent no-op when `index <= 0`. No pi call. */
+export interface PromoteFollowupEntryFromBrowserMessage {
+  type: "promote_followup_entry";
+  sessionId: string;
+  index: number;
+}
+
+/**
+ * Server -> browser: broadcast pi's queue mirror after a `queue_update`
+ * arrives from the bridge. Drives `Session.pendingQueues`.
+ * See change: add-followup-edit-and-steer-cancel.
+ */
+export interface QueueUpdateToBrowserMessage {
+  type: "queue_update";
+  sessionId: string;
+  steering: string[];
+  /** Entry views: text + image COUNT. Image bytes never cross the wire (design D2). */
+  followUp: FollowUpEntryView[];
+}
+
+/**
+ * Server -> browser: forwarded bridge ack for a `send_prompt`. `fresh:true`
+ * transitions the optimistic `pendingPrompt` to `status:"sent"`; `fresh:false`
+ * drops `pendingPrompt` (the send raced into a mid-turn queue entry, now owned
+ * by `mid-turn-prompt-queue`). See change: optimistic-prompt-progress.
+ */
+export interface PromptReceivedToBrowserMessage {
+  type: "prompt_received";
+  sessionId: string;
+  fresh: boolean;
+  /**
+   * Handle of the REST prompt this acknowledges, when the prompt carried one.
+   * How the acknowledged state of a `POST /api/session/:id/prompt` becomes
+   * observable without gating the response on the bridge.
+   * See change: fix-spawn-correlation-ttl-coupling (D7).
+   */
+  promptId?: string;
+}
+
+// The `/view` inline surface is retired (change:
+// open-view-command-in-editor-pane): `/view` opens the editor pane, so the
+// server no longer emits `view_messages_update` nor accepts
+// `inject_view_message`. Both message types removed.
+
+export interface RequestCommandsToBrowserMessage {
+  type: "request_commands";
+  sessionId: string;
+}
+
+export interface FetchContentMessage {
+  type: "fetch_content";
+  sessionId: string;
+  seq: number;
+}
+
+export interface ListFilesToBrowserMessage {
+  type: "list_files";
+  sessionId: string;
+  query: string;
+}
+
+export interface OpenSpecRefreshBrowserMessage {
+  type: "openspec_refresh";
+  cwd: string;
+}
+
+/**
+ * Browser asks the server for one cwd's OpenSpec data, with a cold-cache pull
+ * (immediate placeholder, then one gated poll). `requestId` correlates the
+ * possibly two-phase replies. See change: fix-connect-snapshot-frame-loss (D6).
+ */
+export interface OpenSpecGetMessage {
+  type: "openspec_get";
+  requestId: string;
+  cwd: string;
+}
+
+/**
+ * Browser asks for the next batch of a session group's ended sessions that the
+ * snapshot window excluded. `offset` = number of non-window ended sessions the
+ * client already holds for the group. See change: fix-connect-snapshot-frame-loss (D5/D9).
+ */
+export interface SessionsPageMessage {
+  type: "sessions_page";
+  cwd: string;
+  offset: number;
+}
+
+export interface RenameSessionBrowserMessage {
+  type: "rename_session";
+  sessionId: string;
+  name: string;
+}
+
+export interface RequestModelsBrowserMessage {
+  type: "request_models";
+  sessionId: string;
+}
+
+/**
+ * Browser asks the server to forward `request_providers` to the bridge.
+ * See change: replace-hardcoded-provider-lists.
+ */
+export interface RequestProvidersBrowserMessage {
+  type: "request_providers";
+  sessionId: string;
+}
+
+export interface SetThinkingLevelBrowserMessage {
+  type: "set_thinking_level";
+  sessionId: string;
+  level: string;
+}
+
+export interface SetModelBrowserMessage {
+  type: "set_model";
+  sessionId: string;
+  provider: string;
+  modelId: string;
+}
+
+export interface ShutdownBrowserMessage {
+  type: "shutdown";
+  sessionId: string;
+}
+
+export interface ForceKillBrowserMessage {
+  type: "force_kill";
+  sessionId: string;
+}
+
+/**
+ * Graceful stop: let the agent finish the current turn, then shut the
+ * session down cleanly. Distinct from abort (mid-stream interrupt) and
+ * force_kill (SIGKILL). See change: adopt-pi-071-072-073-features.
+ */
+export interface StopAfterTurnBrowserMessage {
+  type: "stop_after_turn";
+  sessionId: string;
+}
+
+export interface ForceKillResultMessage {
+  type: "force_kill_result";
+  sessionId: string;
+  success: boolean;
+  message?: string;
+  /** Stable failure classifier for client translation. Additive. See change: make-all-ui-text-i18n. */
+  code?: string;
+  /** Interpolation vars for `err.<domain>.<code>`. Additive. */
+  vars?: Record<string, string | number>;
+}
+
+export interface ProcessListUpdateMessage {
+  type: "process_list_update";
+  sessionId: string;
+  // Server populates `kind` + `label` on every entry; `sessionRef` only for
+  // `kind: "sub-session"`. Fields optional for back-compat with older
+  // clients. See change: classify-process-list-entries.
+  processes: Array<{ pid: number; pgid: number; command: string; elapsedMs: number; kind?: import("./protocol.js").ProcessKind; label?: string; sessionRef?: string }>;
+}
+
+export interface ServersDiscoveredMessage {
+  type: "servers_discovered";
+  servers: Array<{
+    host: string;
+    port: number;
+    piPort: number;
+    version: string;
+    pid: number;
+    isLocal: boolean;
+    source: "mdns" | "fallback";
+  }>;
+}
+
+export interface ServersUpdatedMessage {
+  type: "servers_updated";
+  servers: Array<{
+    host: string;
+    port: number;
+    piPort: number;
+    version: string;
+    pid: number;
+    isLocal: boolean;
+    source: "mdns" | "fallback";
+  }>;
+}
+
+export interface KillProcessBrowserMessage {
+  type: "kill_process";
+  sessionId: string;
+  /** Process group to kill. Optional: the REST/MCP lifecycle path may not know
+   *  it, and the bridge no-ops on a falsy pgid. See change: expand-mcp-tiered-surface. */
+  pgid?: number;
+}
+
+export interface ListSessionsBrowserMessage {
+  type: "list_sessions";
+  cwd: string;
+}
+
+export interface ResumeSessionBrowserMessage {
+  type: "resume_session";
+  sessionId: string;
+  mode: "continue" | "fork";
+  /** When forking, optionally fork from a specific session entry instead of the latest */
+  entryId?: string;
+  /**
+   * Client-minted UUIDv4 used to correlate `resume_result` and (for fork mode)
+   * the eventual `session_added` for the new session. Optional for back-compat.
+   * See change: spawn-correlation-token.
+   */
+  requestId?: string;
+  /**
+   * Placement intent for the resumed session in the cwd's sessionOrder:
+   *   - "front" (default): move to top of alive tier (Resume button, REST,
+   *     prompt-auto-resume).
+   *   - "keep": leave order alone (drag-to-resume — drop position was already
+   *     persisted by an earlier `reorder_sessions` message).
+   * Server defaults to "front" when omitted, preserving prior behavior.
+   * See change: differentiate-resume-intent-by-trigger.
+   */
+  placement?: "front" | "keep";
+  /**
+   * Optional model pick (`provider/id`) applied to the resumed pi (continue
+   * only; the server drops it for forks and live sessions). Validated
+   * server-side. See change: redesign-directory-home-split.
+   */
+  model?: string;
+  /** Optional thinking-level pick, same rules as `model`. */
+  thinkingLevel?: ThinkingLevel;
+}
+
+/**
+ * Archive a session. Ended → archives immediately (reply `{success:true}`);
+ * alive-but-idle → the server registers a one-shot intent, ends it, and
+ * archives on the `ended` transition (reply `{success:true, pending:true}`);
+ * running or `live:true` → error reply. Replaces the removed hide verbs.
+ * See change: archive-sessions-lazy-load.
+ */
+export interface ArchiveSessionBrowserMessage {
+  type: "archive_session";
+  sessionId: string;
+}
+
+/**
+ * Restore an archived session into the live set as ended (`restoredAt = now`,
+ * `hidden = false`). Replaces the removed unhide verb.
+ * See change: archive-sessions-lazy-load.
+ */
+export interface UnarchiveSessionBrowserMessage {
+  type: "unarchive_session";
+  sessionId: string;
+}
+
+export interface SpawnSessionBrowserMessage {
+  type: "spawn_session";
+  cwd: string;
+  /** Explicit directory association only; no history, model or execution grant. */
+  joinResWorkflow?: true;
+  /**
+   * Optional kebab-case OpenSpec change name to attach to the spawned session
+   * once it registers. The server queues the intent in `pendingAttachByCwd`
+   * and consumes it on the next matching `session_register`.
+   * Old servers that ignore unknown fields produce a bare spawn (degraded but
+   * recoverable: the user attaches manually). See change:
+   * add-folder-task-checker-and-spawn-attach.
+   */
+  attachProposal?: string;
+  /**
+   * Optional base ref the worktree was created from. Set ONLY by the
+   * dashboard's worktree dialog after a successful `POST /api/git/worktree`.
+   * Server queues the intent in `pendingWorktreeBaseByCwd` and consumes it
+   * on the next matching `session_register`, writing `gitWorktreeBase` to
+   * the session's `.meta.json` sidecar so the WORKSPACE-subcard pill can
+   * later render `created from <base>` as its tooltip.
+   * Old servers ignore unknown fields — degraded fallback: the pill
+   * shows the generic `git worktree` tooltip instead.
+   * See change: add-worktree-spawn-dialog.
+   */
+  gitWorktreeBase?: string;
+  /**
+   * Optional first prompt dispatched into the spawned session once it
+   * registers. The server queues it in `pendingInitialPromptByCwd` and
+   * consumes it on the next matching `session_register` (mirrors
+   * `attachProposal`). Used by the no-hook Initialize button to pre-inject
+   * `/skill:project-init` so the interactive scaffolder starts on its own.
+   * Old servers ignore unknown fields — degraded fallback: the session
+   * spawns idle and the user invokes the skill manually.
+   * See change: project-init-skill-and-profiles.
+   */
+  initialPrompt?: string;
+  /**
+   * Optional configured ACP agent id (`acpAgents[].id`). When set the server
+   * starts that agent instead of pi (headless; ACP preflight). Unknown id, or
+   * none configured → error. Absent → pi, byte-identical to before.
+   * See change: add-acp-session-driver (D2).
+   */
+  agent?: string;
+  /**
+   * Client-minted UUIDv4 used to correlate `spawn_result` and the eventual
+   * `session_added` (which echoes it as `spawnRequestId`). Optional for
+   * back-compat with older clients.
+   * See change: spawn-correlation-token.
+   */
+  requestId?: string;
+  /**
+   * Optional model (`provider/id`) for the spawned pi (`--model`). Validated
+   * server-side; an invalid value is dropped and the spawn proceeds.
+   * Old servers ignore it. See change: redesign-directory-home-split.
+   */
+  model?: string;
+  /** Optional thinking level for the spawned pi (`--thinking`). Same rules as `model`. */
+  thinkingLevel?: ThinkingLevel;
+}
+
+export interface AttachProposalBrowserMessage {
+  type: "attach_proposal";
+  sessionId: string;
+  changeName: string;
+}
+
+export interface DetachProposalBrowserMessage {
+  type: "detach_proposal";
+  sessionId: string;
+}
+
+/**
+ * Browser → server: commit a suggested proposal replacement. Attaches
+ * `changeName` (reusing the attach + auto-rename path) and clears the
+ * session's `pendingReplaceProposal`. The committed `changeName` is NOT
+ * added to `rejectedReplaceProposals`.
+ * See change: replace-proposal-dialog-with-race-handling.
+ */
+export interface AcceptReplaceProposalBrowserMessage {
+  type: "accept_replace_proposal";
+  sessionId: string;
+  changeName: string;
+}
+
+/**
+ * Browser → server: reject a suggested proposal replacement. Appends
+ * `changeName` to `rejectedReplaceProposals` (deduped) and clears
+ * `pendingReplaceProposal`. Esc / click-outside map to this too.
+ * See change: replace-proposal-dialog-with-race-handling.
+ */
+export interface DismissReplaceProposalBrowserMessage {
+  type: "dismiss_replace_proposal";
+  sessionId: string;
+  changeName: string;
+}
+
+export interface ReorderSessionsBrowserMessage {
+  type: "reorder_sessions";
+  cwd: string;
+  sessionIds: string[];
+}
+
+export interface PinDirectoryMessage {
+  type: "pin_directory";
+  path: string;
+  /**
+   * "Also trust this folder in pi" choice stored with the pin. Absent = the
+   * source default. See change: mirror-dashboard-trust-to-pi.
+   */
+  piTrust?: boolean;
+}
+
+export interface UnpinDirectoryMessage {
+  type: "unpin_directory";
+  path: string;
+}
+
+/**
+ * Browser → server: add a model to favorites. Label = `"provider/id"`.
+ * See change: enrich-model-selector-capabilities-favorites.
+ */
+export interface FavoriteModelMessage {
+  type: "favorite_model";
+  label: string;
+}
+
+/** Browser → server: remove a model from favorites. */
+export interface UnfavoriteModelMessage {
+  type: "unfavorite_model";
+  label: string;
+}
+
+export interface ReorderPinnedDirsMessage {
+  type: "reorder_pinned_dirs";
+  paths: string[];
+}
+
+// ── Workspace mutation messages (browser → server) ───────────────────
+// See change: folder-workspaces. Verb-first to match pin_directory family.
+
+export interface CreateWorkspaceMessage {
+  type: "create_workspace";
+  name: string;
+}
+
+export interface RenameWorkspaceMessage {
+  type: "rename_workspace";
+  id: string;
+  name: string;
+}
+
+export interface DeleteWorkspaceMessage {
+  type: "delete_workspace";
+  id: string;
+}
+
+export interface SetWorkspaceCollapsedMessage {
+  type: "set_workspace_collapsed";
+  id: string;
+  collapsed: boolean;
+}
+
+/**
+ * Browser → server: set one folder group's collapsed state. Field is `path`
+ * (not `cwd`), matching the folder-addressed siblings. Carries an explicit
+ * target state, never a toggle, so a repeat expand cannot re-collapse an
+ * already-open folder. The server canonicalizes before storing.
+ * See change: persist-folder-collapse-server-side.
+ */
+export interface SetFolderCollapsedMessage {
+  type: "set_folder_collapsed";
+  path: string;
+  collapsed: boolean;
+}
+
+/**
+ * Browser → server: set one session-card section's visibility. `path` absent
+ * = global default; `visible: null` = inherit (deletes the key). The server
+ * validates the section id + path and canonicalizes the folder key.
+ * See change: configurable-session-card-sections.
+ */
+export interface SetCardSectionVisibilityMessage {
+  type: "set_card_section_visibility";
+  path?: string;
+  section: string;
+  visible: boolean | null;
+}
+
+/**
+ * Browser → server: turn Focus mode on/off (overlay; never rewrites normal
+ * prefs). See change: add-focus-mode-and-card-block-toggles.
+ */
+export interface SetFocusModeMessage {
+  type: "set_focus_mode";
+  enabled: boolean;
+}
+
+/**
+ * Browser → server: replace the focus profile (`null` = reset to built-in).
+ * Server validates ids, boolean values, mode enum and the 256-key cap.
+ * See change: add-focus-mode-and-card-block-toggles.
+ */
+export interface SetFocusProfileMessage {
+  type: "set_focus_profile";
+  profile: FocusProfile | null;
+}
+
+/** Browser → server: pin a folder open (accordion) / unpin. See change: add-focus-mode-and-card-block-toggles. */
+export interface SetFolderExpandedMessage {
+  type: "set_folder_expanded";
+  path: string;
+  expanded: boolean;
+}
+
+/** Browser → server: drop every section override for one folder. See change: configurable-session-card-sections. */
+export interface ResetFolderCardSectionsMessage {
+  type: "reset_folder_card_sections";
+  path: string;
+}
+
+/**
+ * Browser → server: set one folder's explicit group-by mode; `null` removes
+ * the override (folder follows `defaultGroupBy`). Server validates the enum
+ * and canonicalizes `path`. See change: session-list-group-by.
+ */
+export interface SetFolderGroupByMessage {
+  type: "set_folder_group_by";
+  path: string;
+  mode: GroupByMode | null;
+}
+
+/** Browser → server: set the global default group-by mode. See change: session-list-group-by. */
+export interface SetDefaultGroupByMessage {
+  type: "set_default_group_by";
+  mode: GroupByMode;
+}
+
+/**
+ * Browser → server: set one lane's collapsed state inside a folder (explicit
+ * target state, never a toggle). See change: session-list-group-by.
+ */
+export interface SetLaneCollapsedMessage {
+  type: "set_lane_collapsed";
+  path: string;
+  lane: LaneId;
+  collapsed: boolean;
+}
+
+export interface AddFolderToWorkspaceMessage {
+  type: "add_folder_to_workspace";
+  id: string;
+  path: string;
+  /** "Also trust this folder in pi" choice. See change: mirror-dashboard-trust-to-pi. */
+  piTrust?: boolean;
+}
+
+export interface RemoveFolderFromWorkspaceMessage {
+  type: "remove_folder_from_workspace";
+  id: string;
+  path: string;
+}
+
+export interface ReorderWorkspaceFoldersMessage {
+  type: "reorder_workspace_folders";
+  id: string;
+  paths: string[];
+}
+
+export interface ReorderWorkspacesMessage {
+  type: "reorder_workspaces";
+  ids: string[];
+}
+
+/**
+ * Move a folder into a workspace, or eject it from all workspaces.
+ * `toWorkspaceId: null` ejects the folder and pins it.
+ * `index` is the insert position in the target (omitted = append); it is
+ * clamped server-side and ignored when the target is null.
+ * See change: drag-folders-across-workspaces.
+ */
+export interface MoveFolderToWorkspaceMessage {
+  type: "move_folder_to_workspace";
+  path: string;
+  toWorkspaceId: string | null;
+  index?: number;
+}
+
+export interface OpenSpecBulkArchiveBrowserMessage {
+  type: "openspec_bulk_archive";
+  cwd: string;
+}
+
+export interface CreateTerminalBrowserMessage {
+  type: "create_terminal";
+  cwd: string;
+}
+
+export interface KillTerminalBrowserMessage {
+  type: "kill_terminal";
+  terminalId: string;
+}
+
+/** Open an inline interactive terminal card in a session's chat stream.
+ *  Server spawns an ephemeral PTY in `cwd` and writes an `inline_terminal_open`
+ *  event into the `sessionId` event stream. See change: add-inline-terminal-card. */
+export interface OpenInlineTerminalBrowserMessage {
+  type: "open_inline_terminal";
+  sessionId: string;
+  cwd: string;
+}
+
+/** Close a live inline terminal card. Server captures the ring-buffer transcript,
+ *  kills the PTY, and writes an `inline_terminal_close` event into the `sessionId`
+ *  event stream. See change: add-inline-terminal-card. */
+export interface CloseInlineTerminalBrowserMessage {
+  type: "close_inline_terminal";
+  sessionId: string;
+  terminalId: string;
+}
+
+export interface RenameTerminalBrowserMessage {
+  type: "rename_terminal";
+  terminalId: string;
+  title: string;
+}
+
+export interface BrowserExtensionUiResponseMessage {
+  type: "extension_ui_response";
+  sessionId: string;
+  requestId: string;
+  result?: unknown;
+  cancelled?: boolean;
+}
+
+export interface FlowControlBrowserMessage {
+  type: "flow_control";
+  sessionId: string;
+  action: "abort" | "toggle_autonomous" | "dismiss_summary";
+}
+
+export interface RequestInstalledPackagesBrowserMessage {
+  type: "request_installed_packages";
+  scope: "global" | "local";
+  cwd?: string;
+}
+
+export interface FlowManagementBrowserMessage {
+  type: "flow_management";
+  sessionId: string;
+  action: "run" | "new" | "edit" | "delete" | "set-edit-mode";
+  flowName?: string;
+  task?: string;
+  description?: string;
+  /** For action "set-edit-mode": toggles pi-flows `flows.editFlow`. */
+  enabled?: boolean;
+}
+
+/**
+ * Plugin settings-section write. The shell intercepts this in the plugin `send`
+ * and routes it to `POST /api/config/plugins/:id` (it is NOT forwarded over the
+ * WebSocket). See change: fix-plugin-config-write-persistence.
+ */
+export interface PluginConfigWriteBrowserMessage {
+  type: "plugin_config_write";
+  id: string;
+  config: Record<string, unknown>;
+}
+
+export interface ArchitectPromptResponseBrowserMessage {
+  type: "architect_prompt_response";
+  sessionId: string;
+  promptId: string;
+  answer?: string;
+  cancelled?: boolean;
+}
+
+export interface PromptResponseBrowserMessage {
+  type: "prompt_response";
+  sessionId: string;
+  promptId: string;
+  answer?: string;
+  cancelled?: boolean;
+  source: string;
+  /**
+   * Optional pasted images for a `type:"input"` answer (standalone
+   * `ask_user{method:"input"}`). The encoder cannot fit images into the
+   * string `answer`, so they ride here. Additive. See change:
+   * add-ask-user-input-multiline-paste.
+   */
+  images?: ImageContent[];
+}
+
+export interface RoleSetBrowserMessage {
+  type: "role_set";
+  sessionId: string;
+  role: string;
+  modelId: string;
+}
+
+export interface RolePresetLoadBrowserMessage {
+  type: "role_preset_load";
+  sessionId: string;
+  presetName: string;
+}
+
+export interface RolePresetSaveBrowserMessage {
+  type: "role_preset_save";
+  sessionId: string;
+  presetName: string;
+}
+
+export interface RolePresetDeleteBrowserMessage {
+  type: "role_preset_delete";
+  sessionId: string;
+  presetName: string;
+}
+
+/**
+ * Browser → server: remove a CUSTOM role. Forwarded to the target session
+ * bridge which purges it via the `roles:remove` handler (built-ins rejected
+ * server-side). See change: add-custom-roles-ui.
+ */
+export interface RoleRemoveBrowserMessage {
+  type: "role_remove";
+  sessionId: string;
+  role: string;
+}
+
+export interface RequestRolesBrowserMessage {
+  type: "request_roles";
+  sessionId: string;
+}
+
+/**
+ * Browser → server: the user invoked a Phase-1 module action / requested
+ * row data. Server forwards via `piGateway.sendToSession` to the bridge,
+ * which re-emits as `pi.events.emit(event, { ...params, action, _reply })`.
+ * See change: add-extension-ui-modal.
+ */
+/**
+ * Browser → server: declares which session a browser is currently displaying
+ * (typically when the URL is `/session/:id`). The server uses this to gate
+ * unread-trigger evaluation and to clear the unread bit when an unread session
+ * is opened. Browsers SHALL re-send `session_view` for the currently-displayed
+ * session on every WebSocket reconnect so server-side state stays coherent.
+ * See change: session-card-unread-stripes.
+ */
+export interface SessionViewBrowserMessage {
+  type: "session_view";
+  sessionId: string;
+}
+
+/**
+ * Browser → server: declares the browser is no longer displaying the session
+ * (e.g. user navigated away from `/session/:id`).
+ * See change: session-card-unread-stripes.
+ */
+export interface SessionUnviewBrowserMessage {
+  type: "session_unview";
+  sessionId: string;
+}
+
+export interface UiManagementBrowserMessage {
+  type: "ui_management";
+  sessionId: string;
+  action: string;
+  event: string;
+  params?: Record<string, unknown>;
+}
+
+export type BrowserToServerMessage =
+  | SubscribeMessage
+  | UnsubscribeMessage
+  | HistoryBackfillRequestMessage
+  | BrowserExtensionUiResponseMessage
+  | SendPromptToBrowserMessage
+  | RetrySessionBrowserMessage
+  | AbortToBrowserMessage
+  | RequestCommandsToBrowserMessage
+  | FetchContentMessage
+  | ListFilesToBrowserMessage
+  | OpenSpecRefreshBrowserMessage
+  | OpenSpecGetMessage
+  | SessionsPageMessage
+  | RenameSessionBrowserMessage
+  | RequestModelsBrowserMessage
+  | RequestProvidersBrowserMessage
+  | SetThinkingLevelBrowserMessage
+  | SetModelBrowserMessage
+  | ShutdownBrowserMessage
+  | StopAfterTurnBrowserMessage
+  | ListSessionsBrowserMessage
+  | ResumeSessionBrowserMessage
+  | ArchiveSessionBrowserMessage
+  | UnarchiveSessionBrowserMessage
+  | SpawnSessionBrowserMessage
+  | AttachProposalBrowserMessage
+  | DetachProposalBrowserMessage
+  | AcceptReplaceProposalBrowserMessage
+  | DismissReplaceProposalBrowserMessage
+  | ReorderSessionsBrowserMessage
+  | PinDirectoryMessage
+  | UnpinDirectoryMessage
+  | FavoriteModelMessage
+  | UnfavoriteModelMessage
+  | ReorderPinnedDirsMessage
+  | CreateWorkspaceMessage
+  | RenameWorkspaceMessage
+  | DeleteWorkspaceMessage
+  | SetWorkspaceCollapsedMessage
+  | SetFolderCollapsedMessage
+  | SetFolderGroupByMessage
+  | SetDefaultGroupByMessage
+  | SetLaneCollapsedMessage
+  | SetCardSectionVisibilityMessage
+  | ResetFolderCardSectionsMessage
+  | SetFocusModeMessage
+  | SetFocusProfileMessage
+  | SetFolderExpandedMessage
+  | AddFolderToWorkspaceMessage
+  | RemoveFolderFromWorkspaceMessage
+  | ReorderWorkspaceFoldersMessage
+  | ReorderWorkspacesMessage
+  | MoveFolderToWorkspaceMessage
+  | OpenSpecBulkArchiveBrowserMessage
+  | CreateTerminalBrowserMessage
+  | KillTerminalBrowserMessage
+  | OpenInlineTerminalBrowserMessage
+  | CloseInlineTerminalBrowserMessage
+  | RenameTerminalBrowserMessage
+  | FlowControlBrowserMessage
+  | ForceKillBrowserMessage
+  | FlowManagementBrowserMessage
+  | PluginConfigWriteBrowserMessage
+  | ArchitectPromptResponseBrowserMessage
+  | PromptResponseBrowserMessage
+  | RoleSetBrowserMessage
+  | RolePresetLoadBrowserMessage
+  | RolePresetSaveBrowserMessage
+  | RolePresetDeleteBrowserMessage
+  | RoleRemoveBrowserMessage
+  | RequestRolesBrowserMessage
+  | UiManagementBrowserMessage
+  | SessionViewBrowserMessage
+  | SessionUnviewBrowserMessage
+  | KillProcessBrowserMessage
+  | PluginActionMessage
+  | ClearFollowupEntriesFromBrowserMessage
+  | EditFollowupEntryFromBrowserMessage
+  | RemoveFollowupEntryFromBrowserMessage
+  | PromoteFollowupEntryFromBrowserMessage
+  | WorktreeInitSubscribeMessage
+  | WorktreeInitUnsubscribeMessage
+  | SetSessionDisplayPrefsBrowserMessage
+  | SetSessionProcessDrawerBrowserMessage
+  | SetSessionTagsBrowserMessage
+  | RemoveTagGloballyBrowserMessage
+  | RecoveryDismissMessage
+  | SubagentResyncRequestBrowserMessage
+  | PromptResyncRequestBrowserMessage
+  | BrowserRelaySubscribeMessage
+  | BrowserRelayUnsubscribeMessage
+  | BrowserRelayInputMessage
+  | ScienceViewSubscribeMessage
+  | ScienceViewUnsubscribeMessage
+  | ScienceViewInputMessage
+  | BrowserHostHelloMessage
+  | BrowserHostRegisterMessage
+  | BrowserHostConnectResultMessage
+  | BrowserHostExtOpenMessage
+  | BrowserHostExtDataMessage
+  | BrowserHostExtCloseMessage
+  | GrantResponseBrowserMessage
+  | WatchFilesBrowserMessage;
+
+/**
+ * Browser → server → bridge: request the latest retained snapshot of a
+ * still-running subagent's timeline, to recover after a gap/reconnect without
+ * waiting for completion. The server forwards it to the owning bridge, which
+ * replies with a synthetic `subagent_started` `event_forward`, or no-ops for an
+ * unknown/finished agent (the durable completed-case backfill covers those).
+ * See change: fix-subagent-live-detail-reliability (D2).
+ */
+export interface SubagentResyncRequestBrowserMessage {
+  type: "subagent_resync_request";
+  sessionId: string;
+  agentId: string;
+  /**
+   * Correlation token so the reply is delivered to THIS connection instead of
+   * fanning out to every subscriber of the session. Optional: an older client
+   * omits it and the reply falls back to the broadcast path.
+   * See change: reduce-subagent-details-payload (C5).
+   */
+  requestId?: string;
+  /**
+   * Why this resync fired: `"open"` = the user opened/expanded the inspector,
+   * `"cadence"` = the D4 v1 open-inspector pull loop. Counted separately by the
+   * bridge so the pull loop is provably not a new firehose.
+   * See change: reduce-subagent-details-payload (D6, task 9.4).
+   */
+  reason?: "open" | "cadence";
+}
+
+/**
+ * Browser → server → bridge: ask a session's bridge to re-emit every prompt it
+ * is still awaiting an answer for, so a dialog lost to transcript back-pressure
+ * or a client state reset can be rebuilt without a page reload. The server
+ * forwards it to the session's bridge and records the requesting socket against
+ * `requestId`, so the replies are delivered requester-scoped.
+ * See change: fix-pending-prompt-lost-on-replay (B).
+ */
+export interface PromptResyncRequestBrowserMessage {
+  type: "prompt_resync_request";
+  sessionId: string;
+  /**
+   * Correlation token; the bridge echoes it as `__resyncRequestId` on each
+   * re-emitted prompt. Optional: an older client omits it and replies fall back
+   * to the ordinary fan-out.
+   */
+  requestId?: string;
+}
+
+/**
+ * Browser declares the editor pane's currently-open files for a session so the
+ * server watches exactly those (and no more). Sent on open-set change and on
+ * pane unmount / session switch (with an empty `paths` to clear).
+ * See change: split-editor-workspace.
+ */
+export interface WatchFilesBrowserMessage {
+  type: "watch_files";
+  sessionId: string;
+  cwd: string;
+  /** Rel-paths of the open tabs; `[]` tears the session's watchers down. */
+  paths: string[];
+}
+
+/**
+ * Browser registers interest in worktree-init events for a given
+ * `requestId` BEFORE issuing `POST /api/git/worktree/init`. Server stores
+ * the mapping requestId -> originating WebSocket and only delivers the
+ * matching `worktree_init_*` events to that connection. See change:
+ * generalize-worktree-init-hook (renamed from worktree_bootstrap_*).
+ */
+export interface WorktreeInitSubscribeMessage {
+  type: "worktree_init_subscribe";
+  /** Legacy per-click correlation key. */
+  requestId?: string;
+  /**
+   * Stable per-checkout key. Subscribing by `cwd` survives refresh and reaches
+   * every tab; used by the manual button, auto-on-spawn, and boot rehydration.
+   * See change: friendlier-worktree-init.
+   */
+  cwd?: string;
+}
+
+/** Drops the subscription if the dialog is cancelled or completes. */
+export interface WorktreeInitUnsubscribeMessage {
+  type: "worktree_init_unsubscribe";
+  requestId?: string;
+  cwd?: string;
+}
+
+/**
+ * One active worktree-init run in the server's cwd-keyed registry, as returned
+ * by `GET /api/git/worktree/active-inits`. See change: friendlier-worktree-init.
+ */
+export interface ActiveWorktreeInit {
+  cwd: string;
+  phase: "running" | "done" | "failed";
+  startedAt: number;
+  lastLine?: string;
+  /** Failure classifier (phase `failed` only). */
+  code?: string;
+}
+
+
+// ── Browser relay (change: add-browser-relay) ──────────────────────────
+//
+// Live-view messages for the browser plugin's screencast tap. The relay
+// endpoint sockets themselves are NOT in this protocol — they are plugin-owned
+// WS routes (`/ws/browser-ext/<guid>`, `/ws/browser-cdp/<guid>`) and never
+// traverse this gateway. Only the viewer plane (tiles + audit) rides `/ws`,
+// so it is reachable through the tunnel exactly like the rest of the UI.
+//
+// FRAME/STATUS ARE SECRET-FREE BY CONSTRUCTION (spec shared-protocol F2):
+// neither carries the relay guid or a profile token — `instanceId` is the
+// public, non-secret address. Do NOT add a `guid`/`token` field here.
+
+/**
+ * Browser → server: start streaming frames for one tab of one live instance.
+ * `tabId` is the Chrome tab id from `browser_relay_status`. The relay may
+ * refuse (tab state `client-screencast-active`) when the CDP client already
+ * runs its own screencast on that tab.
+ */
+export interface BrowserRelaySubscribeMessage {
+  type: "browser_relay_subscribe";
+  instanceId: string;
+  tabId: number;
+  /**
+   * True when the subscriber is the operator window that carries this
+   * instance's host and renders frames from its own local tee. Honoured only
+   * from the instance's carrier socket; any other socket is handled as a
+   * normal subscribe. See change: add-operator-browser-relay (D10).
+   */
+  local?: boolean;
+}
+
+/** Browser → server: stop streaming; the last unsubscribe stops the screencast. */
+export interface BrowserRelayUnsubscribeMessage {
+  type: "browser_relay_unsubscribe";
+  instanceId: string;
+  tabId: number;
+}
+
+/**
+ * Browser → server: one viewer input event. `x`/`y` are NORMALIZED to `[0,1]`
+ * of the rendered frame (never CSS pixels, never device pixels) so tile
+ * scaling cannot mis-target; the relay multiplies by the last frame's
+ * `metadata.deviceWidth/deviceHeight` before dispatching. Only the kinds below
+ * are accepted — an unknown kind, or out-of-range coordinates, is dropped and
+ * audited, and the viewer never reaches `Runtime.*`.
+ */
+interface BrowserRelayInputBase {
+  type: "browser_relay_input";
+  instanceId: string;
+  tabId: number;
+}
+
+/** mouse — `x`/`y` normalized `[0,1]` of the frame. */
+export interface BrowserRelayMouseInput extends BrowserRelayInputBase {
+  kind: "mouse";
+  x: number;
+  y: number;
+  action?: "click" | "move" | "down" | "up";
+  button?: "left" | "middle" | "right";
+  clickCount?: number;
+}
+
+/** key — a DOM key event, mirrored to `Input.dispatchKeyEvent`. */
+export interface BrowserRelayKeyInput extends BrowserRelayInputBase {
+  kind: "key";
+  keyType?: "keyDown" | "keyUp" | "char";
+  key?: string;
+  code?: string;
+  text?: string;
+}
+
+/** scroll — `x`/`y` normalized; raw wheel deltas (not positions, not normalized). */
+export interface BrowserRelayScrollInput extends BrowserRelayInputBase {
+  kind: "scroll";
+  x: number;
+  y: number;
+  deltaX?: number;
+  deltaY?: number;
+}
+
+export interface BrowserRelayBringToFrontInput extends BrowserRelayInputBase {
+  kind: "bringToFront";
+}
+
+/**
+ * resize — remote viewport size in CSS pixels; the relay clamps it to
+ * 320–3840 × 240–2160 and refuses it while the CDP client holds its own
+ * device-metrics override. See change: add-browser-editor-pane-tab (D8).
+ */
+export interface BrowserRelayResizeInput extends BrowserRelayInputBase {
+  kind: "resize";
+  width: number;
+  height: number;
+}
+
+/**
+ * Browser → server: one viewer input event, a union discriminated on `kind`.
+ * Positions are NORMALIZED to `[0,1]` of the rendered frame (never CSS or
+ * device pixels) so tile scaling cannot mis-target; the relay multiplies by the
+ * last frame's `metadata.deviceWidth/deviceHeight`. Only the kinds below are
+ * accepted — an unknown kind, out-of-range coordinates or a non-numeric resize
+ * is dropped and audited, and the viewer never reaches `Runtime.*`.
+ */
+export type BrowserRelayInputMessage =
+  | BrowserRelayMouseInput
+  | BrowserRelayKeyInput
+  | BrowserRelayScrollInput
+  | BrowserRelayBringToFrontInput
+  | BrowserRelayResizeInput;
+
+/** One frame's device-pixel geometry + capture time. */
+export interface BrowserRelayFrameMetadata {
+  deviceWidth: number;
+  deviceHeight: number;
+  timestamp: number;
+}
+
+/**
+ * Server → browser: ONE screencast frame, sent ONLY to sockets that subscribed
+ * to this `{instanceId, tabId}` — never broadcast. `jpegBase64` is the raw
+ * base64 payload (no data-URL prefix).
+ */
+export interface BrowserRelayFrameMessage {
+  type: "browser_relay_frame";
+  instanceId: string;
+  tabId: number;
+  jpegBase64: string;
+  metadata: BrowserRelayFrameMetadata;
+}
+
+/**
+ * Tab state as the tile renders it. `no-frames` means "no repaint for 2 s" —
+ * which a hidden tab AND a visible idle tab both produce, hence the neutral
+ * tile wording; `detached` + `reason: "devtools"` means the user opened
+ * DevTools and input must stop; `detached` + `reason: "no-session"` means the
+ * agent has no debugger session on the tab yet (extension pages never get one)
+ * — see change: fix-browser-live-view-subscribe-and-reopen;
+ * `client-screencast-active` is the refusal
+ * state when the agent already screenshots that tab.
+ */
+export type BrowserRelayTabState =
+  | "live"
+  | "no-frames"
+  | "detached"
+  | "client-screencast-active";
+
+export interface BrowserRelayTabStatus {
+  tabId: number;
+  title: string;
+  url: string;
+  state: BrowserRelayTabState;
+  /** Set when `state === "detached"`. */
+  reason?: "devtools" | "no-session";
+  /**
+   * True while the CDP client (the agent) holds a device-metrics override on
+   * this tab — viewer `resize` is refused and the pane falls back to Fit.
+   * See change: add-browser-editor-pane-tab (D8).
+   */
+  agentEmulation?: boolean;
+}
+
+export interface BrowserRelayInstanceStatus {
+  instanceId: string;
+  profileDirectory: string;
+  /** `"dashboard"` or the operator `hostId` the instance runs on. See change: add-operator-browser-relay. */
+  host: string;
+  /** `no-cdp-client` = extension handshake done, agent has not attached yet. */
+  state: "connected" | "no-cdp-client";
+  tabs: BrowserRelayTabStatus[];
+}
+
+/**
+ * Server → browser: the full live-instance snapshot, broadcast on every
+ * instance/tab change and on every audit append (coalesced to ≤1 per 500 ms).
+ * `auditSeq` is monotonic, so the audit viewer refetches when it changes and
+ * does not when a status with the same seq arrives.
+ */
+export interface BrowserRelayStatusMessage {
+  type: "browser_relay_status";
+  instances: BrowserRelayInstanceStatus[];
+  auditSeq: number;
+}
+
+// ── Browser relay operator hosts (change: add-operator-browser-relay) ──
+//
+// An operator machine's Electron main registers as a *host* through the
+// dashboard SPA's own `/ws` (the "carrier"). The stock Playwright extension
+// dials a loopback shim in Electron main; frames travel over the carrier as
+// `browser_host_ext_*` (browser→server) and `browser_host_relay_*`
+// (server→browser). NO message below carries the relay guid, a pairing token
+// or a private key — `linkId` is the only on-wire address (design D3).
+// Each type name is used in exactly ONE direction (design D5).
+
+/** Browser → server: announce an identity (step 1 of registration). */
+export interface BrowserHostHelloMessage {
+  type: "browser_host_hello";
+  hostId: string;
+  /** Ed25519 public key, base64 of the SPKI DER. */
+  publicKey: string;
+}
+
+/** One Chrome profile row an operator host offers. */
+export interface BrowserHostProfileRow {
+  profileDirectory: string;
+  label: string;
+  email?: string;
+  installed: boolean;
+}
+
+/** Browser → server: signed registration (step 3). */
+export interface BrowserHostRegisterMessage {
+  type: "browser_host_register";
+  hostId: string;
+  /** Ed25519 signature (base64) over `buildHostSignedMessage(nonce, serverId)`. */
+  signature: string;
+  label: string;
+  platform: string;
+  canOpenChrome: boolean;
+  profiles: BrowserHostProfileRow[];
+}
+
+/** Browser → server: outcome of a `browser_host_connect`. */
+export interface BrowserHostConnectResultMessage {
+  type: "browser_host_connect_result";
+  requestId: string;
+  ok: boolean;
+  /** `denied` | `no-chrome` | other launch failure token. */
+  reason?: string;
+}
+
+/** Browser → server: the extension attached to the shim for `linkId`. */
+export interface BrowserHostExtOpenMessage {
+  type: "browser_host_ext_open";
+  linkId: string;
+}
+
+/** Browser → server: one extension frame. */
+export interface BrowserHostExtDataMessage {
+  type: "browser_host_ext_data";
+  linkId: string;
+  data: string;
+}
+
+/** Browser → server: the extension socket closed. */
+export interface BrowserHostExtCloseMessage {
+  type: "browser_host_ext_close";
+  linkId: string;
+  code: number;
+}
+
+/** Server → browser: challenge (step 2). `serverId` = the server's `/api/health` `instanceId`. */
+export interface BrowserHostChallengeMessage {
+  type: "browser_host_challenge";
+  nonce: string;
+  serverId: string;
+}
+
+/** Server → browser: registration accepted. */
+export interface BrowserHostRegisteredMessage {
+  type: "browser_host_registered";
+  hostId: string;
+}
+
+/** Server → browser (unicast to the bound carrier): ask the operator to open the connect page. */
+export interface BrowserHostConnectMessage {
+  type: "browser_host_connect";
+  requestId: string;
+  linkId: string;
+  instanceId: string;
+  profileDirectory: string;
+  /** Display only. */
+  serverLabel: string;
+}
+
+/** Server → browser: the server abandoned `requestId`. */
+export interface BrowserHostConnectCancelMessage {
+  type: "browser_host_connect_cancel";
+  requestId: string;
+}
+
+/** Server → browser: one relay frame towards the extension. */
+export interface BrowserHostRelayDataMessage {
+  type: "browser_host_relay_data";
+  linkId: string;
+  data: string;
+}
+
+/** Server → browser: close the link's extension socket. */
+export interface BrowserHostRelayCloseMessage {
+  type: "browser_host_relay_close";
+  linkId: string;
+  code: number;
+  reason?: string;
+}
+
+/** Server → browser: start/stop teeing a tab's screencast frames locally. */
+export interface BrowserHostTeeMessage {
+  type: "browser_host_tee";
+  linkId: string;
+  instanceId: string;
+  tabId: number;
+  on: boolean;
+}
+
+export type BrowserHostClientMessage =
+  | BrowserHostHelloMessage
+  | BrowserHostRegisterMessage
+  | BrowserHostConnectResultMessage
+  | BrowserHostExtOpenMessage
+  | BrowserHostExtDataMessage
+  | BrowserHostExtCloseMessage;
+
+export type BrowserHostServerMessage =
+  | BrowserHostChallengeMessage
+  | BrowserHostRegisteredMessage
+  | BrowserHostConnectMessage
+  | BrowserHostConnectCancelMessage
+  | BrowserHostRelayDataMessage
+  | BrowserHostRelayCloseMessage
+  | BrowserHostTeeMessage;
+
+/** Runtime name lists (kept in lockstep with the unions by a type-level test). */
+export const BROWSER_HOST_CLIENT_TYPES = [
+  "browser_host_hello",
+  "browser_host_register",
+  "browser_host_connect_result",
+  "browser_host_ext_open",
+  "browser_host_ext_data",
+  "browser_host_ext_close",
+] as const satisfies readonly BrowserHostClientMessage["type"][];
+
+export const BROWSER_HOST_SERVER_TYPES = [
+  "browser_host_challenge",
+  "browser_host_registered",
+  "browser_host_connect",
+  "browser_host_connect_cancel",
+  "browser_host_relay_data",
+  "browser_host_relay_close",
+  "browser_host_tee",
+] as const satisfies readonly BrowserHostServerMessage["type"][];
+
+// ---------------------------------------------------------------------------
+// Access-grant prompt protocol (change: add-access-grant-dialog)
+// ---------------------------------------------------------------------------
+
+/**
+ * The access planes a denial can originate from. Closed on purpose: the wire
+ * carries the plane id, the plane registry (server) keys on it, and a typo'd
+ * plane must be a type error rather than a silently-unmatched string.
+ * `cwd` is the unknown-working-directory plane.
+ */
+export type AccessPlaneId = "filesystem" | "cwd" | "network" | "cors";
+
+/**
+ * Surfaces YOLO answers: the closed plane ids plus the agent path gate (which is
+ * not a registered plane). See change: yolo-covers-agent-path-gate.
+ */
+export type YoloSurfaceId = AccessPlaneId | "agent-path";
+
+/**
+ * The three answers an operator may give. `allow-once` releases only the request
+ * that raised the prompt; `allow-always` additionally persists a grant in the
+ * raising plane's store; `deny` persists nothing.
+ */
+export type GrantVerdict = "allow-once" | "allow-always" | "deny";
+
+/**
+ * How a denial settles. `held` — the denied request is suspended while the
+ * operator decides. `deferred` — the request already received its denial and
+ * the verdict applies to a later retry.
+ */
+export type GrantSettlementMode = "held" | "deferred";
+
+/** Verdicts a HELD prompt offers. */
+export type HeldGrantVerdict = "allow-once" | "allow-always" | "deny";
+
+/**
+ * Verdicts a DEFERRED prompt offers — deliberately WITHOUT `allow-once`. No
+ * request is suspended for it to release, so it is unrepresentable at the type
+ * level rather than merely hidden by the UI.
+ * See change: add-access-grant-dialog.
+ */
+export type DeferredGrantVerdict = "allow-always" | "deny";
+
+/** One rung of the ancestor ladder a filesystem denial offers. */
+export interface GrantLadderRung {
+  /** The canonical subject this rung would grant. */
+  subject: string;
+  /** Boundary note under the last rung, e.g. "stops below your home directory". */
+  boundary?: string;
+}
+
+/** Prompt copy for a HELD denial — a request is suspended awaiting a verdict. */
+export interface HeldGrantPromptCopy {
+  mode: "held";
+  verdicts: readonly HeldGrantVerdict[];
+  /** The grant store an `allow-always` answer writes. */
+  store: string;
+  ladder?: readonly GrantLadderRung[];
+}
+
+/** Prompt copy for a DEFERRED denial — the verdict applies to a later attempt. */
+export interface DeferredGrantPromptCopy {
+  mode: "deferred";
+  verdicts: readonly DeferredGrantVerdict[];
+  store: string;
+  ladder?: readonly GrantLadderRung[];
+}
+
+/** Discriminated on `mode`, so a deferred prompt cannot carry `allow-once`. */
+export type GrantPromptCopy = HeldGrantPromptCopy | DeferredGrantPromptCopy;
+
+/**
+ * Server → browser: the socket-bound prompt capability. Issued once per browser
+ * socket at connect, held in memory only, never persisted, and invalidated when
+ * the socket closes. A request proves prompt-eligibility by echoing it. It is
+ * per-connection, so it carries no plane or subject.
+ * See change: add-access-grant-dialog.
+ */
+export interface GrantChannelMessage {
+  type: "grant_channel";
+  capability: string;
+}
+
+/**
+ * Server → browser: a denial raised a prompt. Broadcast to every connected
+ * operator socket; the first well-formed `grant_response` settles it (D8).
+ * `expiresAt` is epoch ms, used to render the held countdown.
+ */
+export interface GrantRequestMessage {
+  type: "grant_request";
+  promptId: string;
+  plane: AccessPlaneId;
+  /** Normalised subject — the canonical form the plane's store also uses. */
+  subject: string;
+  /** Epoch ms after which the entry expires and the request gets its denial. */
+  expiresAt: number;
+  /**
+   * Milliseconds left when the server sent this. Clients re-base `expiresAt`
+   * on their own clock (`Date.now() + ttlMs`) so browser clock skew cannot
+   * expire a prompt early. Optional for compatibility.
+   */
+  ttlMs?: number;
+  copy: GrantPromptCopy;
+}
+
+/**
+ * Browser → server: the operator's answer. `subject` echoes the answered
+ * subject, which for an `allow-always` may be an offered ancestor rather than
+ * the denied subject (the verdict never widens beyond an offered rung).
+ */
+export interface GrantResponseBrowserMessage {
+  type: "grant_response";
+  promptId: string;
+  plane: AccessPlaneId;
+  subject: string;
+  verdict: GrantVerdict;
+  /**
+   * "Also trust this folder in pi", stored with an `allow-always` on a path plane.
+   * See change: mirror-dashboard-trust-to-pi.
+   */
+  piTrust?: boolean;
+}
+
+/**
+ * Server → browser: this prompt is settled (or expired) elsewhere — remove the
+ * dialog without interaction. Sent to every client that did not answer.
+ */
+export interface GrantDismissMessage {
+  type: "grant_dismiss";
+  promptId: string;
+  plane: AccessPlaneId;
+  subject: string;
+  reason: "settled" | "expired";
+}
+
+/**
+ * Server → browser: the set of pending pairing devices changed (add / approve /
+ * deny / lockout / expire). Deliberately content-free — an operator browser
+ * refetches `GET /api/pair/pending` (operator-guarded); a paired-device browser
+ * learns nothing but "something changed". See change: add-pairing-approval-dialog (D1).
+ */
+export interface PairPendingChangedMessage {
+  type: "pair_pending_changed";
+}
+
+/**
+ * Server → browser: a managed service changed (state transition, pin, lease,
+ * add/update/remove, secret save, reset-data, prune). Deliberately content-free
+ * and type-only — the Settings → Services pages refetch `GET /api/services`
+ * (guarded); every other socket learns only "something changed".
+ * See change: add-services-settings-ui (D3).
+ */
+export interface ServicesChangedMessage {
+  type: "services_changed";
+}

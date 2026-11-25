@@ -1,0 +1,10 @@
+{
+  "name": "pi-science-readonly-host",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@blackbelt-technology/pi-dashboard-browser-plugin": "^0.10.0",
+    "@blackbelt-technology/pi-dashboard-server": "^0.10.0",
+    "@blackbelt-technology/pi-dashboard-shared": "^0.10.0"
+  }
+}

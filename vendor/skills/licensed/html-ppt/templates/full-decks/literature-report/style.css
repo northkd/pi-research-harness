@@ -1,0 +1,186 @@
+/* literature-report — PDF skeleton rebuilt from 文献汇报+工作汇报_v1.1.pdf */
+
+.tpl-literature-report {
+  --band-top: 14.2%;
+  --band-height: 3.07%;
+  --band-left: 0%;
+  --band-width: 100%;
+  --band-color: var(--accent, #4472C4);
+  --title-top: 4.6%;
+  --body-top: 19%;
+  --page-left: 4.8%;
+  --page-right: 4.8%;
+  --nav-left: 1.5%;
+  --nav-center: 42.7%;
+  --nav-right: 83.9%;
+  --ink: var(--text-1, #000000);
+  --ink-muted: var(--text-2, #2d2d2d);
+  --line: var(--border-strong, rgba(0, 0, 0, 0.14));
+  background: var(--bg, #ffffff);
+  color: var(--ink);
+  font-family: var(--font-sans, 'Noto Sans SC', 'PingFang SC', -apple-system, sans-serif);
+}
+
+.tpl-literature-report .slide {
+  background: var(--bg, #ffffff);
+  padding: 0;
+  overflow: hidden;
+}
+
+.tpl-literature-report .page-band {
+  position: absolute;
+  top: var(--band-top);
+  left: var(--band-left);
+  width: var(--band-width);
+  height: var(--band-height);
+  background: var(--band-color);
+  z-index: 1;
+}
+
+.tpl-literature-report .page-title {
+  position: absolute;
+  top: var(--title-top);
+  left: 3.75%;
+  margin: 0;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ink);
+  z-index: 2;
+}
+
+.tpl-literature-report .top-nav {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.tpl-literature-report .nav-label {
+  position: absolute;
+  top: var(--title-top);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.tpl-literature-report .nav-left { left: var(--nav-left); }
+.tpl-literature-report .nav-center { left: var(--nav-center); }
+.tpl-literature-report .nav-right { left: var(--nav-right); }
+
+.tpl-literature-report .page-body {
+  position: absolute;
+  top: var(--body-top);
+  left: var(--page-left);
+  right: var(--page-right);
+  bottom: 6%;
+  z-index: 2;
+}
+
+.tpl-literature-report .agenda-body {
+  position: absolute;
+  top: 21.5%;
+  left: 5%;
+  right: 10%;
+  bottom: 8%;
+  z-index: 2;
+}
+
+.tpl-literature-report .agenda-group + .agenda-group {
+  margin-top: 7%;
+}
+
+.tpl-literature-report .agenda-group-title {
+  position: relative;
+  padding-left: 22px;
+  margin: 0 0 18px;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.tpl-literature-report .agenda-group-title::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  top: -1px;
+  font-size: 22px;
+}
+
+.tpl-literature-report .agenda-list {
+  margin: 0;
+  padding-left: 36px;
+  font-size: 18px;
+  line-height: 2.4;
+}
+
+.tpl-literature-report .two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 8.5%;
+}
+
+.tpl-literature-report .col {
+  min-width: 0;
+}
+
+.tpl-literature-report .info-page .col:first-child {
+  padding-right: 4%;
+}
+
+.tpl-literature-report .section-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.tpl-literature-report p {
+  margin: 0 0 14px;
+  font-size: 18px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.tpl-literature-report .pdf-list {
+  margin: 10px 0 0;
+  padding-left: 28px;
+  font-size: 18px;
+  line-height: 1.8;
+}
+
+.tpl-literature-report .pdf-list li + li {
+  margin-top: 4px;
+}
+
+.tpl-literature-report .figure-page .col {
+  display: flex;
+  flex-direction: column;
+}
+
+.tpl-literature-report .figure-slot {
+  flex: 1;
+  min-height: 152px;
+  margin-top: 8px;
+  border: 1.5px dashed var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  font-size: 18px;
+  color: var(--text-3, #5a5a5a);
+  text-align: center;
+}
+
+.tpl-literature-report .summary-page .pdf-list {
+  margin-top: 14px;
+}
+
+@media print {
+  .tpl-literature-report .slide {
+    page-break-after: always;
+  }
+}

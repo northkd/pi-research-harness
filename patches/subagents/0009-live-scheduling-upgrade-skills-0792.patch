@@ -1,0 +1,72 @@
+--- a/src/runs/foreground/execution.js
++++ b/src/runs/foreground/execution.js
+@@ -44,6 +44,7 @@
+ import { acceptChildWatchdogEvent, applyChildWatchdogMessage, childWatchdogIsActive, isChildWatchdogStatusEvent, resolveChildWatchdogConfig, } from "../../watchdog/child-status.js";
+ import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../shared/child-launch.js";
+ import { childSessionFactory, childSessionHasQueuedMessages, projectChildSessionEventForJson } from "../shared/child-session.js";
++import { createResearchScheduledChild } from "../shared/research-subagent-scheduling.mjs";
+ import { reconcileAttemptUsage } from "../shared/usage-reconciliation.js";
+ const artifactOutputByResult = new WeakMap();
+ const acceptanceOutputByResult = new WeakMap();
+@@ -1362,7 +1363,7 @@
+             try {
+                 const input = createReportedChildSessionInput(launch, shared.transcriptWriter);
+                 input.signal = startup.signal;
+-                const created = await childSessions.create(input);
++                const created = await createResearchScheduledChild(input, () => childSessions.create(input), { task: shared.originalTask ?? task });
+                 if (lifecycleFinished) {
+                     void created.dispose();
+                     return;
+@@ -2192,4 +2193,4 @@
+     });
+     return Promise.race([authoritativeCompletion, receipt]);
+ }
+-//# sourceMappingURL=execution.js.map
+\ No newline at end of file
++//# sourceMappingURL=execution.js.map
+--- a/src/runs/background/run-child-session.js
++++ b/src/runs/background/run-child-session.js
+@@ -9,6 +9,7 @@
+ import { createReportedChildSessionInput } from "../shared/child-launch.js";
+ import { createPartialOutputTracker, formatPartialOutput } from "../shared/partial-output.js";
+ import { childSessionHasQueuedMessages, projectChildSessionEventForJson } from "../shared/child-session.js";
++import { createResearchScheduledChild } from "../shared/research-subagent-scheduling.mjs";
+ import { reconcileAttemptUsage } from "../shared/usage-reconciliation.js";
+ import { formatSteerMessage } from "../shared/subagent-prompt-runtime.js";
+ import { takeMatchingAcceptedSteer, unconsumedSteerReason } from "./steering.js";
+@@ -569,7 +570,7 @@
+             try {
+                 const createInput = createReportedChildSessionInput(input.launch, input.transcriptWriter);
+                 createInput.signal = startup.signal;
+-                const created = await input.factory.create(createInput);
++                const created = await createResearchScheduledChild(createInput, () => input.factory.create(createInput), { task: input.prompt });
+                 if (settled) {
+                     await created.dispose().catch(() => undefined);
+                     return;
+@@ -629,4 +630,4 @@
+         })();
+     });
+ }
+-//# sourceMappingURL=run-child-session.js.map
+\ No newline at end of file
++//# sourceMappingURL=run-child-session.js.map
+--- /dev/null
++++ b/src/runs/shared/research-subagent-scheduling.mjs
+@@ -0,0 +1,17 @@
++/**
++ * Install-time patch adapter shared by foreground and detached native children.
++ * Ordinary pi-subagents installations stay unchanged. In Pi Research the
++ * configured host module must exist: errors never fall back to an unbounded run.
++ */
++import path from 'node:path';
++import { pathToFileURL } from 'node:url';
++
++export async function createResearchScheduledChild(launch, create, metadata = {}, options = {}) {
++  const root = (options.env ?? process.env).PI_RESEARCH_LOOP_ROOT;
++  if (!root) return create();
++  if (!path.isAbsolute(root)) throw new Error('research-subagent-scheduler-path-invalid');
++  const load = options.load ?? (url => import(url));
++  const bridge = await load(pathToFileURL(path.join(root, 'src', 'subagent-scheduling.mjs')).href);
++  if (typeof bridge.scheduleResearchSubagent !== 'function') throw new Error('research-subagent-scheduler-unavailable');
++  return bridge.scheduleResearchSubagent(launch, create, metadata);
++}

@@ -1,0 +1,27 @@
+{
+  "package": "@blackbelt-technology/pi-agent-dashboard",
+  "version": "0.10.0",
+  "changes": [
+    "OAuth flow state isolated per host factory",
+    "Native Pi device ID supplied by host",
+    "Secret prompts supported without persisting or echoing answers"
+  ],
+  "files": [
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/auth/provider-auth-adapter.ts",
+      "sha256": "6007538d37e3d2a47eb6364212445875cb24d37d75e878068a3af7280542e681"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/auth/provider-auth-storage.ts",
+      "sha256": "d1b40b4546e522d251530e912d6e091a00c3f2fa3affd15cc655942e3f33c227"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/auth/runtime-provider-catalogue.ts",
+      "sha256": "d629f6417a4a236577d377c06e14e408c526164be33f61206e99ccec21782ceb"
+    },
+    {
+      "path": "@blackbelt-technology/pi-dashboard-server/src/auth/radius-override.ts",
+      "sha256": "f8ff575a052bcb703c722dfb38264adb8f5c6b56a99c24a34febb5e3d43b0b78"
+    }
+  ]
+}

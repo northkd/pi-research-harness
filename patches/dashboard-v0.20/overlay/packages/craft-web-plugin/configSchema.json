@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "@blackbelt-technology/pi-dashboard-craft-web-plugin/configSchema",
+  "title": "Craft Web Editors config",
+  "description": "Plugin config persisted under plugins['craft-web'].* in ~/.pi/dashboard/config.json. The plugin is OPT-IN (manifest defaultEnabled:false). Per-app switches are enforced server-side too: prepare and saves are refused for a disabled app. Read live (no restart) by status, prepare and the file-validator enabled() switch.",
+  "type": "object",
+  "properties": {
+    "apps": {
+      "type": "object",
+      "description": "Per-app switches, keyed by app id (status, prepare, config and mount are keyed by app id; one app may own several claims). An app without a verified web build version contributes no handler regardless of this flag.",
+      "properties": {
+        "wordcraft": {
+          "$ref": "#/definitions/app"
+        },
+        "gridcraft": {
+          "$ref": "#/definitions/app"
+        },
+        "pdfcraft": {
+          "$ref": "#/definitions/app"
+        },
+        "cadcraft": {
+          "$ref": "#/definitions/app"
+        },
+        "designcraft": {
+          "$ref": "#/definitions/app"
+        },
+        "soundcraft": {
+          "$ref": "#/definitions/app"
+        },
+        "photocraft": {
+          "$ref": "#/definitions/app"
+        },
+        "vectorcraft": {
+          "$ref": "#/definitions/app"
+        },
+        "deckcraft": {
+          "$ref": "#/definitions/app"
+        },
+        "lightcraft": {
+          "$ref": "#/definitions/app"
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    }
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "app": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "When false the app's mode shows as disabled, prepare is refused (403) and saves through its claim are refused (403).",
+          "default": true
+        },
+        "version": {
+          "type": "string",
+          "enum": [
+            "pinned",
+            "latest"
+          ],
+          "description": "Version channel. 'pinned' uses the verified web build. 'latest' tracks the newest release that publishes a web build (checked at most once a day); a newer one shows as a Download (update) action, and a failed update keeps the prepared build. Latest builds are not verified against the host shim. Ignored for apps whose channel is fixed to the verified version (every app except WordCraft until a scheduled e2e covers its latest build; DeckCraft because newer web builds fail to start). Env <APP>_WEB_VERSION overrides this.",
+          "default": "pinned"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

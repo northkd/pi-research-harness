@@ -1,0 +1,319 @@
+// Indexer: walk a filesystem source, layered mtime→sha256 change detection,
+// structural chunking, Tier-1 graph extraction, transactional upsert (design §5).
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { chunkAsciiDoc } from "./adoc-chunker.js";
+import { chunkMarkdown } from "./chunker.js";
+import { buildMeta, buildProperties, DEFAULT_FACET_KEYS, DEFAULT_SEARCHABLE_KEYS, type FacetKeyConfig } from "./frontmatter.js";
+import { type GitignoreMatcher, loadGitignoreMatcherYielding } from "./gitignore.js";
+import type { DocType, KbStore } from "./types.js";
+
+export interface IndexSource {
+  root: string; // label/id stored on chunks
+  dir: string; // absolute directory to walk
+  include?: (rel: string) => boolean;
+}
+export interface IndexOptions {
+  force?: boolean;
+  indexAgentsFiles?: boolean; // AGENTS.md / CLAUDE.md
+  includeSourceMarkdown?: boolean; // *.md in source dirs → doc_type 'source-md'
+  include?: string[]; // glob patterns to include
+  exclude?: string[]; // glob patterns to exclude
+  extensions?: string[]; // e.g. [".md"]
+  frontmatter?: { searchableKeys: string[]; facetKeys: FacetKeyConfig[] }; // structural indexing routing
+  /** Honour `.gitignore` in the walk (design D3, fix-dox-lint-blind-rows).
+   *  Default true — makes the long-declared `respectGitignore` config real.
+   *  A source dir absent from a fresh clone must not be indexed. */
+  respectGitignore?: boolean;
+  /** Project boundary for the gitignore up-walk (usually the resolved cwd).
+   *  Omit to seed the pattern stack from the `.git` root discovered upward. */
+  cwd?: string;
+  /** Called once per walked file (before its work). The atomic first-index builder
+   *  uses it to refresh its live-build marker on a clock (a timer cannot fire inside
+   *  a synchronous batch). See change: fix-kb-index-integrity (D2). */
+  heartbeat?: () => void;
+  /** Called once inside the FIRST batch's transaction (after `begin`, before any file work).
+   *  `beginForcedSource` uses it to clear the source's engine record atomically with the first
+   *  rewritten rows. See change: add-kb-worktree-seed (D6). */
+  onFirstBatch?: () => void;
+}
+export interface IndexStats {
+  scanned: number;
+  changed: number;
+  deleted: number;
+  chunks: number;
+  parseFailures?: number; // files whose frontmatter block was present but did not parse
+  missing?: boolean; // source dir did not exist → skipped (degrade, not abort)
+}
+
+const sha = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
+const DEFAULT_EXCLUDE = /(^|\/)(node_modules|\.git|\.worktrees|dist|build|\.next|coverage|\.kb)(\/|$)/;
+/** Selectable source extensions. Widened together with `config.ts` defaults and
+ *  the per-extension chunker dispatch (design D4) — widening one gate alone
+ *  indexes zero extra files. */
+const SELECTABLE_RE = /\.(md|mdx|markdown|adoc|asciidoc)$/i;
+const ADOC_RE = /\.(adoc|asciidoc)$/i;
+/** Extension strip for the meta-chunk heading fallback. Reached only when a file
+ *  HAS frontmatter/attributes but no title; an AsciiDoc header always carries a
+ *  doctitle, so a headerless `.adoc` gets its `guide`-style heading from the
+ *  chunker's own file-name fallback, not from here. */
+const TITLE_EXT_RE = /\.(md|mdx|markdown|adoc|asciidoc)$/i;
+
+/** Files processed between event-loop yields + batch commits. A long synchronous
+ *  walk would otherwise pin the single Node thread for its whole duration, so a
+ *  concurrent `/stats` reader could never observe `indexing:true` (no spinner)
+ *  and would see no live progress. Committing per batch also releases the WAL
+ *  write lock so the reader is served. See change: fix-kb-index-feedback. */
+const YIELD_EVERY = 100;
+const yieldToEventLoop = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
+/** Directory entries (walk) / directories (gitignore pre-scan) processed between
+ *  event-loop yields. One constant for both traversals. Bounds deep and broad
+ *  trees, not a single huge directory (one `readdirSync` call).
+ *  See change: bound-kb-search-freshness. */
+export const WALK_YIELD_EVERY = 500;
+/** Supplementary time bound: also yield once this many ms passed since the last
+ *  yield, so a slow filesystem (few entries per directory, high per-call latency)
+ *  cannot starve the loop between entry-count yields. */
+const WALK_YIELD_MAX_MS = 50;
+
+/** Escape every RegExp metacharacter in a literal. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Minimal glob → RegExp (supports **, *, ?). Good enough for include/exclude. */
+function globToRe(g: string): RegExp {
+  const body = g
+    .replace(/[.+^$(){}|\\]/g, "\\$&")
+    .replace(/\*\*\//g, "«GS»")
+    .replace(/\*\*/g, "«G»")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/«GS»/g, "(.*/)?")
+    .replace(/«G»/g, ".*");
+  return new RegExp("(^|/)" + body + "$");
+}
+function matchAny(pats: RegExp[], rel: string): boolean {
+  return pats.some((re) => re.test(rel));
+}
+
+/** @internal exported for tests. Async + cooperative: yields every
+ *  `WALK_YIELD_EVERY` directory entries processed (counter spans the recursion). */
+export async function walk(
+  dir: string,
+  base: string,
+  out: string[] = [],
+  ignore?: GitignoreMatcher,
+  yieldFn: () => Promise<void> = yieldToEventLoop,
+  counter: { n: number; last: number } = { n: 0, last: performance.now() },
+): Promise<string[]> {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (++counter.n % WALK_YIELD_EVERY === 0 || performance.now() - counter.last >= WALK_YIELD_MAX_MS) {
+      await yieldFn();
+      counter.last = performance.now();
+    }
+    const abs = join(dir, e.name);
+    const rel = relative(base, abs);
+    if (DEFAULT_EXCLUDE.test(rel)) continue;
+    if (e.isDirectory()) {
+      // Excluded-parent rule: an ignored dir is never descended (git semantics).
+      if (ignore?.isIgnoredDir(rel)) continue;
+      await walk(abs, base, out, ignore, yieldFn, counter);
+    } else if (SELECTABLE_RE.test(e.name) && !ignore?.isIgnored(rel)) out.push(abs);
+  }
+  return out;
+}
+
+/** Heading node identity: `<file path>#<heading path>`. */
+export function headingNodeName(rel: string, headingPath: string): string {
+  return `${rel}#${headingPath}`;
+}
+
+export function docTypeOf(rel: string, includeSourceMarkdown: boolean): DocType {
+  const base = rel.split("/").pop() ?? "";
+  // `<File>.AGENTS.md` = per-file index sidecar (large-row promotion). Classified
+  // `agents` so it is searchable, but its name != "AGENTS.md" so pi's native
+  // up-walk never auto-injects it (pull-only via kb search).
+  if (base === "AGENTS.override.md" || base === "AGENTS.md" || base === "CLAUDE.md" || base.endsWith(".AGENTS.md")) return "agents";
+  if (includeSourceMarkdown && /(^|\/)(src|lib|app|packages)\//.test(rel)) return "source-md";
+  return "doc";
+}
+
+export async function indexSource(store: KbStore, src: IndexSource, opts: IndexOptions = {}): Promise<IndexStats> {
+  // A configured source whose dir is absent degrades to skip-with-warning rather
+  // than throwing ENOENT mid-walk. A partial source set still indexes what exists.
+  // See change: harden-kb-index-failure-atomicity.
+  if (!existsSync(src.dir)) {
+    console.warn(`kb index: source directory does not exist, skipping: ${src.dir}`);
+    return { scanned: 0, changed: 0, deleted: 0, chunks: 0, missing: true };
+  }
+  // NOTE: `extRe` is dead (never applied to the file list) — kept as-is, only its
+  // default widened alongside the live gates. See design D4.
+  // Escape EVERY regex metacharacter, not just `.` — a caller-supplied extension
+  // is untrusted input and a lone `\` escape leaves the pattern injectable
+  // (`js/incomplete-sanitization`).
+  const extRe = opts.extensions?.length ? new RegExp("(" + opts.extensions.map(escapeRegExp).join("|") + ")$", "i") : SELECTABLE_RE;
+  const inc = opts.include?.map(globToRe);
+  const exc = opts.exclude?.map(globToRe);
+  const includeSourceMd = opts.includeSourceMarkdown !== false;
+  const gi =
+    opts.respectGitignore === false
+      ? undefined
+      : await loadGitignoreMatcherYielding(src.dir, { cwd: opts.cwd, prune: (rel) => DEFAULT_EXCLUDE.test(rel), yieldEvery: WALK_YIELD_EVERY, yieldMaxMs: WALK_YIELD_MAX_MS, yieldFn: yieldToEventLoop });
+  const files = (await walk(src.dir, src.dir, [], gi)).filter((abs) => {
+    const rel = relative(src.dir, abs);
+    if (src.include && !src.include(rel)) return false;
+    if (inc && !matchAny(inc, rel)) return false;
+    if (exc && matchAny(exc, rel)) return false;
+    if (docTypeOf(rel, includeSourceMd) === "agents" && opts.indexAgentsFiles === false) return false;
+    return true;
+  });
+
+  const stats: IndexStats = { scanned: files.length, changed: 0, deleted: 0, chunks: 0 };
+  const live = new Set<string>();
+
+  // Batched transaction: commit + yield every YIELD_EVERY files so the walk does
+  // not block the event loop and a concurrent `/stats` read sees live progress.
+  // NOTE: this trades whole-walk atomicity for responsiveness — a mid-walk throw
+  // leaves earlier batches committed; a reindex is idempotent so a re-run
+  // completes it. See change: fix-kb-index-feedback.
+  let sinceYield = 0;
+  // Rebuild the per-file chunk-rowid record when it may be stale (first pass of a
+  // connection, or another connection committed since); throws BEFORE any per-file
+  // delete. See change: fix-kb-index-integrity (D5).
+  store.reconcileChunkMap?.();
+  store.begin();
+  try {
+    // Runs inside the first batch's transaction: a kill before that batch commits leaves the
+    // prior (consistent) state, a kill after leaves the hook's effect. See change: add-kb-worktree-seed (D6).
+    opts.onFirstBatch?.();
+    for (const abs of files) {
+      if (sinceYield >= YIELD_EVERY) {
+        store.commit();
+        await yieldToEventLoop();
+        store.begin();
+        sinceYield = 0;
+      }
+      sinceYield++;
+      opts.heartbeat?.();
+      const rel = relative(src.dir, abs);
+      // A file that vanishes between the walk and its read is a deleted file, not a
+      // pass-aborting error: it stays out of the live set so the deletion sweep below
+      // removes its rows. Other errors still throw.
+      let st: ReturnType<typeof statSync>;
+      try {
+        st = statSync(abs);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+        throw e;
+      }
+      live.add(rel);
+      const prev = store.getFileState(src.root, rel);
+      if (!opts.force && prev && prev.mtimeMs === st.mtimeMs) continue; // mtime cheap-check
+      let buf: Buffer;
+      try {
+        buf = readFileSync(abs);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === "ENOENT") {
+          live.delete(rel);
+          continue;
+        }
+        throw e;
+      }
+      const hash = sha(buf);
+      if (!opts.force && prev && prev.sha256 === hash) {
+        store.setFileState(src.root, rel, { mtimeMs: st.mtimeMs, sha256: hash });
+        continue; // content unchanged
+      }
+      // changed → replace
+      store.deleteByPath(src.root, rel);
+      const dt = docTypeOf(rel, includeSourceMd);
+      // per-extension chunker dispatch (design D4)
+      const chunkFile = ADOC_RE.test(rel) ? chunkAsciiDoc : chunkMarkdown;
+      const { chunks, wikilinks, mdLinks, frontmatter, parseFailed } = chunkFile({ root: src.root, path: rel, text: buf.toString("utf8"), docType: dt });
+      // file node
+      store.addNode({ type: "file", name: rel, path: rel });
+      for (const c of chunks) {
+        store.insertChunk(c);
+        if (c.level > 0) {
+          // File-qualified identity: `nodes` is UNIQUE(type,name), so a bare heading
+          // path would merge every file's `Purpose`/`Why` into one node.
+          // See change: fix-kb-index-integrity (D4).
+          const hName = headingNodeName(rel, c.headingPath);
+          store.addNode({ type: "heading", name: hName, path: rel });
+          const parentHeading = c.parentChunkId ? chunks.find((x) => x.chunkId === c.parentChunkId)?.headingPath : undefined;
+          store.addEdge({ src: hName, dst: parentHeading ? headingNodeName(rel, parentHeading) : rel, rel: "child_of" });
+        }
+      }
+      // tier-1 graph: wikilinks + md links + frontmatter tags
+      for (const w of wikilinks) {
+        store.addNode({ type: "file", name: normalizeLink(w), path: null });
+        store.addEdge({ src: rel, dst: normalizeLink(w), rel: "links_to" });
+      }
+      for (const l of mdLinks) {
+        const target = normalizeRel(rel, l);
+        store.addNode({ type: "file", name: target, path: null });
+        store.addEdge({ src: rel, dst: target, rel: "references" });
+      }
+      const tags = frontmatter?.tags;
+      if (Array.isArray(tags)) for (const tag of tags) {
+        store.addNode({ type: "tag", name: `tag:${tag}`, path: null });
+        store.addEdge({ src: rel, dst: `tag:${tag}`, rel: "has_tag" });
+      }
+      // frontmatter structural indexing: synthetic meta chunk + property rows
+      if (frontmatter) {
+        const fmCfg = opts.frontmatter ?? { searchableKeys: DEFAULT_SEARCHABLE_KEYS, facetKeys: DEFAULT_FACET_KEYS };
+        const { title, body: metaBody } = buildMeta(frontmatter, fmCfg.searchableKeys);
+        const metaText = [title ?? "", metaBody].join("\n").trim();
+        if (metaText) {
+          // Searchable meta needs only insertChunk (required); it must NOT be
+          // gated on the optional insertProperty, or a chunk-capable store would
+          // silently lose title/description search.
+          const heading = title ?? (rel.split("/").pop() ?? rel).replace(TITLE_EXT_RE, "");
+          store.insertChunk({ root: src.root, path: rel, chunkId: `${sha(rel).slice(0, 8)}:meta`, headingPath: heading, heading, level: 0, parentChunkId: null, docType: dt, body: metaBody, bodyHash: sha(metaText) });
+          stats.chunks++;
+        }
+        if (store.insertProperty) for (const row of buildProperties(frontmatter, fmCfg.facetKeys)) store.insertProperty({ root: src.root, path: rel, ...row });
+      }
+      // Mirror docType for EVERY file (facetable regardless of frontmatter presence).
+      store.insertProperty?.({ root: src.root, path: rel, key: "docType", value: dt, valueNum: null, valueDate: null, valueRaw: dt });
+      if (parseFailed) stats.parseFailures = (stats.parseFailures ?? 0) + 1;
+      store.setFileState(src.root, rel, { mtimeMs: st.mtimeMs, sha256: hash }); // persist for incremental
+      stats.changed++;
+      stats.chunks += chunks.length;
+    }
+    // deletions: paths in store but not on disk
+    for (const p of store.listPaths(src.root)) {
+      if (!live.has(p)) {
+        store.deleteByPath(src.root, p);
+        store.demoteNode?.(p); // inbound links keep their target as a placeholder
+        stats.deleted++;
+      }
+    }
+    // Path-less nodes (placeholders, tags) that no edge references any more.
+    store.sweepPlaceholders?.();
+    store.commit();
+  } catch (err) {
+    store.rollback();
+    throw err;
+  }
+  return stats;
+}
+
+// [[name]] → basename match (design §9.6 simplified): resolve to "<name>.md" leaf
+function normalizeLink(w: string): string {
+  const name = w.split("|")[0].split("#")[0].trim();
+  return name.endsWith(".md") ? name : `${name}.md`;
+}
+function normalizeRel(from: string, link: string): string {
+  const dir = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "";
+  const parts = (dir ? dir + "/" : "") + link;
+  const stack: string[] = [];
+  for (const seg of parts.split("/")) {
+    if (seg === "." || seg === "") continue;
+    if (seg === "..") stack.pop();
+    else stack.push(seg);
+  }
+  return stack.join("/");
+}

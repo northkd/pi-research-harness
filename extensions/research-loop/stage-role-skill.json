@@ -1,0 +1,182 @@
+{
+  "schema": "pi-research-loop.stage-role-skill.v1",
+  "updatedAt": "2026-10-20",
+  "sourcePipeline": "Locally configured research pipeline",
+  "principle": "ARIS owns the method and artifact contract. Pi multi-agent owns execution: each stage is run by a narrow role that loads only that stage's skills. The research loop owns only goal, ledger and stuck detection.",
+  "stages": {
+    "1-idea": {
+      "arisStage": "Stage 1: Idea Discovery",
+      "arisSkill": "idea-discovery",
+      "outputs": [
+        "idea-stage/IDEA_REPORT.md"
+      ],
+      "roles": [
+        {
+          "role": "research-explorer",
+          "instance": "dynamic",
+          "context": "fresh",
+          "skills": [
+            "research-lit",
+            "idea-creator",
+            "novelty-check",
+            "deepxiv",
+            "openalex"
+          ],
+          "scaling": {
+            "mode": "memory-gated",
+            "min": 1,
+            "max": 8,
+            "reserveMiB": 1024,
+            "admitScript": "research-loop/scripts/explorer-capacity.mjs",
+            "note": "Start with what fits; add more as memory frees up. Each explorer must cover a distinct angle, not a duplicate."
+          }
+        }
+      ],
+      "sequentialRole": {
+        "role": "research-critic",
+        "skills": [
+          "research-review",
+          "novelty-check"
+        ],
+        "purpose": "independent novelty and falsifiability check before the stage gate"
+      },
+      "isolation": "Every explorer works in its own directory and must not read another explorer's output; the main agent merges only after they return.",
+      "gate": "loop: every candidate needs a falsification condition and at least one source; no majority vote.",
+      "explorerAngles": [
+        "mechanism and physical constraint",
+        "cross-domain analogy",
+        "counterexample and boundary condition",
+        "measurement and falsification path",
+        "prior-art collision (what would make this incremental)",
+        "scale and regime transfer (does it hold at another limit)"
+      ],
+      "scalingNote": "Explorer count is memory-gated, not fixed. Query research-loop/scripts/explorer-capacity.mjs before each launch; start a subset and add the rest when MemAvailable permits.",
+      "workflow": "research-loop/workflows/stage1-explore.js"
+    },
+    "2-experiment": {
+      "arisStage": "Stage 2: Experiment Bridge",
+      "arisSkill": "experiment-bridge",
+      "outputs": [
+        "refine-logs/EXPERIMENT_PLAN.md",
+        "runs/"
+      ],
+      "roles": [
+        {
+          "role": "research-numerics",
+          "context": "fresh",
+          "skills": [
+            "experiment-plan",
+            "run-experiment",
+            "analyze-results"
+          ],
+          "tools": "bash",
+          "note": "small local jobs only"
+        },
+        {
+          "role": "research-ssh",
+          "context": "fresh",
+          "skills": [
+            "experiment-queue"
+          ],
+          "tools": "ssh-read, ssh-bash",
+          "note": "one scheduler node, submission needs explicit approval"
+        }
+      ],
+      "isolation": "Each run writes its own directory; raw outputs are never overwritten.",
+      "gate": "real command, exit code, seeds and input hash must be recorded; a model summary is not execution proof.",
+      "workflow": "research-loop/workflows/stage2-experiment.js",
+      "taskDirRequired": true
+    },
+    "3-review": {
+      "arisStage": "Stage 3: Auto Review Loop",
+      "arisSkill": "auto-review-loop",
+      "outputs": [
+        "review-stage/AUTO_REVIEW.md"
+      ],
+      "roles": [
+        {
+          "role": "research-critic",
+          "context": "fresh",
+          "skills": [
+            "research-review",
+            "kill-argument"
+          ],
+          "modelPolicy": "must differ from the author's model family"
+        }
+      ],
+      "replacement": {
+        "upstream": "mcp__codex__codex / mcp__codex__codex-reply with threadId",
+        "local": "research-critic spawned by native subagent, with REVIEWER_MEMORY.md carrying round-to-round state",
+        "why": "Codex MCP is not registered in this Pi; an ephemeral one-shot loses thread continuity, which ARIS explicitly rejects",
+        "acceptance": "review-gate checks observed reviewer model, distinct response identity per round, and the memory artifact chain"
+      },
+      "rounds": {
+        "max": 4,
+        "stopWhen": "score >= 6 and verdict in {ready, almost} or max rounds reached"
+      },
+      "workflow": "research-loop/workflows/stage3-review.js",
+      "recordReview": "research-loop/scripts/record-review.mjs",
+      "reframer": {
+        "role": "research-reframer",
+        "when": "stuck after critic attribution, before plan_change"
+      }
+    },
+    "4-summary": {
+      "arisStage": "Stage 4: Research Summary & Writing Handoff",
+      "arisSkill": "research-pipeline",
+      "outputs": [
+        "NARRATIVE_REPORT.md"
+      ],
+      "roles": [
+        {
+          "role": "research-critic",
+          "context": "fresh",
+          "skills": [
+            "citation-audit",
+            "paper-claim-audit"
+          ],
+          "purpose": "verify every claim maps to an artifact before handoff"
+        }
+      ],
+      "gate": "a claim marked supported needs an evidence path; unresolved claims stay undetermined or failed."
+    },
+    "5-writing": {
+      "arisStage": "Stage 5: Paper Writing (optional)",
+      "arisSkill": "paper-writing",
+      "outputs": [
+        "PAPER_PLAN.md",
+        "paper/*.tex",
+        "paper/main.pdf"
+      ],
+      "roles": [
+        {
+          "role": "research-literature",
+          "context": "fresh",
+          "skills": [
+            "citation-audit",
+            "deepxiv"
+          ],
+          "modelTier": "light"
+        }
+      ],
+      "gate": "Markdown is not a submission PDF; compile and audit before claiming completion."
+    }
+  },
+  "globalRules": [
+    "A role may load only the skills listed for its stage; loading a stage-foreign skill requires a recorded reason.",
+    "Skills that need shell/Python must not be assigned to roles without bash.",
+    "The same skill used by two roles must run in separate contexts; sharing a context defeats the purpose.",
+    "No stage may consume another agent's unverified conclusion; cross-stage input is an artifact path plus its gate result.",
+    "The research loop records goal, attempts and stuck state; it does not decide which stage runs next."
+  ],
+  "autoPipeline": {
+    "workflow": "research-loop/workflows/auto-research.js",
+    "launch": "research_loop({action:\"run\"}) or configure(autoRun:true)",
+    "stages": [
+      "1-idea",
+      "2-experiment",
+      "3-review"
+    ],
+    "sessionBound": true
+  }
+}

@@ -1,0 +1,4 @@
+const QUESTION_PREVIEW_MAX = 140;
+export {
+  QUESTION_PREVIEW_MAX
+};

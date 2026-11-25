@@ -1,0 +1,112 @@
+{
+  "schema": "pi-research-mcp-source-manifest.v1",
+  "generatedAt": "2026-11-23T08:21:58.042Z",
+  "adaptation": "TypeScript syntax removal and local ESM paths. Session binder awaits its host send acknowledgement, accepting both the legacy synchronous boolean and a native asynchronous boolean.",
+  "modules": [
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/auth.ts",
+      "sourceSha256": "b0da56b2f01aeda0ea0dd0c02ef028f27fc5129bfd2c59389cd35e6242e36b41",
+      "output": "server/auth.mjs",
+      "outputSha256": "bee52100d977b6da28c35969957763e1f9d13ff3d2c99323ba432666cb8f9cb0",
+      "bytes": 1136
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/dispatch.ts",
+      "sourceSha256": "2afb50481035ddb37df94526df17578cb15baa46561cbd4794eb3b0f18a3c589",
+      "output": "server/dispatch.mjs",
+      "outputSha256": "1208ee37a2229289654d03f119f7f15103bd98b1d3df89903ba6adc36bf20372",
+      "bytes": 14652
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/guard.ts",
+      "sourceSha256": "72484ae87a4fdf21f6eb02ea696380aba39514c6a8c08dfcd127651bcf5dc886",
+      "output": "server/guard.mjs",
+      "outputSha256": "89b6a3ce285f3ad78e43c22610f5f3f120964f6d46c5f5ffccc8e0ede9f41b9c",
+      "bytes": 826
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/jsonrpc.ts",
+      "sourceSha256": "f1cf94e135fe30f3121d11df0f4f71a787834e7e42a855d04807132e4535fa94",
+      "output": "server/jsonrpc.mjs",
+      "outputSha256": "20d7c4765c8fab71f37f6d5be0e45ec12f2a3f3c57bb52599d0e345ffb839644",
+      "bytes": 1665
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/protocol.ts",
+      "sourceSha256": "beb8c880fd3d274e4b15ac585053b310026746b3aed051bef37594e9a8d0c680",
+      "output": "server/protocol.mjs",
+      "outputSha256": "279291b457272a887c1b8c5e9aa401fea039806197cd6fa3a119f835e4b2e900",
+      "bytes": 2590
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/tokens.ts",
+      "sourceSha256": "401fb0c1d39b46850b7c510067433311c8ddd5d03c0f2d9b80933d6478c19938",
+      "output": "server/tokens.mjs",
+      "outputSha256": "ac7dc3c04e7d0e640aaf96e3d7f80456cbdd85b4f1edc598a9a64b9fbe91f7d0",
+      "bytes": 3849
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/tools.ts",
+      "sourceSha256": "1b3fa4796ae1f7b160af902de4df3e70f162def9b9eb3f67fa4843833f02990a",
+      "output": "server/tools.mjs",
+      "outputSha256": "d29ab824b8d22205b84a5c1bd38cab177e1e316193d1c93598f4dc6253ee8b37",
+      "bytes": 2881
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/tools.denylist.ts",
+      "sourceSha256": "22cb98e958699772dd1a943b4a6d8a8d616841676e01126508a2a0e9d29934a8",
+      "output": "server/tools.denylist.mjs",
+      "outputSha256": "f6dc478230118e2ae2a8524c20fad0a694c17d169154f77c85ec35b5679f4e77",
+      "bytes": 20120
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/list-sessions.ts",
+      "sourceSha256": "d22adc89b768a5fb00ac98f9cb27dc101e02339f54a4319641905a0afc1b08a0",
+      "output": "server/list-sessions.mjs",
+      "outputSha256": "46c07588fb5511ace09b3d0382cea56ad43294eb7f7fa43cdb305b93960cff91",
+      "bytes": 4419
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/rate-limit.ts",
+      "sourceSha256": "ea2b0e98b9a931344324594f6078a92c1e7e7fca880fc5211ee1c47d677039d3",
+      "output": "server/rate-limit.mjs",
+      "outputSha256": "0992864d791b0232a5cfe05a17665c4689df96f4192b9734f6bc5a9c7d2804c6",
+      "bytes": 4082
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/streaming.ts",
+      "sourceSha256": "7485284acf0b13e2f55f0125b12d7eaffabb1bc9e8a2a597e408e9afcc145235",
+      "output": "server/streaming.mjs",
+      "outputSha256": "b7414a0c2a24166007eb815dc17d5f5818c8ae5c9677a0b64e3569173adb8a3e",
+      "bytes": 2768
+    },
+    {
+      "source": "pi-dashboard-mcp-server-plugin/src/server/generated/tools.ts",
+      "sourceSha256": "4428340f838fd5e209d683d1ec6b6dfa77f07f7aa770925a0cb7cea381c1b362",
+      "output": "server/generated/tools.mjs",
+      "outputSha256": "70fc00275038aa473904cd2eea34d2954047529d76f6a96234cfa8cf3ebc3780",
+      "bytes": 68378
+    },
+    {
+      "source": "pi-dashboard-shared/src/tiers.ts",
+      "sourceSha256": "d0594cae0ae14c87569335e9747a86ab49b47c290cebe64228077f2b9027dd70",
+      "output": "shared/tiers.mjs",
+      "outputSha256": "3df3bbca0974f77803a81683c8da48ed4f828ab88e373b94bc25eaf0f2c94ce9",
+      "bytes": 425
+    },
+    {
+      "source": "pi-dashboard-shared/src/session-group-path.ts",
+      "sourceSha256": "a38410b8ab7c543d1e7e57dbecce7f7318832834ed1c1fbeb7965647d695d936",
+      "output": "shared/session-group-path.mjs",
+      "outputSha256": "0b9b401d488aaa3d86a271f4759225ec692429e482c47ea376e57abb7dff1cc9",
+      "bytes": 838
+    },
+    {
+      "source": "pi-dashboard-shared/src/platform/paths.ts",
+      "sourceSha256": "4d8643f93b9b27ccea0ea9b7a168011712ca2a2ed20a8d65031b7cca225bc9be",
+      "output": "shared/platform/paths.mjs",
+      "outputSha256": "4430612fa85912103c6eacb7672d0fec049747b911ab646e59b8991e24f41cb8",
+      "bytes": 6554
+    }
+  ]
+}

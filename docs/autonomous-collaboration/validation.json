@@ -1,0 +1,144 @@
+{
+  "schema": "pi-research-autonomous-collaboration-validation.v1",
+  "date": "2026-11-06",
+  "branch": "feat/autonomous-collaboration-20261106",
+  "baselineCommit": "36a55401f890a0efeb2d842090caa74519c190c9",
+  "dashboardUpstreamCommit": "65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0",
+  "environment": {
+    "os": "Linux",
+    "node": "24.22.1",
+    "npm": "11.9.0",
+    "pnpm": "11.25.0",
+    "chromium": "141.0.7390.37",
+    "browserVariant": "Playwright chromium_headless_shell",
+    "buildNodeHeapMiB": 4096
+  },
+  "overlay": {
+    "files": 624,
+    "runtimeVerify": "passed",
+    "changedOnVerify": 0
+  },
+  "build": {
+    "command": "NODE_OPTIONS=--max-old-space-size=4096 pnpm run build",
+    "status": "passed",
+    "notes": [
+      "Vite retains its existing large-chunk warning.",
+      "The default 2 GiB Node heap was insufficient in this environment; the recorded successful build uses 4 GiB."
+    ]
+  },
+  "nativeDeployment": {
+    "status": "passed",
+    "clientBuild": {
+      "pluginRegistryHash": "c6c963c24cc16a95927d9b14646df18d3eaba40e30e42738545d2857b6e00a2e",
+      "status": "matched"
+    },
+    "nativeAuthentication": true,
+    "isolatedTemporaryHome": true,
+    "host": "127.0.0.1",
+    "ownedProcessesCleanedUp": true,
+    "syntheticEndedSessions": 3,
+    "modelRequests": 0,
+    "syntheticMoneyRecorded": false,
+    "finishedAt": "2026-11-06T02:35:49.383Z"
+  },
+  "tests": [
+    {
+      "name": "Harness offline",
+      "command": "npm test",
+      "passed": 265,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "name": "Mainline supervision offline",
+      "command": "npm test (supervision phase)",
+      "passed": 64,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "name": "Research canvas and projection",
+      "passed": 31,
+      "failed": 0,
+      "files": 2
+    },
+    {
+      "name": "Native path gate",
+      "passed": 39,
+      "failed": 0,
+      "files": 1
+    },
+    {
+      "name": "Server backend resolver, task permissions and YOLO event wiring",
+      "passed": 10,
+      "failed": 0,
+      "files": 3,
+      "environment": {
+        "PI_DASHBOARD_NO_MDNS": "1"
+      }
+    },
+    {
+      "name": "Mainline adapter via Node native TypeScript loader",
+      "passed": 27,
+      "failed": 0,
+      "skipped": 0,
+      "scope": "Adapter suite with mocked Pi host bus/UI and real disk grant regressions. Temporary copy replaces only host loader import; not a host SDK verification."
+    },
+    {
+      "name": "Independent durable dispatcher regression review",
+      "passed": 11,
+      "failed": 0,
+      "includedIn": "Harness offline",
+      "scope": "Real service and disk store; stubbed process, membership and transport. Includes 21 logical sessions across three levels, bounded runnable workers, replay, ACK, rollback and cancellation."
+    },
+    {
+      "name": "Native service and browser interactions",
+      "passed": 29,
+      "failed": 0,
+      "syntheticData": true,
+      "scope": "Real built app/server/auth; synthetic ended transcripts, collaboration projection and in-memory authorization UI. Backend/extension tests separately cover real authorization decisions."
+    }
+  ],
+  "testEvidence": "evidence/test-summary.txt",
+  "syntax": {
+    "command": "npm run check:syntax",
+    "status": "passed"
+  },
+  "releaseAudit": {
+    "command": "npm run check:release",
+    "status": "passed",
+    "findings": [],
+    "scope": "Publication allow-list and bounded credential patterns; the six published screenshots were separately reviewed visually."
+  },
+  "typescript": {
+    "command": "node scripts/tsc7.mjs --noEmit",
+    "status": "failed-existing-diagnostics",
+    "exitCode": 1,
+    "diagnostics": 61,
+    "files": 5,
+    "baselineDiagnostics": 65,
+    "newDiagnostics": 0,
+    "resolvedDiagnostics": 4,
+    "comparison": "evidence/typescript-comparison.json",
+    "raw": "evidence/typescript-diagnostics.txt"
+  },
+  "browserReport": "evidence/browser-report.json",
+  "publishedScreenshots": [
+    "screenshots/06-agents-demo-1440.png",
+    "screenshots/12-subagents-spread-1440.png",
+    "screenshots/13-subagents-spread-360.png",
+    "screenshots/14a-task-authorization-editor-1440.png",
+    "screenshots/14-task-authorization-1440.png",
+    "screenshots/09-workbench-dark-1440.png"
+  ],
+  "screenshotScope": "Six reviewed screenshots retained from the final run. The raw browser report also enumerates other screenshots generated temporarily by the reproducible launcher.",
+  "limitations": [
+    "No paid-model execution or ten-hour soak test; no user production deployment.",
+    "Semantic task decomposition is still model-selected; deterministic enforcement applies to declared plans, scheduling and receipts.",
+    "Task grants cover verified joined sessions sharing the approved workspace/operator/charter; unjoined native pi-subagents do not inherit extra rights solely from environment metadata.",
+    "Protected or ungrantable paths preserve independent native gates; task grants are not OS privileges, service credentials or a shell sandbox.",
+    "The existing workbench-sync identity/access gap remains outside this change; native backend-root resolution is fixed and tested.",
+    "Responsive shell remount retains its existing behavior; mobile QA explicitly enters the Agents view.",
+    "Full repository typecheck remains nonzero on the recorded existing diagnostics."
+  ]
+}

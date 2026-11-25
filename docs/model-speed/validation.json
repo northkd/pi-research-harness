@@ -1,0 +1,164 @@
+{
+  "schema": "pi-research-model-speed-validation.v1",
+  "date": "2026-11-06",
+  "branch": "feat/autonomous-collaboration-20261106",
+  "baselineCommit": "36c3b7887adabfd0093ff9553c7178876d861c66",
+  "dashboardUpstreamCommit": "65dc4558c7b07ef755ee4f0eda89d9f63e7e76e0",
+  "references": {
+    "ccSwitchCommit": "158b2ba3045a1012baa28337d03d79bfb494c732",
+    "cliProxyApiCommit": "c2f402b45643f0740d70b9010fd7d8d0aab7ef65"
+  },
+  "environment": {
+    "os": "Linux",
+    "node": "24.22.1",
+    "npm": "11.9.0",
+    "pnpm": "11.25.0",
+    "chromium": "141.0.7390.37",
+    "browserVariant": "Playwright chromium_headless_shell",
+    "buildNodeHeapMiB": 4096
+  },
+  "overlay": {
+    "files": 632,
+    "runtimeVerify": "passed",
+    "changedOnVerify": 0
+  },
+  "build": {
+    "command": "NODE_OPTIONS=--max-old-space-size=4096 pnpm run build",
+    "status": "passed",
+    "notes": [
+      "Existing Vite large-chunk warning retained."
+    ]
+  },
+  "nativeDeployment": {
+    "status": "passed",
+    "clientBuild": {
+      "pluginRegistryHash": "c6c963c24cc16a95927d9b14646df18d3eaba40e30e42738545d2857b6e00a2e",
+      "status": "matched"
+    },
+    "nativeAuthentication": true,
+    "isolatedTemporaryHome": true,
+    "host": "127.0.0.1",
+    "ownedProcessesCleanedUp": true,
+    "syntheticEndedSessions": 3,
+    "modelRequests": 0,
+    "syntheticMoneyRecorded": false,
+    "finishedAt": "2026-11-06T08:33:12.315Z"
+  },
+  "tests": [
+    {
+      "name": "Harness offline",
+      "command": "npm test",
+      "passed": 326,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "name": "Mainline supervision offline",
+      "command": "npm test (supervision phase)",
+      "passed": 64,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "name": "Speed and billing plugin",
+      "command": "PI_DASHBOARD_NO_MDNS=1 npm run test:parallel -- --config extras/speed-plugin/vitest.config.ts --reporter=dot",
+      "passed": 137,
+      "failed": 0,
+      "files": 9
+    },
+    {
+      "name": "Native timing collector and hidden metadata",
+      "command": "node --test tests/generation-timing.test.mjs tests/speed-timing-hidden.test.mjs",
+      "passed": 17,
+      "failed": 0,
+      "includedIn": "Harness offline"
+    },
+    {
+      "name": "Existing extension forwarding and replay",
+      "command": "PI_DASHBOARD_NO_MDNS=1 npm run test:parallel -- --config vitest.config.ts --root packages/extension src/__tests__/custom-entry-forward.test.ts src/__tests__/bridge-replay-live-tail.test.ts --reporter=dot",
+      "passed": 25,
+      "failed": 0,
+      "files": 2
+    },
+    {
+      "name": "Existing shared state replay",
+      "command": "PI_DASHBOARD_NO_MDNS=1 npm run test:parallel -- --config vitest.config.ts --root packages/shared src/__tests__/state-replay-flow-events.test.ts src/__tests__/state-replay-entry-id.test.ts src/__tests__/state-replay-usage.test.ts src/__tests__/state-replay.test.ts --reporter=dot",
+      "passed": 39,
+      "failed": 0,
+      "files": 4
+    },
+    {
+      "name": "Native service and browser interactions",
+      "passed": 31,
+      "failed": 0,
+      "syntheticData": true,
+      "scope": "Real built client/server/auth and stats APIs; synthetic ended transcripts. Native collector uses deterministic event/clock regression tests; no live paid provider request."
+    }
+  ],
+  "browserPerformanceCases": [
+    {
+      "source": "pi-stream",
+      "outputTokens": 320,
+      "firstOutputSeconds": 8,
+      "generationSeconds": 2,
+      "requestDurationSeconds": 10,
+      "persistenceTimestampDurationSeconds": 20,
+      "expectedTps": 160,
+      "apiAndUi": "passed"
+    },
+    {
+      "source": "sdk-duration",
+      "outputTokens": 380,
+      "requestDurationSeconds": 10,
+      "firstOutputSeconds": null,
+      "expectedEstimatedTps": 38,
+      "uiPrefix": "≈",
+      "apiAndUi": "passed"
+    },
+    {
+      "source": "legacy-timestamps",
+      "outputTokens": 440,
+      "requestDurationSeconds": 20,
+      "firstOutputSeconds": null,
+      "expectedEstimatedTps": 22,
+      "uiPrefix": "≈",
+      "apiAndUi": "passed"
+    }
+  ],
+  "testEvidence": "evidence/test-summary.txt",
+  "browserReport": "evidence/browser-report.json",
+  "syntax": {
+    "command": "npm run check:syntax",
+    "status": "passed"
+  },
+  "releaseAudit": {
+    "command": "npm run check:release",
+    "status": "passed",
+    "scope": "Publication allow-list and bounded credential patterns; two screenshots separately reviewed visually.",
+    "findings": []
+  },
+  "typescript": {
+    "command": "node scripts/tsc7.mjs --noEmit",
+    "status": "failed-existing-diagnostics",
+    "exitCode": 1,
+    "diagnostics": 61,
+    "baselineDiagnostics": 61,
+    "newDiagnostics": 0,
+    "resolvedDiagnostics": 0,
+    "comparison": "evidence/typescript-comparison.json",
+    "raw": "evidence/typescript-diagnostics.txt"
+  },
+  "publishedScreenshots": [
+    "screenshots/15-speed-measured-1440.png",
+    "screenshots/16-speed-sdk-estimate-1440.png"
+  ],
+  "screenshotScope": "Two reviewed performance screenshots from the final run; other screenshots in the raw browser report are reproducible temporary output.",
+  "limitations": [
+    "Client-observed throughput includes transport, proxy buffering and event-processing effects; this is not the provider internal decoding clock.",
+    "No paid model benchmark, true provider speed ranking, ten-hour soak test or user production deployment.",
+    "Dashboard restart and Pi Bridge reload are required for new native timing capture; historical missing first-output timestamps cannot be recovered.",
+    "Without reported reasoning usage, hidden pre-output work cannot be detected reliably. Reported reasoning with only later text/tool output conservatively falls back to a whole-request estimate.",
+    "A third-party final-message replacement followed by content redaction that drops symbol properties can lose an optional native sample; SDK/legacy fallback remains marked as an estimate.",
+    "Full repository typecheck remains nonzero on the recorded 61 existing diagnostics."
+  ]
+}

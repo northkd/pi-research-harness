@@ -1,0 +1,353 @@
+{
+  "date": "2026-11-07",
+  "baselineHarnessCommit": "0dafb83ea41a8d9ca0e57914495cc80b3cb7d7ba",
+  "provider": "synthetic; no live DeepSeek request",
+  "baseline": {
+    "ok": true,
+    "baseline": true,
+    "versions": {
+      "pi": "1.3.0",
+      "subagents": "0.79.2"
+    },
+    "fixtureSkills": {
+      "global": 50,
+      "project": 25,
+      "resources_discover": 25
+    },
+    "networkAttempts": 0,
+    "cases": [
+      {
+        "name": "main-before",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 39653,
+        "requestChars": 39818
+      },
+      {
+        "name": "parent-fresh-default",
+        "systemSkillCount": 0,
+        "requestSkillCount": 0,
+        "systemChars": 9009,
+        "requestChars": 9153
+      },
+      {
+        "name": "parent-fork-default",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 44656,
+        "requestChars": 49015
+      },
+      {
+        "name": "runner-fresh-default",
+        "systemSkillCount": 0,
+        "requestSkillCount": 0,
+        "systemChars": 7380,
+        "requestChars": 7518
+      },
+      {
+        "name": "runner-fork-default",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 44656,
+        "requestChars": 47380
+      },
+      {
+        "name": "explicit-inherit-true",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 45755,
+        "requestChars": 45899
+      },
+      {
+        "name": "fresh-selected-1",
+        "systemSkillCount": 1,
+        "requestSkillCount": 1,
+        "systemChars": 9731,
+        "requestChars": 9875
+      },
+      {
+        "name": "fork-selected-1",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 44656,
+        "requestChars": 49737
+      },
+      {
+        "name": "fresh-selected-2",
+        "systemSkillCount": 2,
+        "requestSkillCount": 2,
+        "systemChars": 10098,
+        "requestChars": 10242
+      },
+      {
+        "name": "fork-selected-2",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 44656,
+        "requestChars": 50104
+      },
+      {
+        "name": "explicit-skills-false",
+        "systemSkillCount": 0,
+        "requestSkillCount": 0,
+        "systemChars": 9009,
+        "requestChars": 9153
+      },
+      {
+        "name": "selected-body-read-on-demand",
+        "systemSkillCount": 1,
+        "requestSkillCount": 1,
+        "systemChars": 9731,
+        "requestChars": 9875
+      },
+      {
+        "name": "other-agent-inheritance",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 39795,
+        "requestChars": 39939
+      },
+      {
+        "name": "main-after",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 39653,
+        "requestChars": 39818
+      }
+    ],
+    "checks": [
+      "research-theory resolved through native discovery with fresh context and no inherited skills",
+      "main session sees all 100 global, project and resources_discover skill summaries, with no bodies",
+      "parent: native fresh research-theory excludes all 100 ambient skill summaries",
+      "parent: fork reproduces inherited 100-skill catalog",
+      "runner: native fresh research-theory excludes all 100 ambient skill summaries",
+      "runner: fork reproduces inherited 100-skill catalog",
+      "explicit native inheritSkills:true override retains opt-in catalog inheritance",
+      "explicit selection injects only one/two summaries, and skills:false cancels configured selection",
+      "selected SKILL.md body appears only after the actual read tool result, never in system prompt",
+      "other agent and main session retain their skill catalogs; parent session file stays byte-identical"
+    ]
+  },
+  "fixed": {
+    "ok": true,
+    "baseline": false,
+    "versions": {
+      "pi": "1.3.0",
+      "subagents": "0.79.2"
+    },
+    "fixtureSkills": {
+      "global": 50,
+      "project": 25,
+      "resources_discover": 25
+    },
+    "networkAttempts": 0,
+    "cases": [
+      {
+        "name": "main-before",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 39653,
+        "requestChars": 39818
+      },
+      {
+        "name": "parent-fresh-default",
+        "systemSkillCount": 0,
+        "requestSkillCount": 0,
+        "systemChars": 9009,
+        "requestChars": 9153
+      },
+      {
+        "name": "parent-fork-default",
+        "systemSkillCount": 0,
+        "requestSkillCount": 0,
+        "systemChars": 7902,
+        "requestChars": 12237
+      },
+      {
+        "name": "runner-fresh-default",
+        "systemSkillCount": 0,
+        "requestSkillCount": 0,
+        "systemChars": 7380,
+        "requestChars": 7518
+      },
+      {
+        "name": "runner-fork-default",
+        "systemSkillCount": 0,
+        "requestSkillCount": 0,
+        "systemChars": 7902,
+        "requestChars": 10602
+      },
+      {
+        "name": "explicit-inherit-true",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 45755,
+        "requestChars": 45899
+      },
+      {
+        "name": "fresh-selected-1",
+        "systemSkillCount": 1,
+        "requestSkillCount": 1,
+        "systemChars": 9731,
+        "requestChars": 9875
+      },
+      {
+        "name": "fork-selected-1",
+        "systemSkillCount": 0,
+        "requestSkillCount": 1,
+        "systemChars": 7902,
+        "requestChars": 12959
+      },
+      {
+        "name": "fresh-selected-2",
+        "systemSkillCount": 2,
+        "requestSkillCount": 2,
+        "systemChars": 10098,
+        "requestChars": 10242
+      },
+      {
+        "name": "fork-selected-2",
+        "systemSkillCount": 0,
+        "requestSkillCount": 2,
+        "systemChars": 7902,
+        "requestChars": 13326
+      },
+      {
+        "name": "explicit-skills-false",
+        "systemSkillCount": 0,
+        "requestSkillCount": 0,
+        "systemChars": 9009,
+        "requestChars": 9153
+      },
+      {
+        "name": "selected-body-read-on-demand",
+        "systemSkillCount": 1,
+        "requestSkillCount": 1,
+        "systemChars": 9731,
+        "requestChars": 9875
+      },
+      {
+        "name": "other-agent-inheritance",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 39795,
+        "requestChars": 39939
+      },
+      {
+        "name": "main-after",
+        "systemSkillCount": 100,
+        "requestSkillCount": 100,
+        "systemChars": 39653,
+        "requestChars": 39818
+      }
+    ],
+    "checks": [
+      "research-theory resolved through native discovery with fresh context and no inherited skills",
+      "main session sees all 100 global, project and resources_discover skill summaries, with no bodies",
+      "parent: native fresh research-theory excludes all 100 ambient skill summaries",
+      "parent: fork excludes inherited catalog while preserving conversation and parent tool declarations",
+      "runner: native fresh research-theory excludes all 100 ambient skill summaries",
+      "runner: fork excludes inherited catalog while preserving conversation and parent tool declarations",
+      "explicit native inheritSkills:true override retains opt-in catalog inheritance",
+      "explicit selection injects only one/two summaries, and skills:false cancels configured selection",
+      "selected SKILL.md body appears only after the actual read tool result, never in system prompt",
+      "other agent and main session retain their skill catalogs; parent session file stays byte-identical"
+    ]
+  },
+  "patchInstallation": {
+    "ok": true,
+    "results": [
+      {
+        "source": "original",
+        "applied": {
+          "patched": true,
+          "appliedNow": true
+        },
+        "checked": {
+          "patched": true,
+          "appliedNow": false
+        },
+        "repeated": {
+          "patched": true,
+          "appliedNow": false
+        }
+      },
+      {
+        "source": "previous",
+        "applied": {
+          "patched": true,
+          "appliedNow": true
+        },
+        "checked": {
+          "patched": true,
+          "appliedNow": false
+        },
+        "repeated": {
+          "patched": true,
+          "appliedNow": false
+        }
+      },
+      {
+        "source": "budget",
+        "applied": {
+          "patched": true,
+          "appliedNow": true
+        },
+        "checked": {
+          "patched": true,
+          "appliedNow": false
+        },
+        "repeated": {
+          "patched": true,
+          "appliedNow": false
+        }
+      }
+    ]
+  },
+  "modelSelectionRegression": {
+    "ok": true,
+    "sdk": "1.3.0",
+    "subagents": "0.79.2",
+    "autoModel": "0.8.4",
+    "checks": [
+      "parent: exact launch preserved with auto-model enabled",
+      "parent: real response metadata mismatch still rejected",
+      "parent: provider text cannot impersonate a pre-dispatch guard failure",
+      "parent: later extension switch blocked before provider request",
+      "parent: legacy router stops before provider request",
+      "parent: native virtual selection can route to a physical model",
+      "runner: exact launch preserved with auto-model enabled",
+      "runner: real response metadata mismatch still rejected",
+      "runner: provider text cannot impersonate a pre-dispatch guard failure",
+      "runner: later extension switch blocked before provider request",
+      "runner: legacy router stops before provider request",
+      "runner: native virtual selection can route to a physical model",
+      "inherited child model preserved",
+      "unavailable model does not fall back to shared defaults",
+      "model text does not participate in identity verification",
+      "existing transcript model cannot override the resolved launch model"
+    ],
+    "networkAttempts": 0
+  },
+  "repositoryChecks": {
+    "npmTest": {
+      "tests": 437,
+      "pass": 434,
+      "fail": 0,
+      "skipped": 3
+    },
+    "syntax": "passed",
+    "releaseAudit": "passed",
+    "optionalSkipped": [
+      "installed Pi SessionManager standalone fixture",
+      "prepared Dashboard replay timing isolation",
+      "prepared Dashboard stage session spawn"
+    ]
+  },
+  "limitations": [
+    "The SDK check validates outgoing prompt content, not real DeepSeek completion or timing.",
+    "The filter removes only structured sections.skills from inherited system messages.",
+    "Saved parent history, previously read skill bodies and opaque prompt content are preserved.",
+    "The user production configuration and service were not accessed or restarted."
+  ]
+}

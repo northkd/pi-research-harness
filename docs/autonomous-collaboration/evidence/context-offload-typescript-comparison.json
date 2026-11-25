@@ -1,0 +1,19 @@
+{
+  "method": "Compare multiset of file path, TS error code and diagnostic text; ignore line/column shifts; retain multiplicities.",
+  "baselineEvidence": "docs/autonomous-collaboration/evidence/typescript-diagnostics.txt",
+  "baselineCommit": "fb696b1627c2dc647516464a1dfdbd650417d8ec",
+  "currentEvidence": "docs/autonomous-collaboration/evidence/context-offload-typescript-diagnostics.txt",
+  "baselineDiagnostics": 61,
+  "currentDiagnostics": 61,
+  "newDiagnostics": 0,
+  "resolvedDiagnostics": 0,
+  "new": [],
+  "resolved": [],
+  "currentByFile": {
+    "packages/server/src/res-workflow/adoption-service.ts": 1,
+    "packages/server/src/res-workflow/analysis-agent.ts": 27,
+    "packages/server/src/res-workflow/full-history-material.ts": 16,
+    "packages/server/src/res-workflow/full-history-review.ts": 14,
+    "packages/server/src/res-workflow/local-history-stream.ts": 3
+  }
+}

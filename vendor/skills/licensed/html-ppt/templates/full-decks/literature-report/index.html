@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-themes="academic-paper,corporate-clean,minimal-white,engineering-whiteprint" data-theme-base="../../../assets/themes/">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>文献汇报模板骨架</title>
+<link rel="stylesheet" href="../../../assets/fonts.css">
+<link rel="stylesheet" href="../../../assets/base.css">
+<link rel="stylesheet" id="theme-link" href="../../../assets/themes/academic-paper.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="tpl-literature-report">
+<div class="deck">
+
+  <section class="slide agenda-slide" data-title="汇报大纲">
+    <div class="page-band"></div>
+    <h1 class="page-title">汇报大纲</h1>
+    <div class="agenda-body">
+      <div class="agenda-group">
+        <div class="agenda-group-title">文献汇报</div>
+        <ol class="agenda-list">
+          <li>基本信息和摘要</li>
+          <li>背景和主要内容</li>
+          <li>结论和亮点</li>
+        </ol>
+      </div>
+      <div class="agenda-group">
+        <div class="agenda-group-title">工作汇报</div>
+        <ol class="agenda-list">
+          <li>系统工作的内容梗概</li>
+          <li>近两周的工作进展</li>
+          <li>工作的问题和后续计划</li>
+        </ol>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这一页是共享汇报大纲。先说明这份模板同时覆盖文献汇报和工作汇报两类场景，方便组会统一使用。</p>
+      <p>如果当前是文献汇报，就重点沿着上半部分的三步走；如果是工作汇报，就切到下半部分的工作梗概、进展和问题计划。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="文献信息">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">文献信息</div>
+      <div class="nav-label nav-center">内容与论点</div>
+      <div class="nav-label nav-right">结论与亮点</div>
+    </div>
+    <div class="page-body two-col info-page">
+      <div class="col">
+        <div class="section-title">标题：</div>
+        <p>此处填写论文完整英文题目</p>
+
+        <div class="section-title">作者：</div>
+        <p>第一作者，全部通信作者</p>
+
+        <div class="section-title">单位：</div>
+        <p>第一作者和全部通信作者的所属单位（保留英文即可）</p>
+
+        <div class="section-title">期刊信息：</div>
+        <p>期刊，期刊号，年份，eg. Small, e05925, 2025</p>
+
+        <div class="section-title">DOI：</div>
+        <p>doi 超链接</p>
+      </div>
+
+      <div class="col">
+        <div class="section-title">摘要介绍，以下为举例</div>
+
+        <div class="section-title">领域背景概况（1句话）</div>
+        <p>理解结构和化学因素对固态电池发展重要，卤化物电解质有优异的电化学反应氧化稳定，机械烧结稳定。</p>
+
+        <div class="section-title">研究内容（2-3句话）</div>
+        <p>通过实验和理论计算方法研究 Br- 和 I- 取代 Li2ZrCl6 对离子电导的影响。取代后和占位无序使得 c 轴间距打开，从而增强面内电导。I 取代电解质嵌入电池后，改善了电化学性能。</p>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这一页只做文献信息和摘要破题。左边按题目、作者、单位、期刊和 DOI 依次扫过去，右边用两三句话把研究背景和核心内容讲清楚。</p>
+      <p>控制节奏，不要在这一页展开方法细节，重点是让听众先知道“这篇文章是谁做的、做了什么、为什么值得讲”。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="内容与论点1 · 背景与方法">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">文献信息</div>
+      <div class="nav-label nav-center">内容与论点1</div>
+      <div class="nav-label nav-right">结论与亮点</div>
+    </div>
+    <div class="page-body two-col">
+      <div class="col">
+        <div class="section-title">背景介绍</div>
+        <p>一般会从大的背景开始介绍，然后落到为什么要研究论文指定的内容中，要解决的问题上。</p>
+        <p>前期汇报不熟悉时，可以多阐述大背景，学习其中的表述逻辑和行业背景。</p>
+        <p>后期汇报快速带过大背景，多讲述这个具体体系中存在的问题，积累对细分领域中的现状和知识点。</p>
+      </div>
+
+      <div class="col">
+        <div class="section-title">方法介绍</div>
+        <p>实验会有各种合成手段，计算会有计算方案。有的文献在正文第二节，或者最后一节，有的放在附录文件中。</p>
+        <p>材料制备手段，表征手段，电池的性能表征，对于这些，需要大致了解原理，理解其中各种术语用意。</p>
+        <p>计算有密度泛函计算，需要列上各个参数并完整了解；后处理计算需列出对应公式，有相应代码的给出链接。</p>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这一页讲背景和方法，两栏分工要明确。左边讲为什么要做这个问题，右边讲作者用了什么实验或计算路径来回答它。</p>
+      <p>如果你对这篇文章还不够熟，背景可以讲得稍微多一点；如果已经很熟，就把时间多留给方法里的关键参数和逻辑链条。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="内容与论点1 · 发展逻辑">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">文献信息</div>
+      <div class="nav-label nav-center">内容与论点1</div>
+      <div class="nav-label nav-right">结论与亮点</div>
+    </div>
+    <div class="page-body two-col">
+      <div class="col">
+        <div class="section-title">发展进程</div>
+        <p>1、追求能量密度：促使科学家从水系电解液转向非水系电解液，诞生了锂离子体系。</p>
+        <p>问题：高电压体系下电解液分解；Li 金属负极枝晶；开始探索“稳定的电解质窗口”和“安全的负极材料”。</p>
+        <p>2、电极电位匹配：非水体系中，电解液能级窗口决定了电极的可用电压区间。</p>
+        <p>LUMO：电子最容易被填充的位置（即被还原）；HOMO：电子最容易被夺走的位置（即被氧化）。</p>
+        <p>3、电解液稳定性和界面工程：电解质研究的出发点不是找到一种新溶剂，而是让能级窗口与电极匹配。</p>
+      </div>
+
+      <div class="col">
+        <div class="section-title">正极材料发展逻辑：</div>
+        <p>1、层状结构：TiS2 —— LiCoO2；追求更高电压，改变阴离子电负性，实现高电位氧化还原对。</p>
+        <p>2、构型优化：层状 —— 尖晶石；追求高倍率与稳定性，结构三维化加化学掺杂。</p>
+        <p>3、安全性优先：从 Co/Ni 系 —— 磷酸盐（LiFePO4）；从能量密度与安全性折中，诱导效应设计稳定高价态。</p>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这一页继续讲内容与论点 1，可以理解为把研究问题放到更大的发展逻辑里。左边是问题演化，右边是材料体系演进。</p>
+      <p>实际使用时，把这里替换成与你论文最相关的那条技术主线，不要试图把整个领域都塞进去，抓一条最能支撑论文价值的主轴就够了。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="内容与论点2 · 图表组织">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">文献信息</div>
+      <div class="nav-label nav-center">内容与论点2</div>
+      <div class="nav-label nav-right">结论与亮点</div>
+    </div>
+    <div class="page-body two-col figure-page">
+      <div class="col">
+        <div class="section-title">图表组织建议</div>
+        <p>一般 article 会有 6-7 张图，letter 会有 3-4 张图。内容部分大概 2-3 页 PPT。</p>
+        <p>结果和讨论中每个小论点讨论后，一般会有一个大论点，也可自行总结。</p>
+        <div class="figure-slot">
+          <span>图表区域（直接放论文图 / 重绘图）</span>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="section-title">图注与论点</div>
+        <p>每页围绕 1-2 张关键图，图表横纵坐标轴介绍，理解图表数据所表达的内容。图表数据作为论据，论点在正文中。</p>
+        <div class="figure-slot">
+          <span>图号 + 图注位置</span>
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这里开始进入图表驱动的内容与论点 2。左边放图，右边放图注和一句话结论，避免整页都是文字。</p>
+      <p>讲的时候先交代图是什么，再说坐标轴和变量，最后再给出这张图支持的论点。顺序不要倒，否则听众很容易跟丢。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="内容与论点2 · 小论点">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">文献信息</div>
+      <div class="nav-label nav-center">内容与论点2</div>
+      <div class="nav-label nav-right">结论与亮点</div>
+    </div>
+    <div class="page-body two-col">
+      <div class="col">
+        <div class="section-title">图表解读</div>
+        <p>图表横纵坐标轴介绍，理解图表数据所表达的内容。图表数据作为论据，论点在正文中。</p>
+        <p>列出每张图给出的论点，结果和讨论中每个小论点讨论后，一般会有一个大论点，也可自行总结。</p>
+      </div>
+
+      <div class="col">
+        <div class="section-title">列出每张图给出的论点</div>
+        <ul class="pdf-list">
+          <li>小论点1</li>
+          <li>小论点2</li>
+          <li>小论点3</li>
+        </ul>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这一页把多个图对应的小论点收束起来。实际汇报时，可以一张图对应一个小论点，也可以两张图共同支撑一个小论点。</p>
+      <p>关键是让听众意识到，这些图不是散的，而是在逐步堆出一个更大的论证链条。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="结论与亮点">
+    <div class="page-band"></div>
+    <div class="top-nav">
+      <div class="nav-label nav-left">文献信息</div>
+      <div class="nav-label nav-center">内容与论点</div>
+      <div class="nav-label nav-right">结论与亮点</div>
+    </div>
+    <div class="page-body two-col summary-page">
+      <div class="col">
+        <div class="section-title">最后一般是汇总或者归纳每个图的大论点</div>
+        <p>最终给出文章工作的意义和成果。</p>
+        <ul class="pdf-list">
+          <li>大论点1</li>
+          <li>大论点2</li>
+          <li>大论点3</li>
+          <li>大论点4</li>
+        </ul>
+      </div>
+
+      <div class="col">
+        <div class="section-title">亮点总结</div>
+        <p>亮点一般会在背景介绍中给出，或者出现在结果讨论中。通过与现有该领域研究进行对比给出，或者该研究所强调的优异特性所体现。</p>
+        <p>通常需要读者自行体会总结，可以没有标准答案。</p>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>收尾页只做两件事：总结大论点，提炼亮点。左边尽量用并列条目把结论打平，右边再补一句这篇文章真正的新意在哪里。</p>
+      <p>如果听众最后只能记住一句话，那应该是你在这一页说出的那句价值判断。</p>
+    </aside>
+  </section>
+
+</div>
+<script src="../../../assets/runtime.js"></script>
+</body>
+</html>

@@ -1,0 +1,154 @@
+/* weekly-report-academic — PDF skeleton rebuilt from 文献汇报+工作汇报_v1.1.pdf */
+
+.tpl-weekly-report-academic {
+  --band-top: 14.2%;
+  --band-height: 3.07%;
+  --band-left: 0%;
+  --band-width: 100%;
+  --band-color: var(--accent, #4472C4);
+  --title-top: 4.6%;
+  --body-top: 20%;
+  --page-left: 4.8%;
+  --page-right: 4.8%;
+  --nav-left: 1.5%;
+  --nav-center: 44.2%;
+  --nav-right: 83.9%;
+  --ink: var(--text-1, #000000);
+  --ink-muted: var(--text-2, #2d2d2d);
+  background: var(--bg, #ffffff);
+  color: var(--ink);
+  font-family: var(--font-sans, 'Noto Sans SC', 'PingFang SC', -apple-system, sans-serif);
+}
+
+.tpl-weekly-report-academic .slide {
+  background: var(--bg, #ffffff);
+  padding: 0;
+  overflow: hidden;
+}
+
+.tpl-weekly-report-academic .page-band {
+  position: absolute;
+  top: var(--band-top);
+  left: var(--band-left);
+  width: var(--band-width);
+  height: var(--band-height);
+  background: var(--band-color);
+  z-index: 1;
+}
+
+.tpl-weekly-report-academic .page-title {
+  position: absolute;
+  top: var(--title-top);
+  left: 3.75%;
+  margin: 0;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ink);
+  z-index: 2;
+}
+
+.tpl-weekly-report-academic .top-nav {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.tpl-weekly-report-academic .nav-label {
+  position: absolute;
+  top: var(--title-top);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.tpl-weekly-report-academic .nav-left { left: var(--nav-left); }
+.tpl-weekly-report-academic .nav-center { left: var(--nav-center); }
+.tpl-weekly-report-academic .nav-right { left: var(--nav-right); }
+
+.tpl-weekly-report-academic .page-body {
+  position: absolute;
+  top: var(--body-top);
+  left: var(--page-left);
+  right: var(--page-right);
+  bottom: 6%;
+  z-index: 2;
+}
+
+.tpl-weekly-report-academic .agenda-body {
+  position: absolute;
+  top: 21.5%;
+  left: 5%;
+  right: 10%;
+  bottom: 8%;
+  z-index: 2;
+}
+
+.tpl-weekly-report-academic .agenda-group + .agenda-group {
+  margin-top: 7%;
+}
+
+.tpl-weekly-report-academic .agenda-group-title {
+  position: relative;
+  padding-left: 22px;
+  margin: 0 0 18px;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.tpl-weekly-report-academic .agenda-group-title::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  top: -1px;
+  font-size: 22px;
+}
+
+.tpl-weekly-report-academic .agenda-list {
+  margin: 0;
+  padding-left: 36px;
+  font-size: 18px;
+  line-height: 2.4;
+}
+
+.tpl-weekly-report-academic .single-col {
+  max-width: 92%;
+}
+
+.tpl-weekly-report-academic .section-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.tpl-weekly-report-academic p,
+.tpl-weekly-report-academic .number-list {
+  margin: 0 0 14px;
+  font-size: 18px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.tpl-weekly-report-academic .number-list {
+  padding-left: 26px;
+}
+
+.tpl-weekly-report-academic .number-list li + li {
+  margin-top: 4px;
+}
+
+.tpl-weekly-report-academic .page-count {
+  margin-top: 26px;
+}
+
+@media print {
+  .tpl-weekly-report-academic .slide {
+    page-break-after: always;
+  }
+}

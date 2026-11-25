@@ -1,0 +1,29 @@
+{
+  "suite": "native provider credential storage and OAuth API compatibility",
+  "command": "node --test research-host/compat/provider-auth/test/provider-auth.test.mjs",
+  "passed": 12,
+  "failed": 0,
+  "skipped": 0,
+  "runtime": "Selected installed managed Pi 1.3.0; native ModelRuntime and core/auth-storage.js",
+  "verified": [
+    "Provider metadata loads without creating auth.json or contacting a provider",
+    "Native locked API-key writes use private 0600 auth.json and preserve concurrent native writers",
+    "A saved credential becomes actual ModelRuntime.getAuth request auth after registry invalidation",
+    "Native config-value templates resolve only for deliberate credential resolution",
+    "Credential enumeration never executes saved command keys",
+    "Local OAuth manual and secret input, device notifications, cancellation, timeout and supersede",
+    "Local callback listeners close on cancellation and before superseding flows",
+    "Cancelled late credentials are discarded and submitted codes are never persisted or echoed in errors",
+    "Cross-type writes and API-row removal of OAuth credentials return conflict",
+    "Corrupt, symlinked and group/world-readable credential stores are refused without overwriting bytes",
+    "Stored OAuth without a registered login handler stays visible and removable",
+    "Custom Radius gateways do not offer the default Radius login"
+  ],
+  "fixtureScope": "Synthetic credentials and local callback listeners under /tmp only; no production credential changes or external provider/model requests",
+  "integration": "Root wires handle(input), onCredentialsChanged invalidation/native refresh, and dispose()",
+  "requirements": [
+    "Extension-owned OAuth providers must be registered into the host runtime; missing handlers return provider-auth-login-unavailable",
+    "Radius MCP follow-up requires injected radiusMcp.status/configure callbacks; unavailable wiring returns 503",
+    "A credential file with broader permissions requires owner-only permissions before this API writes it"
+  ]
+}

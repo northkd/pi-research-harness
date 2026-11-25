@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "sdk": "1.3.0",
+  "subagents": "0.79.2",
+  "autoModel": "0.8.4",
+  "checks": [
+    "parent: exact launch preserved with auto-model enabled",
+    "parent: real response metadata mismatch still rejected",
+    "parent: provider text cannot impersonate a pre-dispatch guard failure",
+    "parent: later extension switch blocked before provider request",
+    "parent: legacy router stops before provider request",
+    "parent: native virtual selection can route to a physical model",
+    "runner: exact launch preserved with auto-model enabled",
+    "runner: real response metadata mismatch still rejected",
+    "runner: provider text cannot impersonate a pre-dispatch guard failure",
+    "runner: later extension switch blocked before provider request",
+    "runner: legacy router stops before provider request",
+    "runner: native virtual selection can route to a physical model",
+    "inherited child model preserved",
+    "unavailable model does not fall back to shared defaults",
+    "model text does not participate in identity verification",
+    "existing transcript model cannot override the resolved launch model"
+  ],
+  "networkAttempts": 0
+}

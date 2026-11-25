@@ -1,0 +1,303 @@
+{
+  "checks": [
+    {
+      "name": "native authentication, matched build and research API",
+      "passed": true
+    },
+    {
+      "name": "legacy research deep link opens new workbench",
+      "passed": true
+    },
+    {
+      "name": "one access-mode selection persists through the real authenticated service without task setup",
+      "passed": true
+    },
+    {
+      "name": "unsent folder draft survives all primary views",
+      "passed": true
+    },
+    {
+      "name": "empty files navigation retains research tab and visible tree",
+      "passed": true
+    },
+    {
+      "name": "file tree opens a real project document",
+      "passed": true
+    },
+    {
+      "name": "unsaved Markdown edit survives primary views without writing disk",
+      "passed": true
+    },
+    {
+      "name": "no-session Science has an explicit unavailable state",
+      "passed": true
+    },
+    {
+      "name": "real ended transcript stays readable",
+      "passed": true
+    },
+    {
+      "name": "current usage is accessible from workbench",
+      "passed": true
+    },
+    {
+      "name": "source timing excludes first-output wait and persistence delay in the actual performance panel",
+      "passed": true
+    },
+    {
+      "name": "SDK-only and legacy timing stay explicit estimates without invented first-output times",
+      "passed": true
+    },
+    {
+      "name": "legacy folder editor route keeps workspace navigation and return",
+      "passed": true
+    },
+    {
+      "name": "demo data is explicitly identified",
+      "passed": true
+    },
+    {
+      "name": "recorded multi-agent creators form a three-level canvas hierarchy",
+      "passed": true
+    },
+    {
+      "name": "stacked subagents animate and spread within the canvas without a dialog",
+      "passed": true
+    },
+    {
+      "name": "narrow canvas retains nested collaborators and inline execution cards",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary overview stays reachable",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary claims stays reachable",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary audit stays reachable",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary all stays reachable",
+      "passed": true
+    },
+    {
+      "name": "workbench secondary workflow stays reachable",
+      "passed": true
+    },
+    {
+      "name": "research overview shows usage without budget configuration or task-grant forms",
+      "passed": true
+    },
+    {
+      "name": "main-agent selection survives reload and routes a simulated task to the selected session",
+      "passed": true
+    },
+    {
+      "name": "all five stage cards can launch independently while execution records stay collapsed",
+      "passed": true
+    },
+    {
+      "name": "simulated access choice survives switching views and can return to default",
+      "passed": true
+    },
+    {
+      "name": "intake drawer retains its page and closes with Escape",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 1920px",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 1440px",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 1100px",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 768px",
+      "passed": true
+    },
+    {
+      "name": "light layout no document overflow at 360px",
+      "passed": true
+    },
+    {
+      "name": "dark theme preserves workspace navigation",
+      "passed": true
+    },
+    {
+      "name": "dark layout no document overflow",
+      "passed": true
+    },
+    {
+      "name": "no unexpected API failures",
+      "passed": true
+    }
+  ],
+  "errors": [],
+  "cancellations": [
+    {
+      "message": "Canceled",
+      "phase": "unsaved Markdown edit survives primary views without writing disk"
+    }
+  ],
+  "requests": [
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/session/c4e77e03-3a08-4684-822f-da171105e59b/vault-bindings",
+      "status": 404,
+      "sessionId": null,
+      "error": "session-unknown"
+    },
+    {
+      "path": "/api/plugins/flows/files",
+      "status": 404,
+      "sessionId": "c4e77e03-3a08-4684-822f-da171105e59b",
+      "error": "session not found"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/session/b8758ff9-c684-4331-a2bb-d9af8f8c3b60/vault-bindings",
+      "status": 404,
+      "sessionId": null,
+      "error": "session-unknown"
+    },
+    {
+      "path": "/api/plugins/flows/files",
+      "status": 404,
+      "sessionId": "b8758ff9-c684-4331-a2bb-d9af8f8c3b60",
+      "error": "session not found"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/session/36580540-087c-40b1-9058-58657985c582/vault-bindings",
+      "status": 404,
+      "sessionId": null,
+      "error": "session-unknown"
+    },
+    {
+      "path": "/api/plugins/flows/files",
+      "status": 404,
+      "sessionId": "36580540-087c-40b1-9058-58657985c582",
+      "error": "session not found"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    },
+    {
+      "path": "/api/browser/profiles",
+      "status": 404,
+      "sessionId": null,
+      "error": "not_found",
+      "message": "No API route for GET /api/browser/profiles"
+    }
+  ],
+  "browser": "141.0.7390.37",
+  "syntheticData": true,
+  "browserPlugin": {
+    "enabled": false,
+    "loaded": false,
+    "unavailableRouteVerified": true
+  },
+  "finishedAt": "2026-11-06T11:41:17.423Z",
+  "passed": 35,
+  "failed": 0,
+  "capturedScreenshots": [
+    "17-full-access-1440.png",
+    "01-real-workbench-1440.png",
+    "02-conversation-1440.png",
+    "03-files-1440.png",
+    "04-science-1440.png",
+    "10-session-chat-1440.png",
+    "11-usage-drawer-1440.png",
+    "15-speed-measured-1440.png",
+    "16-speed-sdk-estimate-1440.png",
+    "05-workbench-demo-1440.png",
+    "06-agents-demo-1440.png",
+    "12-subagents-spread-1440.png",
+    "13-subagents-spread-360.png",
+    "18-research-overview-1440.png",
+    "19-main-agent-selection-1440.png",
+    "20-independent-stage-editor-1440.png",
+    "21-workflow-stage-actions-1440.png",
+    "07-intake-drawer-1440.png",
+    "08-workbench-light-1920.png",
+    "08-workbench-light-1440.png",
+    "08-workbench-light-1100.png",
+    "08-workbench-light-768.png",
+    "08-workbench-light-360.png",
+    "09-workbench-dark-1440.png"
+  ],
+  "publishedScreenshots": [
+    "../screenshots/17-full-access-1440.png",
+    "../screenshots/18-research-overview-1440.png",
+    "../screenshots/19-main-agent-selection-1440.png",
+    "../screenshots/20-independent-stage-editor-1440.png",
+    "../screenshots/21-workflow-stage-actions-1440.png",
+    "../screenshots/08-workbench-light-360.png"
+  ]
+}

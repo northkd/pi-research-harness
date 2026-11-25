@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mineru-skill"
+version = "3.3.1"
+description = "AI-Native, zero-dependency CLI that parses PDF/Office/image files into clean Markdown via MinerU (Agent + Standard APIs, auto-routing)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [
+    {name = "Nebutra", email = "hello@nebutra.com"}
+]
+keywords = ["pdf", "markdown", "parser", "latex", "obsidian", "ai-skill", "ocr", "pdf-to-markdown", "document-parser", "ai-agent", "docx", "claude-code"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+# Zero runtime dependencies — the core tool uses only the Python standard library.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+# Optional delivery sinks that rely on third-party libraries. The core and the
+# other 15 sinks remain zero-dependency; these are lazy-imported only when used.
+wps = ["html-for-docx>=1.1.5"]  # Markdown -> DOCX for the WPS / 金山文档 sink
+split = ["pypdf>=4.0.0"]        # split oversized PDFs past the API page caps
+local = ["pymupdf4llm>=0.0.17"] # offline --engine local for born-digital PDFs
+# Roam uses the official (git-only) SDK for the peer-redirect/auth transport:
+#   pip install "roam-client @ git+https://github.com/Roam-Research/backend-sdks.git#subdirectory=python"
+roam = ["roam-client @ git+https://github.com/Roam-Research/backend-sdks.git#subdirectory=python"]
+all = ["html-for-docx>=1.1.5"]
+
+[project.urls]
+Homepage = "https://github.com/Nebutra/MinerU-Skill"
+Documentation = "https://github.com/Nebutra/MinerU-Skill#readme"
+Repository = "https://github.com/Nebutra/MinerU-Skill.git"
+Issues = "https://github.com/Nebutra/MinerU-Skill/issues"
+
+[project.scripts]
+mineru-parse = "scripts.mineru:main"
+mineru-mcp = "scripts.mineru_mcp:main"
+
+[tool.setuptools.packages.find]
+include = ["scripts*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311", "py312"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Live tests hit the real MinerU API; they are deselected by default and only run
+# when explicitly requested with `-m live` and MINERU_LIVE=1.
+addopts = "-m 'not live'"
+markers = [
+    "live: real-network tests against the production MinerU API (no mocks)",
+]

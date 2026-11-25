@@ -1,0 +1,216 @@
+/**
+ * Behaviour-preservation census for the fixed-tick conversion (F2).
+ *
+ * The 10 client test files converted from fixed-tick barriers to `waitFor`
+ * must keep exactly the tests they had at the merge base: same ids, same
+ * count, in the same order — no assertion quietly added, renamed, or dropped
+ * by the mechanical conversion. The census below is the merge-base snapshot;
+ * this test fails the moment a conversion (or anything after it) alters a
+ * test's identity in those files.
+ *
+ * If you are ADDING a test to one of these files on purpose, update the
+ * census in the same commit — a visible, reviewed change, exactly like the
+ * wording-locked description digests in the skill-frontmatter guard.
+ *
+ * See change: make-test-suite-deterministic (test-plan F2).
+ */
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+/** file (relative to client src) → test ids in declaration order, at merge base. */
+const CENSUS: Record<string, string[]> = {
+  "hooks/__tests__/useImagePaste.test.ts": [
+    "starts with empty pendingImages and null error",
+    "appends a pasted PNG to pendingImages",
+    "rejects unsupported mime with a transient error",
+    "removeImage removes by index",
+    // Added by this change — test-plan F1: convergence must come from polling
+    // even when decode lands later than any fixed tick count.
+    "converges when decode lands later than any fixed tick count (F1)",
+    "clearImages empties the list and clears errors",
+    "uses caller-owned `images` as the source of truth",
+    "routes paste through onImagesChange (caller owns array)",
+    "removeImage in controlled mode emits the new array via onImagesChange",
+    "clearImages in controlled mode emits an empty array",
+    "does NOT mutate local state when controlled",
+  ],
+  "components/__tests__/WorktreeActionsMenu.test.tsx": [
+    "renders all four action buttons for a worktree session when gh is available",
+    "hides the PR button when gh is NOT resolvable (no existing PR)",
+    // "View PR" button replaced by the PR status segment — renamed / replaced
+    // by change: redesign-composer-session-strip (D6).
+    "shows the PR segment (no 'View PR' button) when gh missing but gitPrNumber is set",
+    "does not render for a session without gitWorktree",
+    "an existing PR suppresses Open PR even when gh is available",
+    "clicking 'Merge' opens the merge confirm dialog",
+    "clicking 'Close' opens the close-worktree dialog",
+    "Push action shows a success toast on ok response",
+    "PR failure shows human-readable label + stderr in <details>",
+    "flips the mobile sheet to left-0 when the pane's right anchor cannot fit",
+    "keeps the sheet right-0 (default) when the pane has ample room to the left",
+    "renders a ⋯ trigger instead of inline buttons",
+    "opens an action sheet on click revealing the actions and the PR segment",
+    "mobile sheet hides until the trigger is clicked",
+    // Added by change: migrate-workspace-menus-to-portal-layer (mobile sheet
+    // portaled to the layer root at z-popover).
+    "sheet panel has fixed and z-popover, not absolute or z-50 (overlay-layering)",
+    "outside click closes the mobile sheet",
+    // Added by change: redesign-composer-session-strip (test-plan #E5, D6).
+    "merged → ⑂ #747 merged, no checks marker",
+    "closed → ⊘ #747 closed, no checks marker",
+    "legacy (number only) → #747 only",
+    "URL absent → plain text, no <a>",
+    "mergeIsPrimary fills Merge; otherwise outlined",
+    "disabled (working): Merge is never filled; actions are aria-disabled and focusable with a reason",
+    "each segment draws its own hairline (the root is display:contents)",
+    "mobile trigger meets the 24 px target",
+  ],
+  "components/__tests__/PluginStalenessBanner.test.tsx": [
+    "renders nothing when /api/health.bundleHash matches the embedded hash",
+    // Added by this change — test-plan F1: a client-less plugin no longer
+    // fabricates a hash delta, so the banner stays hidden on a parity host.
+    "F1 stays hidden on a parity host whose plugin set includes a client-less plugin",
+    "renders the banner when hashes differ",
+    "Refresh button calls window.location.reload",
+    "Dismiss button hides the banner and records sessionStorage",
+    "does not render when dismissed in sessionStorage",
+    "renders nothing when /api/health response is malformed",
+  ],
+  "components/__tests__/UnifiedPackagesSection.auto-check.test.tsx": [
+    "fires /api/packages/check-updates once after installed list loads",
+    "re-fires check-updates on package_operation_complete WS event",
+    "does NOT re-fire on package_operation_complete with success=false",
+    "dedupes overlapping triggers (single in-flight check)",
+  ],
+  "components/__tests__/PathPicker.test.tsx": [
+      "should render input with initial path and fetch entries",
+      "should show loading state while fetching",
+      "should show .. entry for non-root directories",
+      "should send typed partial as q query via debounced fetch",
+      "should abort in-flight request when partial changes",
+      "should descend into directory on click",
+      "should navigate to parent on .. click",
+      "should move highlight with arrow keys",
+      "should descend on Tab with highlighted entry",
+      "should auto-complete single match on Tab (after server filter returns 1)",
+      "Enter on trailing-slash current directory calls onSelect and closes",
+      "Enter on exact-match partial selects that entry's full path",
+      "Enter on single candidate (no exact match) completes without closing",
+      "Enter on non-existent typo path is a no-op (not onSelect)",
+      "Select button click follows Enter rules (no onSelect on typo)",
+      "Select button click on trailing-slash path calls onSelect",
+      "should disable Select button when input is empty",
+      "should call onCancel when Cancel button clicked",
+      "should call onCancel on Escape",
+      "should show git and pi indicators after lazy classify resolves",
+      "should show 'No subdirectories' for empty directory",
+      "should default to home directory when no initialPath",
+      "does not clobber a path typed while the default-directory fetch is in flight",
+      "should reset highlight when typing",
+      "arrow-down navigates into the create-here row",
+      "shows inline 'Create \\\"<name>\\\" here' row when partial has no exact match",
+      "hides 'Create here' row when partial exactly matches an entry",
+      "clicking 'Create here' calls mkdir and descends into new path",
+      "footer ＋ New folder button opens name entry; Enter creates and descends",
+      "Escape in footer name entry closes without creating",
+      "surfaces server error and does not descend on mkdir failure",
+      "renders the remedy hint (not a bare error) on a 403 network_not_allowed browse denial",
+      "offers a Settings → Servers affordance on a network_not_allowed denial",
+      "renders existing error copy for a non-denial browse failure",
+      "renders git/pi badges after the lazy classifyPaths phase resolves",
+      "swallows classifyPaths failures silently (no error surfaced, no badges)",
+      "aborts phase-2 classifyPaths when fetchDir is re-invoked",
+      "Enter on C:\\\\Users\\\\me\\\\ calls onSelect with the input value and closes",
+      "Select button on C:\\\\Users\\\\me\\\\ calls onSelect",
+      "Enter on UNC \\\\\\\\server\\\\share\\\\ calls onSelect",
+      "F1 — single click selects one row without navigating or committing",
+      "F2 — double click opens the folder; dialog stays mounted",
+      "F3 — selecting a row does not remount it (dblclick needs the same node)",
+      "F5 — clicking empty list space clears the selection",
+      "F6 — `..` navigates up on a single click",
+      "F7 — opening a folder clears the selection and reports the new folder",
+      "F8 — typed navigation clears the selection",
+      "F10 — a stale fetch never overrides the latest navigation",
+      "F11 — touch tap opens the folder and selects nothing",
+      "F12 — long-press boundary: 399 ms is a tap, 400 ms selects and swallows the click",
+      "F13 — finger travel beyond 10 px cancels the long-press",
+      "F14 — in select mode taps toggle; deselecting the last row leaves select mode",
+      "F15 — grammar follows the latest pointerdown, not a media query",
+      "F16 — row contextmenu is suppressed for touch only",
+      "F20 — Tab is not trapped in the path input in multi-select",
+      "F21 — arrows move/extend, Enter opens, platform go-up returns (Windows: Alt↑)",
+      "F21b — macOS: ⌘↓ opens, ⌘↑ goes up, Alt↑ does nothing",
+      "E6m — macOS: ⌘-click toggles, Ctrl-click does not add",
+      "F22 — Space does not toggle selection",
+      "F23 — a11y: multiselectable listbox, activedescendant, no checkbox or chevron",
+      "F23b — selected rows carry a check mark (shape, not colour only)",
+      "F23c — an empty folder explains the next step",
+      "F24 — the live region announces the selected count",
+      "F28 — activation (dblclick, Enter) browses and never calls onSelect",
+      "E10 — `added` marker joins pinned keys by pathKey (trailing separator drift)",
+      "E10b — `added` marker collapses Windows case drift",
+      "E11 — modifier+A selects every row, added ones included",
+      "E12 — Backspace and modifier+A edit text while the input has a pending edit",
+      "E13 — isHome is true only for the first no-path browse result",
+      "E14 — with an explicit initialPath no folder is treated as home",
+      "X1 — a failed open keeps the folder and the selection",
+      "X2 — network-guard denial still renders the remedy in multi-select",
+      "renders no emoji glyphs and gives every row an SVG path",
+      "keeps git / pi as text badges",
+  ],
+  "components/__tests__/ServerSelector.test.tsx": [
+    "does NOT probe on mount—only when dropdown opens",
+    "probes once when dropdown opens, not again until it reopens",
+    "renders Unreachable badge for localhost when probe fails",
+    "unreachable entry is disabled and does NOT fire onSwitch when clicked",
+    "renders CORS-blocked (not Unreachable) for a LAN host whose probe fails",
+    "shows spinner on the entry that matches inFlightSwitchKey",
+    // Added by change: migrate-workspace-menus-to-portal-layer (dropdown
+    // portaled to the layer root at z-popover).
+    "dropdown panel uses fixed z-popover, not absolute z-50 (overlay-layering)",
+    "outside click closes the dropdown",
+  ],
+  "components/__tests__/PiUpdateBadge.test.tsx": [
+    "renders nothing when there are no updates",
+    "renders a count badge when updates available",
+    "navigates to settings packages tab on click",
+    "sets aria-label with plural-aware wording",
+  ],
+  "__tests__/chat-input-draft-integration.test.tsx": [
+    "draft survives unmount/remount of the chat view",
+    "drafts do not leak between sessions on switch",
+    "hydrates drafts from localStorage on mount",
+    "persists drafts through the debounced effect (write path)",
+    "clears localStorage when the draft becomes empty",
+  ],
+  "hooks/__tests__/usePiChangelog.test.tsx": [
+    "does NOT fetch when enabled is false",
+    "fetches once when enabled and resolves data",
+    "does not fetch when from or to is missing",
+    "clears state when enabled flips to false",
+    "refetches on pi_core_update_complete WS event for the same pkg",
+    "ignores pi_core_update_complete for unrelated packages",
+    "surfaces fetch error without throwing",
+  ],
+};
+
+/**
+ * Extract `it(` / `test(` first-string arguments, single-line, in declaration
+ * order. None of the census files use `it.each`, so a flat scan is complete.
+ */
+function extractTestIds(text: string): string[] {
+  const ids: string[] = [];
+  for (const m of text.matchAll(/(?:^|[^.\w])(?:it|test)\(\s*([`'"])(.*?)\1\s*,/g)) {
+    ids.push(m[2]);
+  }
+  return ids;
+}
+
+describe("fixed-tick conversion preserves behaviour (F2)", () => {
+  it.each(Object.keys(CENSUS))("%s keeps its merge-base test ids", (file) => {
+    const text = readFileSync(join(import.meta.dirname, "..", file), "utf8");
+    expect(extractTestIds(text)).toEqual(CENSUS[file]);
+  });
+});

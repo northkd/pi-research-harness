@@ -1,0 +1,380 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1382.4pt" height="1389.6pt" viewBox="0 0 1382.4 1389.6" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <title>科学记录、评审与授权边界</title>
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:title>科学记录、评审与授权边界</dc:title>
+    <dc:description>运行结果、记录状态、验收字段与用户授权分别保留 依据源码绘制；不代表真实研究任务已运行。</dc:description>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>scripts/render-readme-diagrams.py</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 1389.6
+L 1382.4 1389.6
+L 1382.4 0
+L 0 0
+z
+" style="fill: #081423"/>
+  </g>
+  <g id="axes_1">
+   <g id="node-figure-number">
+    <path d="M 70.56 46.08
+L 106.56 46.08
+Q 119.52 46.08 119.52 59.04
+L 119.52 80.64
+Q 119.52 93.6 106.56 93.6
+L 70.56 93.6
+Q 57.6 93.6 57.6 80.64
+L 57.6 59.04
+Q 57.6 46.08 70.56 46.08
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-raw-evidence">
+    <path d="M 70.56 169.2
+L 1311.84 169.2
+Q 1324.8 169.2 1324.8 182.16
+L 1324.8 264.24
+Q 1324.8 277.2 1311.84 277.2
+L 70.56 277.2
+Q 57.6 277.2 57.6 264.24
+L 57.6 182.16
+Q 57.6 169.2 70.56 169.2
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-log-claim">
+    <path d="M 70.56 338.4
+L 1311.84 338.4
+Q 1324.8 338.4 1324.8 351.36
+L 1324.8 480.24
+Q 1324.8 493.2 1311.84 493.2
+L 70.56 493.2
+Q 57.6 493.2 57.6 480.24
+L 57.6 351.36
+Q 57.6 338.4 70.56 338.4
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-review-round">
+    <path d="M 70.56 568.8
+L 642.24 568.8
+Q 655.2 568.8 655.2 581.76
+L 655.2 667.44
+Q 655.2 680.4 642.24 680.4
+L 70.56 680.4
+Q 57.6 680.4 57.6 667.44
+L 57.6 581.76
+Q 57.6 568.8 70.56 568.8
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-review-gate">
+    <path d="M 70.56 734.4
+L 642.24 734.4
+Q 655.2 734.4 655.2 747.36
+L 655.2 890.64
+Q 655.2 903.6 642.24 903.6
+L 70.56 903.6
+Q 57.6 903.6 57.6 890.64
+L 57.6 747.36
+Q 57.6 734.4 70.56 734.4
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-claim-gate">
+    <path d="M 740.16 568.8
+L 1311.84 568.8
+Q 1324.8 568.8 1324.8 581.76
+L 1324.8 764.64
+Q 1324.8 777.6 1311.84 777.6
+L 740.16 777.6
+Q 727.2 777.6 727.2 764.64
+L 727.2 581.76
+Q 727.2 568.8 740.16 568.8
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-publication-authorization">
+    <path d="M 740.16 856.8
+L 1311.84 856.8
+Q 1324.8 856.8 1324.8 869.76
+L 1324.8 991.44
+Q 1324.8 1004.4 1311.84 1004.4
+L 740.16 1004.4
+Q 727.2 1004.4 727.2 991.44
+L 727.2 869.76
+Q 727.2 856.8 740.16 856.8
+z
+" clip-path="url(#p8080befe9e)" style="fill: #27251f; stroke: #eac57c; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-supervision-side-channel">
+    <path d="M 70.56 1080
+L 1311.84 1080
+Q 1324.8 1080 1324.8 1092.96
+L 1324.8 1283.04
+Q 1324.8 1296 1311.84 1296
+L 70.56 1296
+Q 57.6 1296 57.6 1283.04
+L 57.6 1092.96
+Q 57.6 1080 70.56 1080
+z
+" clip-path="url(#p8080befe9e)" style="fill: #0c1c2f; stroke: #2a4964; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-new-material-checkpoint">
+    <path d="M 92.16 1180.8
+L 390.24 1180.8
+Q 403.2 1180.8 403.2 1193.76
+L 403.2 1243.44
+Q 403.2 1256.4 390.24 1256.4
+L 92.16 1256.4
+Q 79.2 1256.4 79.2 1243.44
+L 79.2 1193.76
+Q 79.2 1180.8 92.16 1180.8
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-three-review-dimensions">
+    <path d="M 520.56 1180.8
+L 818.64 1180.8
+Q 831.6 1180.8 831.6 1193.76
+L 831.6 1243.44
+Q 831.6 1256.4 818.64 1256.4
+L 520.56 1256.4
+Q 507.6 1256.4 507.6 1243.44
+L 507.6 1193.76
+Q 507.6 1180.8 520.56 1180.8
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="node-scoped-restriction">
+    <path d="M 948.96 1180.8
+L 1290.24 1180.8
+Q 1303.2 1180.8 1303.2 1193.76
+L 1303.2 1243.44
+Q 1303.2 1256.4 1290.24 1256.4
+L 948.96 1256.4
+Q 936 1256.4 936 1243.44
+L 936 1193.76
+Q 936 1180.8 948.96 1180.8
+z
+" clip-path="url(#p8080befe9e)" style="fill: #102439; stroke: #6adbe7; stroke-width: 1.512; stroke-linejoin: miter"/>
+   </g>
+   <g id="line2d_1">
+    <path d="M 57.6 1317.6
+L 1324.8 1317.6
+" clip-path="url(#p8080befe9e)" style="fill: none; stroke: #2a4964; stroke-linecap: square"/>
+   </g>
+   <g id="edge-explicit-log-and-claim">
+    <path d="M 691.2 277.2
+L 691.2 335.985047
+" clip-path="url(#p8080befe9e)" style="fill: none; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+    <path d="M 694.512 329.361047
+L 691.2 335.985047
+L 687.888 329.361047
+z
+" clip-path="url(#p8080befe9e)" style="fill: #6adbe7; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+   </g>
+   <g id="edge-record-review-path">
+    <path d="M 356.4 493.2
+L 356.4 566.385047
+" clip-path="url(#p8080befe9e)" style="fill: none; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+    <path d="M 359.712 559.761047
+L 356.4 566.385047
+L 353.088 559.761047
+z
+" clip-path="url(#p8080befe9e)" style="fill: #6adbe7; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+   </g>
+   <g id="edge-record-claim-path">
+    <path d="M 1026 493.2
+L 1026 566.385047
+" clip-path="url(#p8080befe9e)" style="fill: none; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+    <path d="M 1029.312 559.761047
+L 1026 566.385047
+L 1022.688 559.761047
+z
+" clip-path="url(#p8080befe9e)" style="fill: #6adbe7; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+   </g>
+   <g id="edge-trace-to-review-gate">
+    <path d="M 356.4 680.4
+L 356.4 731.985047
+" clip-path="url(#p8080befe9e)" style="fill: none; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+    <path d="M 359.712 725.361047
+L 356.4 731.985047
+L 353.088 725.361047
+z
+" clip-path="url(#p8080befe9e)" style="fill: #6adbe7; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+   </g>
+   <g id="edge-accepted-to-user-authorization">
+    <path d="M 1026 777.6
+L 1026 854.385047
+" clip-path="url(#p8080befe9e)" style="fill: none; stroke-dasharray: 17.28,12.96; stroke-dashoffset: 0; stroke: #eac57c; stroke-width: 2.16; stroke-linecap: round"/>
+    <path d="M 1029.312 847.761047
+L 1026 854.385047
+L 1022.688 847.761047
+z
+" clip-path="url(#p8080befe9e)" style="fill: #eac57c; stroke-dasharray: 17.28,12.96; stroke-dashoffset: 0; stroke: #eac57c; stroke-width: 2.16; stroke-linecap: round"/>
+   </g>
+   <g id="edge-checkpoint-to-supervisor">
+    <path d="M 403.2 1218.96
+L 505.185047 1218.96
+" clip-path="url(#p8080befe9e)" style="fill: none; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+    <path d="M 498.561047 1215.648
+L 505.185047 1218.96
+L 498.561047 1222.272
+z
+" clip-path="url(#p8080befe9e)" style="fill: #6adbe7; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+   </g>
+   <g id="edge-review-to-scoped-policy">
+    <path d="M 831.6 1218.96
+L 933.585047 1218.96
+" clip-path="url(#p8080befe9e)" style="fill: none; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+    <path d="M 926.961047 1215.648
+L 933.585047 1218.96
+L 926.961047 1222.272
+z
+" clip-path="url(#p8080befe9e)" style="fill: #6adbe7; stroke: #6adbe7; stroke-width: 2.16; stroke-linecap: round"/>
+   </g>
+   <g id="text_1">
+    <text style="font-size: 24.48px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: middle; fill: #6adbe7" x="88.56" y="76.05855" transform="rotate(-0 88.56 76.05855)">03</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 38.88px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="140.4" y="76.30605" transform="rotate(-0 140.4 76.30605)">科学记录、评审与授权边界</text>
+   </g>
+   <g id="text_3">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #bacbdd" x="57.6" y="127.925325" transform="rotate(-0 57.6 127.925325)">运行结果、记录状态、验收字段与用户授权分别保留</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 28.8px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="77.76" y="210.123" transform="rotate(-0 77.76 210.123)">原始输出与可追溯路径</text>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 23.04px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="77.76" y="250.1784" transform="rotate(-0 77.76 250.1784)">命令 · 配置 · 结果文件 · 退出状态；由主会话检查并组织</text>
+   </g>
+   <g id="text_6">
+    <g id="patch_2">
+     <path d="M 646.848 322.776
+L 735.552 322.776
+L 735.552 294.048
+L 646.848 294.048
+z
+" style="fill: #081423"/>
+    </g>
+    <text style="font-size: 20.16px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: middle; fill: #f1f7fd" x="691.2" y="314.1261" transform="rotate(-0 691.2 314.1261)">显式登记</text>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 27.36px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="77.76" y="378.17685" transform="rotate(-0 77.76 378.17685)">research_loop · log / claim</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 23.04px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="77.76" y="418.6584" transform="rotate(-0 77.76 418.6584)">登记尝试、主张与证据路径；以下是可录入的主张状态</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 23.04px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="77.76" y="460.7208" transform="rotate(-0 77.76 460.7208)">supported · partially_supported · refuted · undetermined · failed</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 20.88px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: middle; fill: #bacbdd" x="691.2" y="538.619175" transform="rotate(-0 691.2 538.619175)">由主会话分别调用；不是自动串行验收</text>
+   </g>
+   <g id="text_11">
+    <text style="font-size: 27.36px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="77.76" y="608.57685" transform="rotate(-0 77.76 608.57685)">review-round</text>
+   </g>
+   <g id="text_12">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="77.76" y="649.625738" transform="rotate(-0 77.76 649.625738)">记录实际模型、评分、memory 与 trace</text>
+   </g>
+   <g id="text_13">
+    <text style="font-size: 27.36px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="77.76" y="773.604" transform="rotate(-0 77.76 773.604)">review-gate</text>
+   </g>
+   <g id="text_14">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="77.76" y="812.645325" transform="rotate(-0 77.76 812.645325)">核对轨迹、响应去重与收敛条件</text>
+   </g>
+   <g id="text_15">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="77.76" y="846.905738" transform="rotate(-0 77.76 846.905738)">accepted = 评审契约通过</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="77.76" y="878.885325" transform="rotate(-0 77.76 878.885325)">不等于科学事实被自动证实</text>
+   </g>
+   <g id="text_17">
+    <text style="font-size: 25.92px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="747.36" y="608.75505" transform="rotate(-0 747.36 608.75505)">claim-gate · 验收字段契约</text>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="747.36" y="653.089725" transform="rotate(-0 747.36 653.089725)">证据路径 · 至少两个不同模型 family</text>
+   </g>
+   <g id="text_19">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="747.36" y="691.385738" transform="rotate(-0 747.36 691.385738)">反例检查 completed · 无未解义务</text>
+   </g>
+   <g id="text_20">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="747.36" y="728.405325" transform="rotate(-0 747.36 728.405325)">不会自动读证据或运行陪审团</text>
+   </g>
+   <g id="text_21">
+    <g id="patch_3">
+     <path d="M 875.48355 831.3651
+L 1176.51645 831.3651
+L 1176.51645 801.648
+L 875.48355 801.648
+z
+" style="fill: #081423"/>
+    </g>
+    <text style="font-size: 20.16px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: middle; fill: #eac57c" x="1026" y="822.7152" transform="rotate(-0 1026 822.7152)">已有内部 accepted，且用户确认</text>
+   </g>
+   <g id="text_22">
+    <text style="font-size: 27.36px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #eac57c" x="747.36" y="897.9192" transform="rotate(-0 747.36 897.9192)">用户确认 → publish</text>
+   </g>
+   <g id="text_23">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="747.36" y="937.925325" transform="rotate(-0 747.36 937.925325)">记录该主张的对外发布授权</text>
+   </g>
+   <g id="text_24">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="747.36" y="971.765325" transform="rotate(-0 747.36 971.765325)">仅写授权记录；不执行外部发布</text>
+   </g>
+   <g id="text_25">
+    <text style="font-size: 25.92px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="79.2" y="1118.6307" transform="rotate(-0 79.2 1118.6307)">主线监督（启用后）· 异步旁路</text>
+   </g>
+   <g id="text_26">
+    <text style="font-size: 20.88px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #bacbdd" x="79.2" y="1154.219175" transform="rotate(-0 79.2 1154.219175)">主会话提交研究节点；不作为上述各步的串行批准</text>
+   </g>
+   <g id="text_27">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="99.36" y="1209.365325" transform="rotate(-0 99.36 1209.365325)">新材料 + 研究节点</text>
+   </g>
+   <g id="text_28">
+    <text style="font-size: 20.16px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="99.36" y="1241.4861" transform="rotate(-0 99.36 1241.4861)">触发有界证据审查</text>
+   </g>
+   <g id="text_29">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="527.76" y="1209.456" transform="rotate(-0 527.76 1209.456)">方向 / 科学 / 健康</text>
+   </g>
+   <g id="text_30">
+    <text style="font-size: 20.16px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="527.76" y="1241.4861" transform="rotate(-0 527.76 1241.4861)">分别记录评审结果</text>
+   </g>
+   <g id="text_31">
+    <text style="font-size: 22.32px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #6adbe7" x="956.16" y="1209.365325" transform="rotate(-0 956.16 1209.365325)">有据的 OFF_TRACK</text>
+   </g>
+   <g id="text_32">
+    <text style="font-size: 20.16px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #f1f7fd" x="956.16" y="1241.4861" transform="rotate(-0 956.16 1241.4861)">仅限制具体路径</text>
+   </g>
+   <g id="text_33">
+    <text style="font-size: 20.16px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #bacbdd" x="79.2" y="1281.8061" transform="rotate(-0 79.2 1281.8061)">缺信息或审查失败：记录盲点；不会冻结整个项目</text>
+   </g>
+   <g id="text_34">
+    <text style="font-size: 19.44px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #bacbdd" x="57.6" y="1351.073025" transform="rotate(-0 57.6 1351.073025)">依据源码绘制；不代表真实研究任务已运行</text>
+   </g>
+   <g id="text_35">
+    <text style="font-size: 18.72px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: end; fill: #bacbdd" x="1324.8" y="1351.34235" transform="rotate(-0 1324.8 1351.34235)">源码映射：workflow-source-map.md</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p8080befe9e">
+   <rect x="0" y="0" width="1382.4" height="1389.6"/>
+  </clipPath>
+ </defs>
+</svg>
