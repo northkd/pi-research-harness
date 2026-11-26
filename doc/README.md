@@ -1,65 +1,37 @@
-# Pi Research Harness：Subagents 与 Multi-Agents 使用手册
+# Subagents 与 Multi-Agents 使用手册
 
-本目录详细说明当前版本（`main`）中 **Subagents（会话内受控子代理）** 与 **Multi-Agents（`res-workflow` 独立科研协作者与 Plan 调度工作流）** 的配置、路由规则、调用方式、团队通信协议以及 Dashboard 前端交互。
-
----
-
-## 一、核心定位对比：什么时候用 Subagent，什么时候用 Multi-Agent？
-
-| 维度 | Subagent（`subagent` 工具） | Multi-Agent（`research_session` / `research_dispatch`） |
-| --- | --- | --- |
-| **驱动底座** | `pi-subagents@0.79.2` | `extensions/research-loop` + `extensions/research-host/services` |
-| **运行形态** | 隶属于当前父会话的子运行上下文 | 独立顶级 Pi 进程（拥有独立 `sessionId`、工作区登记、收件箱与生命周期） |
-| **典型分工** | 多目录代码/日志并行检索（`scout`）、改动复核（`reviewer`）、隔离构建修复（`worker`）、外部检索（`researcher`）、高难证据核验（`evidence-auditor`）、计划一致性审查（`oracle`）、外部 CLI 咨询（`agy-advisor`） | 加入已确认 `res-workflow` 科研目标后的分阶段科研拆解、并行实验、跨模型交叉评审、独立探索分支 |
-| **模型选择** | 通用工具角色由父 Agent 显式按三档配额顺位传入 `model`；专职 `research-*` 角色按会话/模型策略绑定；`agy-advisor` 先经用户确认模型与推理档位 | 按独立 Pi 会话模型配置运行；支持异构模型族交叉评审 |
-| **编排机制** | 父会话直接按需单发/并发调用（`async: true`，建议单节点默认 3 槽位） | 严格遵循 **「先 Plan 后 Work」**：通过 `research_dispatch` 提交 1~64 项有依赖关系（`dependsOn`）的持久 DAG，自动排队补位 |
-| **通信协议** | 子向父使用 `contact_supervisor`；完成结果回传父会话 | 纵向父子与横向同 `plan` 队友均使用持久消息工具 `research_communication` |
-| **前端呈现** | 调度拓扑中挂在所属会话下的 **`L3 Subagent 角色组` → `L4 多次执行`**（同图内联展开） | **`L0 主 Agent` → `L1 Plan` → `L2 Multi-Agent`**（1:N 映射、实时三态、Plan 进度条） |
+本手册帮你把 Pi Research Harness 的两套多代理协作能力用起来，并把日常配置、提问写法、界面操作和常见坑一次讲清楚。
 
 ---
 
-## 二、本次版本重点更新概览
+## 一、先分清两种模式：我该用哪一个？
 
-1. **Subagent 首轮直开与目录扩容**
-   - 通过 `patches/subagents/0013-advertised-catalog-upgrade-0792.patch` 将常驻广播角色上限由 `16` / `12 KiB` 扩展到 **`25` 个 / `20 KiB`**，仓库预设 `18` 个常驻角色（7 个通用角色 + 11 个专职角色）均可完整注入，不再触发目录截断。
-   - 在运行时子代理配置 `extensions/subagent/config.json` 中启用 `"toolActivation": "eager"`，消除旧版首轮需先调用 `subagents_enable` 的二段延迟；非科研与科研会话均可在首轮直接使用 `subagent`。
-2. **动态路由与三档模型配额顺位**
-   - `extensions/research-loop/src/delegation-policy.mjs` 根据当前工具集自动切换引导：非 `res-workflow` 会话优先使用 7 个通用工具型角色与按需调用 `agy-advisor`；加入 `res-workflow` 后开放完整科研角色矩阵与 `research_dispatch` 图谱。
-   - `extensions/research-loop/model-policy.json` 明确 **工人档（`worker`）→ 指挥档（`commander`）→ 智力档（`intelligence`）** 三档优先队列与降级顺位，并移除已下线的 `cliproxy/deepseek-pro[1m]` 与 `gpt-6-astra*`。
-3. **新增确认式 `agy-advisor` 外部咨询角色**
-   - 定义文件：`agents/agy-advisor.md`（默认由 `cliproxy/gpt-6.2-astra(high)[1m]` 驱动）。
-   - 执行「先只读发现 live 模型与 `--effort` → 经父会话 `ask_user` 请用户确认模型、档位与外发范围 → 在受控目录 `AGY_WORKDIR` 内调用 `agy-subagent`」三步闭环。
-4. **`res-workflow`「先 Plan 后 Work」、1:N Plan 拓扑与前端进度 UI**
-   - 主 Agent 下发任务、状态提示与后端接口统一围绕 `Plan` 驱动；支持 1 个 `Plan` 对应 N 个 `Multi-Agent` 任务及依赖 DAG。
-   - Dashboard 提供主 Agent 级 **Plan 完成进度条** 与 **4 层同图内联拓扑（L0 主 Agent → L1 Plan → L2 Multi-Agent → L3 Subagent → L4 多次执行）**：点击 `Plan` 或 `Multi-Agent` 节点直接在原画布内展开/收起下一层，不跳转页面、不切换画布；点「详情与纠偏」再打开完整会话详情弹窗。
-5. **同 `plan` Multi-Agent 横向兄弟通信（策略 A 三态）**
-   - `research_dispatch action="status"` 返回本 `plan` 的有界 `peers` 花名册，含精确工作三态：`in_progress`（进行中）、`queued`（排队中）、`ended`（已结束）。
-   - `research_communication` 支持同 `plan` 队友点对点消息、延迟备忘（`queued` 不唤醒、不插队）、`to="peers"` 广播（仅 `progress` / `decision`）、单对队友 8 条（4 轮）上限以及 `peerSettled` 优雅退休保护。
+| 你当前的需求 | 推荐方式 | 怎么理解它 | 看哪篇文档 |
+| --- | --- | --- | --- |
+| “帮我查查整个仓库哪里用到这个接口”<br>“并行检查这几个报错日志”<br>“让审核助手看看我刚才改的代码”<br>“请外部 `agy` 模型给个第二意见” | **Subagents** | **同一次聊天里派出的“临时帮手”**：直接从主对话里起多个轻量子任务并发跑完，汇总结论给当前会话，不需要立项也不用专门看全局看板。 | [**Subagents 实用指南**](subagents.md) |
+| “这是一个完整课题：我要一边调研文献、一边跑实验脚本、还要独立评审反例，完成后汇总成结论和报告” | **Multi-Agents**（`res-workflow`） | **项目级的“协作科研团队”**：围绕绑定好的研究目录，由主 Agent **先交 Plan（任务分工图）** 给你确认，再自动派生并管理多个**拥有独立对话窗口的正式协作者**，实时在网页看板追踪进度、排队、纠偏与相互传话。 | [**Multi-Agents 实用指南**](multi-agents.md) |
+
+> **它们可以配合使用**：一个正式的 Multi-Agent 协作者在做实验或理论推导时，如果自己也需要临时查文件、审脚本，会自动再在自己内部派出 Subagent 小帮手。
 
 ---
 
-## 三、文档导航与关联源码索引
+## 二、上手前必查配置总表（普通用户照这张表配即可）
 
-- **[Subagents 详细使用指南](subagents.md)**
-  - 常驻目录扩容与 `toolActivation: "eager"` 配置
-  - 通用角色、科研专职角色、外部 CLI 角色清单与适用场景
-  - 三档模型池配额顺位（`worker` / `commander` / `intelligence`）与调用模板
-  - `agy-advisor` 模型发现、用户确认与 `agy-subagent` 执行流程
-- **[Multi-Agents 详细使用指南](multi-agents.md)**
-  - `res-workflow` 加入流程与「先 Plan 后 Work」生命周期
-  - `research_dispatch` 首次分工确认、全量队列（≤ 64 任务）、并发与恢复操作
-  - Dashboard 前端交互：Plan 完成进度条、L0–L4 同图内联拓扑、三态标识与详情弹窗
-  - 同 `plan` 兄弟通信（策略 A 三态、广播、8 条防循环限制与 `peerSettled`）
+运行 `bash scripts/install.sh` 后，请按顺序核对以下几项（核心功能不依赖 `agy`，可按需选用）：
 
-### 关键配置与实现文件索引
+| 编号 | 你要配什么 | 文件/操作入口 | 不配会怎样 | 是否必需 |
+| --- | --- | --- | --- | --- |
+| 1 | **模型账号 / API 密钥** | 启动 `./bin/pi-research` 输入 `/login`；或复制 `$AGENT_DIR/models.example.json` 为 `models.json` 填 API；或用 `scripts/sync-cliproxy.mjs` | 模型无法发起对话，报未认证/无模型 | **必需** |
+| 2 | **三档调度模型池** | 仓库根目录 `extensions/research-loop/model-policy.json` | 默认写的是 `cliproxy/...` 模型名；**不用 cliProxy 的用户如果不改成自己账号有的模型名，派 Subagent 时会报模型不可用** | **若不用 `cliproxy` 则必改** |
+| 3 | **Subagent 首轮直开配置** | 新建 `$AGENT_DIR/extensions/subagent/config.json`，写入 `"toolActivation": "eager"` | 未创建时，部分环境首轮聊天无法直接看到 `subagent` 工具 | **强烈建议配置** |
+| 4 | **Dashboard 与同步服务** | 终端 1 运行 `./bin/pi-research-dashboard`<br>终端 2 运行 `./bin/pi-research-workbench-sync` | 仅终端能聊；不跑终端 2 时，网页工作台收不到 Multi-Agent 实时进度和拓扑图 | 用网页工作台 / Multi-Agent 时**必需** |
+| 5 | **`agy` 外部分析（按需）** | 提前安装并登录本机 `agy` CLI（`$HOME/.local/bin/agy` 或设 `AGY_BIN`） | 核心 Subagent/Multi-Agent 照常工作，但不能调用 `agy-advisor` / `research-agy` | 可选 |
 
-| 类别 | 路径 | 职责 |
-| --- | --- | --- |
-| 三档模型策略 | [`extensions/research-loop/model-policy.json`](../extensions/research-loop/model-policy.json) | `intelligence` / `commander` / `worker` 模型顺序与降级链 |
-| 动态委派路由 | [`extensions/research-loop/src/delegation-policy.mjs`](../extensions/research-loop/src/delegation-policy.mjs) | 按激活工具区分独立/工作台引导、默认模型模板与超限读取提醒 |
-| 子代理默认配置 | [`config/settings.example.json`](../config/settings.example.json) | 7 个通用常驻角色（`advertise: true`）与 6 个外部 CLI（`thinking: false`）覆写 |
-| 专项角色定义 | [`agents/`](../agents) | 11 个仓库内置专项/科研/外部咨询角色（含 `agy-advisor.md`） |
-| Subagent 补丁与清单 | [`config/subagents-v020.json`](../config/subagents-v020.json) / [`patches/subagents/`](../patches/subagents) | `pi-subagents@0.79.2` 的调度与 `25` 角色 / `20 KiB` 目录上限补丁 |
-| 宿主调度与兄弟通信 | [`extensions/research-host/services/`](../extensions/research-host/services) | `research-dispatch-service.mjs`、`research-communication-service.mjs`、`research-session-service.mjs` 等 |
-| 工具客户端实现 | [`extensions/research-loop/src/`](../extensions/research-loop/src) | `workbench-dispatch-tool.mjs`、`workbench-communication-tool.mjs`、`workbench-context.mjs` |
-| Dashboard 前端视图 | [`patches/dashboard-v0.20/overlay/packages/client/src/components/research/`](../patches/dashboard-v0.20/overlay/packages/client/src/components/research) | `research-plan-topology.ts`、`ResearchPlanProgressBar.tsx`、`ResearchAgentCanvas.tsx` 等 |
+（上表中的 `$AGENT_DIR` 默认为 `~/.local/share/pi-research-harness/agent`，若设置过 `PI_RESEARCH_AGENT_DIR` 则为其对应目录。）
+
+---
+
+## 三、下一步阅读
+
+1. **[Subagents 使用指南（配置、角色表与日常提问写法）](subagents.md)**
+2. **[Multi-Agents 使用指南（网页操作步骤、Plan 进度与拓扑图）](multi-agents.md)**

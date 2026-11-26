@@ -1,16 +1,58 @@
-# Subagents 使用详细指南
+# Subagents 使用指南：配置、提问写法与外部咨询
 
-本文档说明 Pi Research Harness 中会话内子代理（基于 `pi-subagents@0.79.2`）的配置结构、激活方式、角色分工、三档模型调度顺位以及 `agy-advisor` 外部分析流程。
+Subagents（会话内子代理）让你在同一个对话窗口里，自动把“范围很大、可以拆开并行、或者需要换个视角复核”的工作分派给专职小帮手去做，主对话只接收精简结论与证据路径，不会被海量日志或源码刷屏。
 
 ---
 
-## 一、首轮可用配置与目录扩容
+## 一、从零配置（3 分钟完成）
 
-### 1. 解除 `subagents_enable` 二段延迟（首轮直开）
+> 本节中的 `$AGENT_DIR` 指你的配置目录，默认是 `~/.local/share/pi-research-harness/agent`（如自定义了环境变量 `PI_RESEARCH_AGENT_DIR`，请换成该路径）。
 
-在默认安装或运行时 `<agentDir>/extensions/subagent/config.json`（常见路径为 `~/.pi/agent/extensions/subagent/config.json` 或 `$PI_RESEARCH_AGENT_DIR/extensions/subagent/config.json`）中，配置 `"toolActivation": "eager"`：
+### 1. 确保配好可用的大模型 & 更新 `model-policy.json`
+
+首先确认你已经通过以下**任一方式**让 Pi 能正常调用大模型：
+- 在 `./bin/pi-research` 中用 `/login` + `/model` 登录并选好模型；或
+- 复制 `$AGENT_DIR/models.example.json` 为 `$AGENT_DIR/models.json`，填入你的 `baseUrl`、`apiKey` 与可用模型；或
+- 若本机运行了 CLIProxyAPI（`http://127.0.0.1:8317/v1`），执行：
+  ```bash
+  export PI_RESEARCH_PROXY_API_KEY="your-proxy-key"
+  node scripts/sync-cliproxy.mjs "$AGENT_DIR" --set-default
+  ```
+
+**⚠️ 关键一步：检查模型分配文件 `extensions/research-loop/model-policy.json`**
+
+通用工具型子代理（如 `scout`、`worker`、`reviewer`）不锁死模型，而是由主 Agent 按任务轻重从 [`extensions/research-loop/model-policy.json`](../extensions/research-loop/model-policy.json) 的三个档位依次挑模型：
+- `worker`（工人档）：日常检索、跑脚本、小修改，追求快与省额度（默认列表优先 Flash 系列）；
+- `commander`（指挥档）：代码审校、多步方案比对与宏观规划；
+- `intelligence`（智力档）：疑难根因排查、顶层理论突破。
+
+**如果 `$AGENT_DIR/models.json` 里不是预设的 `cliproxy/...` 模型名**，请直接打开仓库里的 [`extensions/research-loop/model-policy.json`](../extensions/research-loop/model-policy.json)，把 `intelligence` / `commander` / `worker` 下的 `models`（以及需要时的 `fallbackChain`）数组改成你真实能调通的模型 ID（格式通常为 `provider/model-id`，例如你在 `/model` 里看到的完整名称）：
 
 ```json
+{
+  "tiers": {
+    "intelligence": {
+      "models": ["your-provider/your-strongest-reasoning-model"]
+    },
+    "commander": {
+      "models": ["your-provider/your-planner-or-review-model"]
+    },
+    "worker": {
+      "models": ["your-provider/your-fast-cheap-model"],
+      "fallbackChain": ["your-provider/your-backup-model"]
+    }
+  }
+}
+```
+
+### 2. 创建 Subagent 首轮配置（必做推荐）
+
+安装脚本不会主动写子代理运行时配置。请运行下面命令生成 `$AGENT_DIR/extensions/subagent/config.json`，开启 `"toolActivation": "eager"`，让聊天**首轮就能直接调用 `subagent`** 并限制合理并发：
+
+```bash
+AGENT_DIR="${PI_RESEARCH_AGENT_DIR:-$HOME/.local/share/pi-research-harness/agent}"
+mkdir -p "$AGENT_DIR/extensions/subagent"
+cat > "$AGENT_DIR/extensions/subagent/config.json" <<'EOF'
 {
   "globalConcurrencyLimit": 3,
   "maxActiveAsyncRunsPerSession": 8,
@@ -19,172 +61,109 @@
   "maxSubagentDepth": 2,
   "toolActivation": "eager"
 }
+EOF
 ```
 
-- **开启后**：不论是普通非科研对话还是 `res-workflow` 科研工作台会话，首轮系统提示都会直接挂载 `subagent` 工具，无需先触发 `subagents_enable` 再等下一轮才可见。
-- **未开启或兜底机制**：若某些环境尚未配置 `eager` 而只存在 `subagents_enable`，`extensions/research-loop/src/delegation-policy.mjs` 会自动识别并提示先在授权后调用 `subagents_enable`。
-- **安全边界不变**：首轮直接可见不代表绕过约束；用户设定的**只读模式**、**禁止委派**（`noDelegate`）以及**禁止外发**（`exportLimited`）规则依然在每轮与每次 `tool_call` 上强校验。
+参数人话解释：
+- `"toolActivation": "eager"`：第一轮对话立刻把 `subagent` 工具放出来给模型用。
+- `"globalConcurrencyLimit": 3`：同时最多并发 3 个子代理，既快又不容易一下打爆 API 限流或本机内存。
+- `"maxSubagentDepth": 2`：子代理最多再嵌套一层子任务，避免无限递归。
 
-### 2. 常驻广播目录上限扩容
+### 3.（可选）如果要用 `agy-advisor` 调用外部 `agy`
 
-`pi-subagents@0.79.2` 原生默认仅允许 `MAX_ADVERTISED_AGENTS = 16`、`MAX_CATALOG_BYTES = 12_288`。补丁 `patches/subagents/0013-advertised-catalog-upgrade-0792.patch`（配合 `patches/subagents/0012-live-scheduling-catalog-0792.patch`，在 `scripts/install.sh` 执行 `node scripts/apply-subagents-v020.mjs "$AGENT_DIR"` 时自动应用与校验 SHA-256）在 `src/agents/advertised-agent-prompt.js` 中将其扩展为：
-
-- `MAX_ADVERTISED_AGENTS = 25`
-- `MAX_CATALOG_BYTES = 20_480`
-
-这样可以完整容纳本仓库自带的 **18 个常驻角色**，同时预留裕度给本地或扩展包额外安装的专职科研角色（例如 `research-explorer`、`research-reframer`、`research-strategist` 等）。
+只有你想使用 `agy-advisor`、`research-agy`、`research-agy-sci` 时才需要这一步：
+1. 在本机安装 Google Antigravity CLI（`agy`），默认位置应在 `$HOME/.local/bin/agy`（如果装在别处，启动 Pi 前加上 `export AGY_BIN=/你的路径/agy`）。
+2. 在终端提前运行一次 `$HOME/.local/bin/agy models`，确认它能正常登录并列出可用模型。
+3. 不使用 `agy` 时完全不影响其他 Subagents 和 Multi-Agents。
 
 ---
 
-## 二、角色 catalog 与分工选择
+## 二、日常在聊天里怎么用？
 
-### 1. 7 个通用工具型角色（非固定模型，由父会话动态传 `model`）
+### 方式 A：不用记名字，直接提需求（自动触发）
 
-配置于 `config/settings.example.json` 的 `subagents.agentOverrides`（均设 `advertise: true`、`thinking: "max"`，**无固定 `model` 覆写**）：
+当你在对话框提出下面这类任务时，主 Agent 会自动决定要不要分派、派几个、选什么档位模型：
 
-| 角色名 | 定位与职责 | 推荐模型档位 | 权限说明 |
+- **适合自动派 Subagent 的问题**：
+  - “帮我全面排查一下 `src/` 目录下所有接口哪里没校验权限。” → 主 Agent 会并行派多个 `scout` 分片检索，只把结论带回主对话。
+  - “这三个报错日志文件都很长，帮我分别定位根因再对比一下。” → 并发派子代理读长日志。
+  - “写完补丁后请另找独立视角做一轮改动审查。” → 派 `reviewer`（指挥档模型）审查 diff。
+- **不会乱派的情况**：
+  - “帮我看看 `README.md` 第 10 行写了什么”或只改一个明确的小函数 → 主 Agent 直接读写完成，不绕弯子。
+
+### 方式 B：直接点名指定角色（精确控制）
+
+你也可以在提问里直接说出角色名称，例如：
+- `请用 scout 帮我搜一下项目里所有数据库迁移脚本的位置。`
+- `让 worker 修复 tests/a.test.mjs 里的路径报错并重跑验证。`
+- `请用 evidence-auditor 用高阶推理核查这两个结论之间的逻辑矛盾。`
+
+**常用角色速查表：**
+
+| 角色名 | 擅长做什么 | 能不能改文件/跑命令 | 通常何时出现 |
 | --- | --- | --- | --- |
-| `scout` | 未知多目录结构探索、长日志或跨文件检索 | `worker`（工人档） | 工具权限保持**只读检索**，未扩大写权限 |
-| `researcher` | 外部网页/文档资料检索与多来源整理 | `worker`（工人档） | 受 `exportLimited` / 外网边界约束 |
-| `worker` | 隔离的脚本编写、报错定位、构建与局部修复 | `worker`（工人档） | 非只读模式下可执行受限修改 |
-| `delegate` | 有界通用独立子任务委派 | `worker`（工人档） | 按子任务具体要求声明读写与产物路径 |
-| `reviewer` | 代码改动 diff 审查、合规核查与回归检验 | `commander`（指挥档） | 侧重独立复核，避免自审自写 |
-| `oracle` | 多步规划拆解、方案一致性审计与宏观判断 | `commander`（指挥档） | 用于关键分支前审与对照 |
-| `evidence-auditor` | 高难度证据链交叉验证、底层根因定位 | `intelligence`（智力档） | 疑难问题与严肃证伪场景 |
+| **`scout`** | 跨多目录搜源码、读长日志、梳理项目结构 | **不能**（严格只读） | 普通聊天 & 科研均最常用 |
+| **`researcher`** | 查外部文档/网页资料与多源对照 | 只读/检索（受外发限制） | 查库文档、对比方案 |
+| **`worker`** | 独立写脚本、修局部 Bug、执行构建验证 | **能**（需非只读状态） | 独立小开发与修测试 |
+| **`reviewer`** | 独立复核代码改动、规范性与潜在 Bug | 只读评审为主 | 改完代码后双盲复核 |
+| **`oracle`** | 多步骤方案对比、架构一致性检查 | 只读分析 | 做重大改动前先审一次 |
+| **`evidence-auditor`** | 高难度证据链核对与疑难根因定位 | 深度审查 | 普通模型没啃下来的难题 |
+| **`delegate`** | 边界清楚的通用独立子任务 | 按任务描述 | 通用独立工作 |
+| **`agy-advisor`** | 通过本机 `agy` CLI 调外部强模型给第二意见 | 仅执行用户确认后的外部咨询 | 想借助本机 `agy` 生态时 |
 
-### 2. 11 个仓库内置专项与科研角色（`agents/*.md`，`advertise: true`）
+> **如果你接入了科研工作台（`res-workflow`）**，还会解锁一排科研专职角色：`research-literature`（文献溯源）、`research-theory`（理论建模，只读）、`research-numerics`（数值/实验脚本运行）、`research-critic`（苛刻挑刺与找反例，只读）、`research-ssh`（远程集群任务）、`research-web-oracle` 等。平时工程与文件整理仍建议走上面通用角色，把科研角色留给正式科研问题。
 
-| 角色文件 | 角色名 | 核心能力与工具边界 |
-| --- | --- | --- |
-| `agents/research-literature.md` | `research-literature` | 文献方法溯源与引文核查（含 `web_enable`、`web_search`、`fetch_content`、`document_parse`、`sci_find` 等） |
-| `agents/research-theory.md` | `research-theory` | 理论推导与建模（只读搜索工具，禁用继承技能、`defaultContext: fresh`） |
-| `agents/research-numerics.md` | `research-numerics` | 计算、数值模拟与实验脚本核验（含 `bash`、`write`、`edit`、`pi_lens_*` 等） |
-| `agents/research-critic.md` | `research-critic` | 苛刻对抗评审与反例核查（只读，不含 `write`/`edit`/`bash`） |
-| `agents/research-mainline-supervisor.md` | `research-mainline-supervisor` | 主线收敛监督与进度审计（仅 `read, grep, find, ls`） |
-| `agents/research-model-assessor.md` | `research-model-assessor` | 模型交付诊断与路由质量评估（仅 `read, grep, find, ls`） |
-| `agents/research-web-oracle.md` | `research-web-oracle` | 结合 MCP 的高阶信息与外部核验（含 `mcp`） |
-| `agents/research-ssh.md` | `research-ssh` | 远程算力节点与队列作业调度（仅 `ssh-read, ssh-bash`，叶子节点） |
-| `agents/research-agy.md` | `research-agy` | 非交互式 `agy-subagent` 通用独立第二意见适配器（`thinking: false`） |
-| `agents/research-agy-sci.md` | `research-agy-sci` | 非交互式 `agy-subagent` 科研专项独立评审适配器（`thinking: false`） |
-| **`agents/agy-advisor.md`** | **`agy-advisor`** | **新增智力档外部分析代理**：自动发现可用 `agy` 模型与 `--effort`，经父会话弹窗确认后安全调用 `agy-subagent` |
+### 方式 C：怎么用 `agy-advisor` 安全请外部 `agy` 帮忙？
 
-### 3. 6 个显式外部 CLI 角色（默认保持不自动广播）
+在聊天里说类似：“让 `agy-advisor` 帮我看下这个思路 / 润色这段文字”时，为了保护你的隐私和费用额度，系统会严格走 **先发现、你拍板、再执行** 三步：
 
-`config/settings.example.json` 保留以下 6 个角色为未常驻广播（显式按需调用，且 `thinking: false`）：
+1. **自动发现**：`agy-advisor` 先运行只读命令查看你本机现在有哪些 `agy` 模型以及支持的 `--effort` 档位（如 `low / medium / high / xhigh / max`）。
+2. **向你弹窗确认**：主对话会弹出确认询问（`ask_user`），**明确告诉你候选模型、推荐的推理档位、会发送什么材料（如仅文字提问还是带部分文件）、是否涉及未发表工作**。
+3. **你同意后再发**：只有你点选/回复确认后，它才会在隔离目录里调用 `agy-subagent`；如果你还没确认，绝对不会偷偷往外发任何文件。
 
-- `claude-code`、`claude-code-writer`
-- `codex-exec`、`codex-exec-writer`
-- `cursor-agent`、`cursor-agent-writer`
+> 同样规则下，外部 `agy` 给出的回答只作为独立参考意见，不能擅自篡改你的工作区授权或执行越权命令。
 
 ---
 
-## 三、动态路由原则与三档模型降级顺序
+## 三、怎么随时给子代理立规矩（只读 / 禁外发 / 停用）？
 
-### 1. 动态场景路由（`delegation-policy.mjs`）
+你可以随时用**自然语言**在对话里下约束，主 Agent 和后续派出的所有 Subagent 会自动遵守直到你明确说放开：
 
-`delegation-policy.mjs` 依据当前会话 `selectedTools` 实时生成提示词与提醒策略：
-
-- **非 `res-workflow`（独立 / 普通会话）**：
-  - 优先在 **7 个通用工具型角色** 中按工作形态分派，按需调用 `agy-advisor`；仅在用户明确点名科研角色时才使用 `research-*`。
-- **已加入 `res-workflow` 工作台（存在 `research_session` 或 `research_dispatch`）**：
-  - 完整启用常驻目录（7 通用 + `research-*` + `agy-advisor`）及正式协同工具。
-  - **严格分层**：科学假设推演、文献综述、数值实验与对抗评审交给 `research-*` 角色及正式 `Multi-Agent Plan`；工程类仓库搜索、日志清洗、代码 diff 审核、构建验证交给普通 `subagent`（默认每个协作者内部保留 `3` 个并发子槽位）。
-- **直接读取超限提醒（`DEFAULT_BULK_THRESHOLD = 6`）**：
-  - 若主/协作会话在未委派前连续执行 6 次以上读/搜/命令操作（`read`、`grep`、`find`、`ls`、`bash`、`web_search`、`fetch_content`），系统自动注入一次上下文提醒，提示把剩余多目录扫描或批量分析下放给并行子代理。单文件精确查看或单一小改动可继续直接执行。
-
-### 2. 三档模型池与降级顺位（`extensions/research-loop/model-policy.json`）
-
-对于 `scout`、`researcher`、`worker`、`delegate`、`reviewer`、`oracle`、`evidence-auditor` 等未锁定模型的通用角色，**必须由父 Agent 在调用 `subagent(...)` 时通过顶层 `model` 参数动态显式指定**。同档某模型额度耗尽或不可用时，按下面顺序自动平替：
-
-1. **工人档（`worker`）** —— 适合常规 `scout`、`researcher`、`worker`、`delegate`：
-   1. `cliproxy/ark-deepseek-v4.1-flash[1m]`
-   2. `cliproxy/ark-glm-5.3-flash[1m]`
-   3. `cliproxy/bailian-qwen3.8-flash[1m]`
-   4. `cliproxy/bailian-deepseek-flash-1017[1m]`
-   5. `cliproxy/sqface-deepseek-flash-1017[1m]`
-   6. `cliproxy/deepseek-flash[1m]`
-   7. `cliproxy/gpt-6.1-terra(max)[1m]`
-   8. `cliproxy/gpt-6.1-terra-max[1m]`
-   9. 兜底回退链（`fallbackChain`）：`cliproxy/bailian-deepseek-pro-0813[1m]`
-   > 注：先依次耗尽全部 Flash 池，再切 Terra 两个 ID，最后使用保留的 `cliproxy/bailian-deepseek-pro-0813[1m]`；旧 ID `cliproxy/deepseek-pro[1m]` 已完整移除。
-
-2. **指挥档（`commander`）** —— 适合 `reviewer`、`oracle`、宏观规划与对抗复核：
-   1. `cliproxy/gpt-6.2-sol(max)[1m]`
-   2. `cliproxy/bailian-glm-5.3[1m]`
-   3. `cliproxy/ark-glm-5.3[1m]`
-   4. `cliproxy/bailian-kimi-k3.1-pro[1m]`
-   5. `cliproxy/bailian-kimi-k3[1m]`
-   6. `cliproxy/bailian-qwen3.8-max-0902[1m]`
-   > 注：`6.2-sol(max)` 额度耗尽后**直接切换 GLM-5.3**，其后依次为 Kimi、Qwen。
-
-3. **智力档（`intelligence`）** —— 适合 `evidence-auditor` 及最高阶理论、根因突破：
-   1. `cliproxy/gpt-6.2-astra(high)[1m]`（首选）
-   2. `cliproxy/gpt-6.2-astra(xhigh)[1m]`（当问题未解决且确实需要最高档推理时升级）
-   > 注：旧 `gpt-6-astra*` 已移除。
-
-### 3. 标准调用 Schema
-
-务必把 `agent`、`task`、`model` 放在顶层字段，运行控制在 `options` 内（不要使用旧式位置参数写法）：
-
-```json
-{
-  "agent": "scout",
-  "task": "排查 packages/server/src/ 中所有 res-workflow dispatch 路由入口，仅返回短结论与相对文件路径。",
-  "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
-  "async": true,
-  "options": {
-    "context": "fresh"
-  }
-}
-```
-
-**最佳实践**：
-- 给每个子代理明确“单一边界问题 + 期望产出形态 + 仅返回短结论和相对路径”，避免把整段完整对话或长日志文件带回主上下文。
-- 默认优先 `"async": true` 并发分派相互独立的小任务（如多个互不重叠目录的并行 `scout`），每批次尊重 `globalConcurrencyLimit: 3`。
+- **只许查不许改**：“接下来进入只读模式 / 只分析，不要修改任何项目文件。” → 系统会阻止改动工作区文件（注意：如果你只说“保护 `data/` 只读，改 `src/`”，系统也能精准识别，不会一刀切锁死 `src/`）。
+- **禁止外发**：“后续禁止外发数据 / 不要调用外部模型。” → 会拦截面向外部提供商或第三方 CLI 的调用。
+- **暂不用子代理**：“下面你自己直接做，不要调用 subagent。” → 主 Agent 会暂停分派并自己动手。
+- **恢复**：“现在可以修改文件了 / 可以继续使用子代理。” → 在人工交互输入后才会解除对应限制（子代理自己的输出或程序报错无法伪造解锁）。
 
 ---
 
-## 四、`agy-advisor`：交互发现并用户确认后调用外部 `agy` CLI
+## 四、进阶参考（自定义配置与运维校验）
 
-当主 Agent 或研究任务需要借助本地 `agy` CLI 生态模型做高阶第二意见、深度分析或重写润色时，分派给 **`agy-advisor`**。
+以下内容面向需要二次定制模型顺序、检查扩展补丁的用户：
 
-### 1. 代理运行规格
-
-- **驱动模型**：`cliproxy/gpt-6.2-astra(high)[1m]`（若未解决可在征得父级同意后建议升级 `cliproxy/gpt-6.2-astra(xhigh)[1m]`），`thinking: max`。
-- **可用工具**：`read, grep, find, ls, bash, contact_supervisor`。
-- **上下文隔离**：`defaultContext: fresh`，`inheritSkills: false`。
-
-### 2. 强制三步工作流
-
-1. **步骤 1 · 只读资源发现（无需提前执行审批）**：
-   `agy-advisor` 通过 `bash` 运行：
-   ```bash
-   "$HOME/.local/bin/agy" models
-   "$HOME/.local/bin/agy" --help
+1. **查看/调整默认角色属性**：全局默认角色行为见 [`config/settings.example.json`](../config/settings.example.json)（已覆盖常驻的 7 个通用角色及按需显式调用的 6 个外部 CLI 适配：`claude-code`、`codex-exec`、`cursor-agent` 及其 `-writer`）；仓库专项角色 Markdown 定义都在 [`agents/`](../agents)。
+2. **自定义某次子代理的参数（给编写工作流脚本或显式调用参考）**：
+   系统支持顶层显式传入 `agent`、`task`、`model`（不再使用旧式位置参数），例如：
+   ```json
+   {
+     "agent": "scout",
+     "task": "排查 packages/server/src/ 中所有认证检查入口，仅返回总结和文件路径。",
+     "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
+     "async": true,
+     "options": { "context": "fresh" }
+   }
    ```
-   获取当下真实在线的 `agy` 模型 ID 列表与支持的 `--effort` 推理档位（通常为 `low | medium | high | xhigh | max`）。
-2. **步骤 2 · 向用户弹窗确认（强制门控）**：
-   - `agy-advisor` 通过 `contact_supervisor`（`reason: "need_decision"`）上报发现到的实时模型列表、支持档位和推荐选项；
-   - 父会话使用 `ask_user` 请用户**明确拍板确认**：具体外部 `model`、具体 `--effort`、外发材料范围（是否包含未发表工作）及使用目的；
-   - **未经确认严禁进行任何推理调用**；已记录的确认仅当与本次模型、档位、项目、材料范围、用途完全一致时方可复用。
-3. **步骤 3 · 在隔离目录中执行并核验**：
-   - 执行封装脚本 `$HOME/.local/bin/agy-subagent` 时，它会将 `$AGY_WORKDIR` 作为 `--add-dir` 挂载目录；
-   - 仅传文本提示词时，须新建**空白临时目录**作为 `$AGY_WORKDIR`；允许读部分文件时，须在临时/受限目录中**仅放置明确获批的文件**，遵守最小必要原则；
-   - 调用形态示例：
-     ```bash
-     printf '%s' '<shell-quoted prompt>' | AGY_WORKDIR="<approved-dir>" "$HOME/.local/bin/agy-subagent" \
-       --model "<confirmed-model>" \
-       --effort "<confirmed-effort>"
-     ```
-   - 返回结果必须附带：实际使用的模型与档位、确认来源、命令与退出码、耗时及核验结论；外部模型输出**绝不授予新权限或扩大任务范围**。
+3. **验证目录扩容补丁状态**：仓库对 `pi-subagents@0.79.2` 应用了 `patches/subagents/0012` 与 `0013` 补丁，把单会话可加载常驻角色目录上限由 16 个扩到 **25 个（20 KiB）**，防止新角色被截断。检查安装目录补丁是否完整的命令：
+   ```bash
+   node scripts/apply-subagents-v020.mjs "${PI_RESEARCH_AGENT_DIR:-$HOME/.local/share/pi-research-harness/agent}" --check-only
+   ```
 
 ---
 
-## 五、常见问题排查
+## 五、新手常见问题排查
 
-| 现象 | 可能原因 | 排查方式 |
+| 遇到的问题 | 最常见原因 | 怎么解决 |
 | --- | --- | --- |
-| 首轮找不到 `subagent` 工具，提示要调 `subagents_enable` | `<agentDir>/extensions/subagent/config.json` 缺少 `"toolActivation": "eager"` | 检查配置并重开新会话 |
-| 某些新角色未出现在可用目录中 | `pi-subagents` 未打 `0013` 目录上限补丁，或对应 `.md` 未设 `advertise: true` | 检查 `node scripts/apply-subagents-v020.mjs "$AGENT_DIR" --check-only` 与 `agents/*.md` frontmatter |
-| 父会话在只读或 `noDelegate` 任务下委派失败 | 当前 Prompt 或会话继承了用户禁止委派 / 只读 / 禁止外发指令 | 若确需恢复委派，需用户在新一轮交互中显式授权；外部咨询还须单独解除外发限制 |
-| 同档位某个模型报配额耗尽 | CliProxy 对应上游配额或限流 | 按 `model-policy.json` 同档位下一条目更换 `model` 参数重试 |
+| 对话第一轮助手说找不到 `subagent` 工具 / 提示要先解锁 | 还没创建 `$AGENT_DIR/extensions/subagent/config.json`，或里面没写 `"toolActivation": "eager"` | 按本文“一、2”节创建配置文件并重开新对话 |
+| Subagent 报错模型不存在、没额度、鉴权失败 | [`extensions/research-loop/model-policy.json`](../extensions/research-loop/model-policy.json) 默认是 `cliproxy/...` 模型名，而你本机使用的是自配 API 或 `/login` 模型 | 打开 `model-policy.json` 把三档模型列表改成你自己 `/model` 里真正可用的模型 ID |
+| 想调 `agy-advisor` 但报找不到 `agy` 或模型列表为空 | 本机还没安装/登录 Google Antigravity CLI，或不在默认位置 `$HOME/.local/bin/agy` | 安装并登录 `agy`，或启动前 `export AGY_BIN="/你的路径/agy"`；不用该功能可忽略 |
+| 某些新增 `.md` 角色没有在常驻列表中显示 | 角色文件头缺少 `advertise: true`，或 `pi-subagents` 补丁未正常应用 | 检查对应 `agents/*.md` 文件头部，并用 `--check-only` 检查补丁状态 |
