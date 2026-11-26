@@ -10,6 +10,19 @@ Pi Research Harness 是一个面向科研与复杂工程任务的 **多 Agent �
 
 ---
 
+## 让 AI 助手直接帮你部署（推荐）
+
+如果你正在使用 Claude Code、Codex CLI、Cursor、Pi 或 Antigravity 等 AI 编程助手，可以直接把下面这段指令发给它，它会自动按规范检查本机环境、向你确认模型与路径并完成部署与校验：
+
+```text
+请先完整阅读 https://raw.githubusercontent.com/northkd/pi-research-harness/main/doc/install-for-agents.md
+（或本仓库内的 doc/install-for-agents.md），严格按照其中的环境预检、用户确认项、安装校验、模型策略检查与启动顺序帮我部署 Pi Research Harness。
+```
+
+> 给人类用户的手把手安装与日常使用说明见下文，AI 专用部署规范见 [**doc/install-for-agents.md**](doc/install-for-agents.md)。
+
+---
+
 ## 一、5 分钟从零安装与配置
 
 支持 Linux 系统，需提前准备 **Git**、**Python 3**、**Node.js 22.19+**、**npm** 和 **pnpm 11.15.1**。
@@ -136,6 +149,7 @@ node scripts/create-demo-project.mjs /tmp/research-demo
 
 ## 四、常用文档索引
 
+- **[给 AI 助手看的自动化部署指南](doc/install-for-agents.md)**（面向 Claude Code / Codex / Cursor / Pi 等 AI Agent）
 - **[Subagents 与 Multi-Agents 使用手册总览](doc/README.md)**
   - [Subagents 详细教程与配置清单](doc/subagents.md)
   - [Multi-Agents（`res-workflow`）详细教程与界面操作指南](doc/multi-agents.md)
