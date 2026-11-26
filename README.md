@@ -8,6 +8,10 @@ Pi Research Harness 是一个面向科研与复杂工程任务的 **多 Agent �
 
 > 如需旧版历史快照，请使用 **`0.20`** 分支；当前 **`main`** 分支默认安装新版 Web 工作台、Subagents 与 Multi-Agents 编排能力。
 
+<p align="center">
+  <img src="doc/images/architecture-overview.png" alt="Pi Research Harness 整体架构与 Subagents / Multi-Agents 协同总览" width="920" />
+</p>
+
 ---
 
 ## 让 AI 助手直接帮你部署（推荐）
@@ -134,6 +138,10 @@ node scripts/create-demo-project.mjs /tmp/research-demo
 
 👉 详细角色表、日常提问示例与配置排查见：[**Subagents 使用详细指南**](doc/subagents.md)
 
+<p align="center">
+  <img src="doc/images/subagent-routing-tiers.png" alt="Subagents 动态路由、三档模型降级与 agy-advisor 确认门控" width="920" />
+</p>
+
 ### 2. 用好 Multi-Agents（`res-workflow` 项目级协同）
 
 适合大型科研/工程推进，按 **「先 Plan 后 Work」** 流程运转：
@@ -144,6 +152,10 @@ node scripts/create-demo-project.mjs /tmp/research-demo
 5. 在画布中通过 **主 Agent Plan 进度条** 和 **4 层树状拓扑（`主 Agent → Plan → Multi-Agent → Subagent`）** 实时观察任务状态（进行中 / 排队中 / 已结束）；**点击 Plan 或 Multi-Agent 卡片可直接原地展开下级，不会跳屏**，点 **「详情与纠偏」** 可查看对话细节或中途干预。
 
 👉 网页每步操作截图说明、同 Plan 兄弟通信机制与 FAQ 见：[**Multi-Agents 使用详细指南**](doc/multi-agents.md)
+
+<p align="center">
+  <img src="doc/images/multiagent-plan-topology.png" alt="Multi-Agents Plan 进度条、四层同图内联拓扑与兄弟三态通信" width="920" />
+</p>
 
 ---
 

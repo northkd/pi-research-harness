@@ -2,6 +2,8 @@
 
 本手册帮你把 Pi Research Harness 的两套多代理协作能力用起来，并把日常配置、提问写法、界面操作和常见坑一次讲清楚。
 
+![Pi Research Harness 整体架构与双模式协同总览](images/architecture-overview.png)
+
 ---
 
 ## 零、如果你想让 AI 助手帮你安装部署
