@@ -1,12 +1,13 @@
 # Multi-Agents 使用指南：从启动到网页监控全流程
 
-当你面对一个需要**多条线并行推进**的科研课题或大工程时，只在单一对话里“随手叫几个助手”往往不够清晰。**Multi-Agents（`res-workflow` 研究工作台）** 为每个子方向拉起**独立的 Pi 顶级会话**：
+当你面对一个需要**多条线并行推进**的科研课题或大工程时，只在单一对话里“随手叫几个助手”往往不够清晰。**Multi-Agents（`res-workflow` 研究工作台）参考了 Claude Code Agent Teams 的「Team Lead + 独立 Teammates + Shared Task List + Mailbox」协作范式**，为每个子方向拉起**独立的 Pi 顶级会话**：
 
-![Multi-Agents Plan 进度条、四层同图内联拓扑与兄弟三态通信](images/multiagent-plan-topology.png)
+![Multi-Agents 团队协同架构、四层内联拓扑与兄弟三态通信](images/multiagent-plan-topology.png)
 
-- 主 Agent **先制定 Plan，再启动 Work**（由你把关首轮分工）；
-- **1 个 Plan 可以对应多个 Multi-Agent 任务**，超出并发的自动排队、前一个完成后自动补位；
-- 在 Web 看板实时查看进度条、4 层拓扑关系图，并在卡片上随时展开下级或弹窗纠偏。
+- 主 Agent（对应 Team Lead）**先制定 Plan，再启动 Work**（由你把关首轮分工）；
+- **1 个 Plan 可以对应多个 Multi-Agent 任务**（对应 Shared Task List + 依赖阻塞），超出并发自动排队、前一个完成后自动补位；
+- 同 `plan` 队友直接通过持久化 `research_communication` 信箱（对应 Mailbox，升级为进行中/排队中/已结束三态机制）高效协调；
+- 在 Web 看板实时查看进度条、4 层拓扑关系图，并在卡片上随时原地展开下级或弹窗纠偏。
 
 ---
 

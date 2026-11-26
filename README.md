@@ -8,9 +8,7 @@ Pi Research Harness 是一个面向科研与复杂工程任务的 **多 Agent �
 
 > 如需旧版历史快照，请使用 **`0.20`** 分支；当前 **`main`** 分支默认安装新版 Web 工作台、Subagents 与 Multi-Agents 编排能力。
 
-<p align="center">
-  <img src="doc/images/architecture-overview.png" alt="Pi Research Harness 整体架构与 Subagents / Multi-Agents 协同总览" width="920" />
-</p>
+![Pi Research Harness 总体架构与双模式协同](doc/images/architecture-overview.png)
 
 ---
 
@@ -138,24 +136,29 @@ node scripts/create-demo-project.mjs /tmp/research-demo
 
 👉 详细角色表、日常提问示例与配置排查见：[**Subagents 使用详细指南**](doc/subagents.md)
 
-<p align="center">
-  <img src="doc/images/subagent-routing-tiers.png" alt="Subagents 动态路由、三档模型降级与 agy-advisor 确认门控" width="920" />
-</p>
+![Subagents 动态路由、三档模型顺位与 agy-advisor 门控](doc/images/subagent-routing-tiers.png)
 
-### 2. 用好 Multi-Agents（`res-workflow` 项目级协同）
+### 2. Multi-Agents（`res-workflow`）：参考 Claude Code Agent Teams 的团队协作架构
 
-适合大型科研/工程推进，按 **「先 Plan 后 Work」** 流程运转：
-1. 在网页打开你的项目，进入 **Agents** 页，选定（或新建）一个 **主会话（主 Agent）** 并确认目标绑定。
-2. 在 **「发任务」** 中写明总体目标。
-3. 主 Agent 会先提交一份结构化 **Plan**，网页会弹出 **「确认首次科研分工」** 预览让你核对（同一研究目标内仅需首次确认一次；若对分工不满意可直接拒绝并让主 Agent 修改）。
-4. 确认后，系统会自动按**「4 个主并发 Multi-Agent + 每节点 3 个 Subagent」**的默认配额滚动排队执行（顶部可随时调高或调低配额）。
-5. 在画布中通过 **主 Agent Plan 进度条** 和 **4 层树状拓扑（`主 Agent → Plan → Multi-Agent → Subagent`）** 实时观察任务状态（进行中 / 排队中 / 已结束）；**点击 Plan 或 Multi-Agent 卡片可直接原地展开下级，不会跳屏**，点 **「详情与纠偏」** 可查看对话细节或中途干预。
+与仅在单次会话内执行轻量任务的 `Subagent` 不同，本项目的 **Multi-Agents（`res-workflow`）参考了 Claude Code Agent Teams 的“Lead + 独立 Teammates + Shared Task List + Mailbox”工程范式**，并将其进一步产品化与可视化，适合科研探索或大型多模块并行工程：
 
-👉 网页每步操作截图说明、同 Plan 兄弟通信机制与 FAQ 见：[**Multi-Agents 使用详细指南**](doc/multi-agents.md)
+| Claude Code Agent Teams 核心理念 | 本项目（`res-workflow`）对应设计与工程增强 |
+| --- | --- |
+| **Team Lead + 独立 Teammates** | **主 Agent + 独立顶级 Pi 会话**：每个协作者拥有独立上下文与用量账本，内部还能继续自拆下级 `Subagent`；用户可通过 **「详情与纠偏」** 直连任意队友对话。 |
+| **Shared Task List + 依赖阻塞** | **「先 Plan 后 Work」+ `1:N` Plan DAG**：主 Agent 提交 1~64 项含 `dependsOn` 依赖的任务图，首次确认一次后持久落盘排队，按实时并发（默认 `4` 主并发 × `3` 子并发）自动滚动补位。 |
+| **Teammate Mailbox（队友邮箱）** | **同 `plan` 持久信箱（策略 A 三态规则）**：同队列队友经 `research_communication` 直接协同——**进行中**（`in_progress`）支持点对点请求/回复并即时唤醒；**排队中**（`queued`）仅限按 `taskId` 留异步备忘，轮到开机时可见且绝不插队；**已结束**（`ended`）拒绝再扰并转交父级；内置 `to: "peers"` 广播、单对 **8 条（4 轮）防死循环上限** 与 `peerSettled` 安全退出。 |
+| **纯 CLI 黑盒协作** | **Dashboard 进度条 + 四层同图内联拓扑**：顶部实时统计各 Plan 完成度与进行/排队/结束数量；画布按 **`L0 主 Agent → L1 Plan → L2 Multi-Agent → L3 Subagent → L4 多次执行`** 展示，**点击节点直接原地展开，不切换界面**。 |
 
-<p align="center">
-  <img src="doc/images/multiagent-plan-topology.png" alt="Multi-Agents Plan 进度条、四层同图内联拓扑与兄弟三态通信" width="920" />
-</p>
+**在网页工作台里的日常使用只需 5 步**：
+1. 在网页添加并打开你的项目，进入 **Agents** 页，选定（或新建）一个 **主会话（主 Agent）** 并确认目标绑定。
+2. 在 **「发任务」** 中输入总目标（会自动附带「先 Plan 后 Work」引导）。
+3. 主 Agent 提交结构化 **Plan** 后，在弹出的 **「确认首次科研分工」** 预览中核对依赖与分工并点击确认（不满意可直接拒绝让其调整；同一研究目标下确认一次后免重复弹窗）。
+4. 在顶部观察 **主 Agent Plan 完成进度条**，并可随时微调 **Multi-Agent / Subagent 并发配额**。
+5. 在拓扑画布中点击 **`Plan`** 或 **`Multi-Agent`** 原地展开下级节点，或点击任意节点右下角 **「详情与纠偏」** 直接查看完整日志与中途干预。
+
+👉 网页每步操作说明、同 Plan 兄弟三态通信机制与 FAQ 见：[**Multi-Agents 使用详细指南**](doc/multi-agents.md)
+
+![Multi-Agents 团队协同架构、四层内联拓扑与兄弟三态通信](doc/images/multiagent-plan-topology.png)
 
 ---
 
