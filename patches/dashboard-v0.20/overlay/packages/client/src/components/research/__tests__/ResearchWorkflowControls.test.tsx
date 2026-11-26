@@ -129,7 +129,11 @@ describe("visible research execution controls", () => {
     const posts = fetcher.mock.calls.filter(([url, init]) => init?.method === "POST" && !String(url).endsWith("/collaboration"));
     expect(posts).toHaveLength(1);
     expect(String(posts[0][0])).toBe("/api/session/session-b/prompt");
-    expect(JSON.parse(String(posts[0][1]?.body)).text).toContain("拆分三项独立验证，交给子 agent 执行并核对结论。");
+    const sentText = JSON.parse(String(posts[0][1]?.body)).text as string;
+    expect(sentText).toContain("先 Plan 后 Work");
+    expect(sentText).toContain("research_dispatch");
+    expect(sentText).toContain("拆分三项独立验证，交给子 agent 执行并核对结论。");
+    expect(screen.getByTestId("research-main-plan-progress").textContent).toContain("先 Plan 后 Work");
     expect(screen.getByTestId("research-main-agent-feedback").textContent).toContain("研究主会话 B");
   });
 

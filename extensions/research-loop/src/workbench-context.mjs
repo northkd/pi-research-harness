@@ -183,7 +183,7 @@ export function readWorkbenchRecordContext(ctx, options = {}) {
 
 export function requireWorkbenchRecordContext(ctx, options = {}, notJoinedCode = 'research-workbench-session-not-joined') {
   const result = inspectWorkbenchRecordContext(ctx, options);
-  if (result.status === 'ready') return result.context;
+  if (result.status === 'ready') return { ...result.context, cwd: result.binding.cwd, ownerKey: result.ownerKey };
   throw new Error(result.status === 'not-joined' ? notJoinedCode : result.error);
 }
 
@@ -274,6 +274,7 @@ export function buildWorkbenchRecordProtocol(context, memory = context?.memory ?
   return [
     'This Pi session is joined to the confirmed res-workflow research workbench.',
     'The lead is the single user-facing research owner: submit the initial decomposition directly through research_dispatch, which owns the one native confirmation for this frozen goal. Do not pre-confirm the same plan with ask_user. Main and branch owners arrange later in-scope tasks without repeated approval; retain the goal approval across reload. Use the native task graph and durable research_communication channel, with no mandatory coordinator. Return to the user for genuinely new scope/authority or an unresolved ownership decision, and reuse a decision already given.',
+    'Plan by scientific need and dependency, independently of available hardware slots. Defaults in a managed workbench are four concurrent Multi sessions from the main and three child slots per Multi. Submit excess items to the durable queue for automatic refill. Beyond 64 items retain the full worklist and continue with dependency-safe plans and distinct stable planIds after the prior plan settles.',
     'The host schedules and monitors workers. Routine progress stays in host records; task/plan completion and actionable exceptions notify the lead. While waiting, end the turn or do independent authorized research instead of polling statuses/resources or reading harness implementation. On delivery, verify the referenced evidence and scientific coverage; completion alone is not acceptance. Escalate a platform fault with its concise error rather than turning the research session into harness maintenance.',
     `Verified current record context: ${JSON.stringify(recordContext)}`,
     mem,

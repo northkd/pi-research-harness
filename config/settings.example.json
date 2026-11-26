@@ -78,22 +78,27 @@
         "thinking": false
       },
       "evidence-auditor": {
-        "thinking": "max"
+        "thinking": "max",
+        "advertise": true
       },
       "oracle": {
-        "thinking": "max"
+        "thinking": "max",
+        "advertise": true
       },
       "advisor": {
         "thinking": "max"
       },
       "researcher": {
-        "thinking": "max"
+        "thinking": "max",
+        "advertise": true
       },
       "reviewer": {
-        "thinking": "max"
+        "thinking": "max",
+        "advertise": true
       },
       "worker": {
-        "thinking": "max"
+        "thinking": "max",
+        "advertise": true
       },
       "developer": {
         "thinking": "max"
@@ -114,7 +119,12 @@
         "thinking": "max"
       },
       "scout": {
-        "thinking": "max"
+        "thinking": "max",
+        "advertise": true
+      },
+      "delegate": {
+        "thinking": "max",
+        "advertise": true
       }
     }
   }

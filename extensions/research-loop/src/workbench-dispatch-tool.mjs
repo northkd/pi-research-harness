@@ -19,6 +19,42 @@ const APPROVAL_ENTRY = 'research-dispatch-scope-approval';
 const approvalScope = (ctx, joined) => JSON.stringify([
   ctx?.cwd ?? joined.cwd ?? null, joined.ownerKey ?? null, joined.sessionId, joined.adoptionId, joined.charterHash,
 ]);
+
+function previewText(value, limit) {
+  const line = typeof value === 'string' ? value.replace(/[\s\x00-\x1f\x7f]+/gu, ' ').trim() : '';
+  if (!line) return '未填写';
+  if (line.length <= limit) return line;
+  return line.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/u, '') + '…';
+}
+
+function formatDispatchConfirmationPreview(body, charterHash) {
+  const delegate = body.action === 'delegate';
+  const lines = [delegate ? '委派协调员统筹 delegate' : '并行任务分工 plan'];
+  if (body.planId) lines.push(`• 计划 ID：${body.planId}`);
+  lines.push(`• 目标版本：${charterHash}`);
+  if (delegate) {
+    lines.push(`• 阶段：${body.stage ?? '未填写'}`, '• 角色：research-coordinator', `• 目标：${previewText(body.task, 4000)}`);
+  } else {
+    const tasks = Array.isArray(body.tasks) ? body.tasks : [];
+    if (tasks.length > 64) throw new Error('research-dispatch-plan-preview-too-large');
+    lines.push(`• 任务数：${tasks.length}`);
+    if (body.concurrency !== undefined) lines.push(`• 并发上限：${body.concurrency}`);
+    const numbers = new Map(tasks.map((task, index) => [task?.id, index + 1]));
+    for (const [index, task] of tasks.entries()) {
+      const dependencies = Array.isArray(task?.dependsOn) ? task.dependsOn : [];
+      let prerequisites = dependencies.join('、');
+      if (prerequisites.length > 128) {
+        prerequisites = dependencies.map(id => numbers.has(id) ? `第${numbers.get(id)}项` : id).join('、');
+      }
+      lines.push('', `${index + 1}. [${task?.id ?? '未填写'}] ${task?.role ?? '未填写'} · ${task?.stage ?? '未填写'}`,
+        `   前置依赖：${prerequisites || '无'}`, `   ${previewText(task?.task, 144)}`);
+    }
+  }
+  lines.push('', '确认后，同一目标和权限范围内的后续批次、滚动补位和分支拆分会自动执行，不再弹窗。新增范围、外发或远程操作仍需单独确认。拒绝后可提出修改意见，再确认新的分工。');
+  const message = lines.join('\n');
+  if (message.length > 32768 || Buffer.byteLength(message) > 65536) throw new Error('research-dispatch-plan-preview-too-large');
+  return message;
+}
 function nativeEntries(ctx) {
   try { return ctx?.sessionManager?.getEntries?.() ?? []; } catch { return []; }
 }
@@ -68,11 +104,12 @@ export function isDirectResearchWorker(joined, snapshot, sessionId = joined?.ses
 
 export function createResearchDispatchClient(options = {}) {
   const readContext = options.readContext ?? (ctx => requireWorkbenchRecordContext(ctx, options.contextOptions, 'research-dispatch-session-not-joined'));
-  return async (ctx, params, signal) => {
+  return async (ctx, params, signal, expectedScope) => {
     const sessionId = ctx?.sessionManager?.getSessionId?.();
     const joined = await readContext(ctx);
-    if (!joined || joined.sessionId !== sessionId || ctx?.sessionManager?.getSessionId?.() !== sessionId) throw new Error('research-dispatch-session-not-joined');
-    const { ownerKey, cwd, adoptionId, charterHash } = joined;
+    if (!joined || !sessionId || joined.sessionId !== sessionId || ctx.sessionManager.getSessionId() !== sessionId) throw new Error('research-dispatch-session-not-joined');
+    const scope = approvalScope(ctx, joined), cwd = joined.cwd;
+    if (expectedScope !== undefined && scope !== expectedScope) throw new Error('research-dispatch-scope-changed');
     const auth = await (options.resolveAuth ?? (() => readDashboardLocalAuth(options.authOptions)))();
     const target = new URL('/api/res-workflow/dispatch', auth.baseUrl);
     if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(target.hostname)) throw new Error('research-dispatch-destination-not-loopback');
@@ -88,13 +125,9 @@ export function createResearchDispatchClient(options = {}) {
       throw new Error(typeof reply?.code === 'string' && /^[a-z0-9-]{1,100}$/.test(reply.code) ? reply.code : 'research-dispatch-unavailable');
     }
     const current = await readContext(ctx);
-    if (reply.sessionId !== sessionId || ctx?.sessionManager?.getSessionId?.() !== sessionId || current?.sessionId !== sessionId
-        || current.ownerKey !== ownerKey || current.cwd !== cwd
-        || current.adoptionId !== adoptionId || current.charterHash !== charterHash) {
-      throw new Error('research-dispatch-response-scope-changed');
-    }
-    if (['plan', 'delegate'].includes(params.action)
-        && !reply.plans?.some(plan => plan?.clientPlanId === params.planId)) {
+    if (reply.sessionId !== sessionId || ctx.sessionManager.getSessionId() !== sessionId || !current
+        || current.cwd !== cwd || approvalScope(ctx, current) !== scope) throw new Error('research-dispatch-response-scope-changed');
+    if (['plan', 'delegate'].includes(params.action) && !reply.plans?.some(plan => plan?.clientPlanId === params.planId)) {
       throw new Error('research-dispatch-plan-effect-unconfirmed');
     }
     return reply;
@@ -105,6 +138,7 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
   const request = options.request ?? createResearchDispatchClient(options);
   const readContext = options.readContext ?? (ctx => requireWorkbenchRecordContext(ctx, options.contextOptions, 'research-dispatch-session-not-joined'));
   const states = new Map();
+  const pendingApprovals = new Map();
   function state(ctx) {
     const id = ctx?.sessionManager?.getSessionId?.();
     if (!id) return null;
@@ -113,6 +147,39 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
       states.set(id, { reads: 0, restrictions: undefined });
     }
     return states.get(id);
+  }
+  async function confirmScope(ctx, joined, scope, body, signal, local) {
+    const cwd = joined.cwd;
+    let source = savedScopeApproval(ctx, scope) ? 'saved' : undefined;
+    if (!source) {
+      const previous = successfulNativePlans(ctx);
+      if (previous.size) {
+        // Recover a native success only if its plan still belongs to this scope.
+        const current = await request(ctx, { action: 'status' }, signal, scope);
+        if (current.status === 'ok' && current.sessionId === joined.sessionId
+            && current.plans?.some(plan => previous.has(plan.clientPlanId))) source = 'prior-native-plan';
+      }
+    }
+    if (!source) {
+      const confirm = options.confirmInitialPlan ?? (ctx?.hasUI && typeof ctx.ui?.confirm === 'function'
+        ? (text => ctx.ui.confirm('确认首次科研分工', text)) : null);
+      if (!confirm) return blocked('research-dispatch-initial-plan-confirmation-required');
+      if (await confirm(formatDispatchConfirmationPreview(body, joined.charterHash)) !== true) {
+        return result({ status: 'blocked', tool: 'research_dispatch', error: 'research-dispatch-initial-plan-declined',
+          hint: '本次分工未提交。请根据用户反馈修改分工，再用 plan 或 delegate 重新提交确认。如果还没有具体意见，先询问用户希望调整哪些任务。' }, true);
+      }
+      source = 'native-ui';
+    }
+    const rechecked = await readContext(ctx);
+    if (!rechecked || rechecked.cwd !== cwd || ctx.sessionManager.getSessionId() !== rechecked.sessionId || approvalScope(ctx, rechecked) !== scope) {
+      return blocked('research-dispatch-approval-scope-changed');
+    }
+    if (local.restrictions?.blocked) return blocked('research-dispatch-user-restricted');
+    if (source !== 'saved') pi.appendEntry?.(APPROVAL_ENTRY, {
+      schema: 'pi-research-dispatch-scope-approval.v1', scope, approved: true, source, at: new Date().toISOString(),
+    });
+    if (local.approvedScopes.size >= 64) local.approvedScopes.delete(local.approvedScopes.values().next().value);
+    local.approvedScopes.add(scope);
   }
   const tool = {
     name: 'research_dispatch', label: 'Research task executor',
@@ -161,45 +228,29 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
         : ['action', 'planId', 'tasks', 'concurrency', 'reason', 'status', 'summary', 'evidence'];
       for (const key of fields) if (params?.[key] !== undefined) body[key] = params[key];
       try {
+        let expectedScope;
         if (['plan', 'delegate'].includes(params.action)) {
+          const sessionId = ctx?.sessionManager?.getSessionId?.();
           const joined = await readContext(ctx), local = state(ctx);
+          if (!sessionId || joined?.sessionId !== sessionId || ctx.sessionManager.getSessionId() !== sessionId) {
+            return blocked('research-dispatch-session-not-joined');
+          }
+          expectedScope = approvalScope(ctx, joined);
           if (!ID.test(joined.researchSession?.parentSessionId ?? '')) {
-            const approvingSession = ctx?.sessionManager?.getSessionId?.();
-            const identity = approvalScope(ctx, joined);
             local.approvedScopes ??= new Set();
-            if (joined.sessionId !== approvingSession) return blocked('research-dispatch-approval-scope-changed');
-            if (!local.approvedScopes.has(identity)) {
-              let source = savedScopeApproval(ctx, identity) ? 'saved' : undefined;
-              if (!source) {
-                const previous = successfulNativePlans(ctx);
-                if (previous.size) {
-                  // A native success proves approval only when the host still lists that exact plan in this verified scope.
-                  const current = await request(ctx, { action: 'status' }, signal);
-                  if (current.status === 'ok' && current.sessionId === joined.sessionId
-                      && current.plans?.some(plan => previous.has(plan.clientPlanId))) source = 'prior-native-plan';
-                }
+            if (!local.approvedScopes.has(expectedScope)) {
+              let pending = pendingApprovals.get(expectedScope);
+              if (!pending) {
+                pending = confirmScope(ctx, joined, expectedScope, body, signal, local)
+                  .finally(() => pendingApprovals.delete(expectedScope));
+                pendingApprovals.set(expectedScope, pending);
               }
-              if (!source) {
-                const preview = JSON.stringify(body, null, 2);
-                if (preview.length > 65536) return blocked('research-dispatch-plan-preview-too-large');
-                const confirm = options.confirmInitialPlan ?? (ctx?.hasUI && typeof ctx.ui?.confirm === 'function'
-                  ? (text => ctx.ui.confirm('确认首次科研分工', text)) : null);
-                if (!confirm) return blocked('research-dispatch-initial-plan-confirmation-required');
-                if (!await confirm(`确认当前已冻结科研目标的分工授权。以下为首批任务；确认后，主agent及各分支在同一目标、权限和资源范围内安排后续任务、滚动补位，无需逐批重复确认。新增范围、外发或远程操作仍单独确认。\n目标版本：${joined.charterHash}\n\n${preview}`)) return blocked('research-dispatch-initial-plan-declined');
-                source = 'native-ui';
-              }
-              const rechecked = await readContext(ctx);
-              if (rechecked.sessionId !== joined.sessionId || ctx?.sessionManager?.getSessionId?.() !== approvingSession
-                  || approvalScope(ctx, rechecked) !== identity) return blocked('research-dispatch-approval-scope-changed');
-              if (local.restrictions?.blocked) return blocked('research-dispatch-user-restricted');
-              if (source !== 'saved' && typeof pi.appendEntry === 'function') pi.appendEntry(APPROVAL_ENTRY, {
-                schema: 'pi-research-dispatch-scope-approval.v1', scope: identity, approved: true,
-                source, at: new Date().toISOString(),
-              });
-              if (local.approvedScopes.size >= 64) local.approvedScopes.delete(local.approvedScopes.values().next().value);
-              local.approvedScopes.add(identity);
+              const refusal = await pending;
+              if (refusal) return refusal;
             }
           }
+          if (local.restrictions?.blocked) return blocked('research-dispatch-user-restricted');
+          if (local.restrictions?.readOnly || joined.researchSession?.readOnly === true) body.readOnly = true;
         }
         if (params.action === 'report') {
           const joined = await readContext(ctx);
@@ -209,11 +260,7 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
             reportMode: 'parent-handoff', reportSubmitted: false, hint: DIRECT_HANDOFF_HINT,
           }, true);
         }
-        if (['plan', 'delegate'].includes(params.action)) {
-          const joined = await readContext(ctx);
-          if (state(ctx)?.restrictions?.readOnly || joined?.researchSession?.readOnly === true) body.readOnly = true;
-        }
-        const snapshot = await request(ctx, body, signal), local = state(ctx);
+        const snapshot = await request(ctx, body, signal, expectedScope), local = state(ctx);
         if (local) { local.joinedOnce = true; local.managed = snapshot.collaborator || snapshot.plans?.length > 0; if (params.action === 'report') local.reportReminders = 0; }
         const projection = projectDispatchContext(snapshot, params);
         if (params.action === 'status' && params.view !== 'detail' && !local?.restrictions?.readOnly

@@ -14,9 +14,29 @@ import type {
 type Controller = ReturnType<typeof useResearchCollaboration>;
 const title = (tenure: CollaborationTenure, id: string) => tenure.snapshots[id]?.title || id;
 
-function tenureClusters(tenure: CollaborationTenure, projection: ResearchProjection): CanvasSessionCluster[] {
+function tenurePlans(snapshot: CollaborationSnapshot, tenure: CollaborationTenure): CollaborationPlan[] {
+  const members = new Set(tenure.sessionIds.filter(id => !tenure.detachedSessionIds?.includes(id)));
+  return snapshot.plans.filter(plan => {
+    if (plan.tenureId) return plan.tenureId === tenure.id;
+    return members.has(plan.parentSessionId);
+  });
+}
+
+function tenureClusters(
+  tenure: CollaborationTenure,
+  projection: ResearchProjection,
+  plans: ReadonlyArray<CollaborationPlan> = [],
+): CanvasSessionCluster[] {
   const members = new Set(tenure.sessionIds.filter(id => !tenure.detachedSessionIds?.includes(id)));
   const observed = new Map(projection.executions.filter(row => row.kind === "pi-session" && row.sessionId).map(row => [row.sessionId, row]));
+  const taskBySessionId = new Map<string, { planId: string; task: CollaborationPlanTask }>();
+  for (const plan of plans) {
+    for (const task of plan.tasks) {
+      if (task.sessionId && !taskBySessionId.has(task.sessionId)) {
+        taskBySessionId.set(task.sessionId, { planId: plan.id, task });
+      }
+    }
+  }
   const groups = new Map<string, ResearchExecution[]>();
   for (const row of projection.executions) {
     if (row.kind !== "native-subagent" || !row.parentExecutionId || !row.startedAt
@@ -31,11 +51,12 @@ function tenureClusters(tenure: CollaborationTenure, projection: ResearchProject
     const live = tenure.status === "current" ? observation : undefined;
     const executionId = observation?.id ?? `session-${id}`;
     const parentId = id !== tenure.mainSessionId && metadata.parentSessionId && members.has(metadata.parentSessionId) ? metadata.parentSessionId : undefined;
-    const roleObj = { name: metadata.role || (id === tenure.mainSessionId ? "主 Agent" : "Multi-Agent"), skills: [] };
+    const linked = taskBySessionId.get(id);
+    const roleObj = { name: metadata.role || linked?.task.role || (id === tenure.mainSessionId ? "主 Agent" : "Multi-Agent"), skills: [] };
     const sessionExec: ResearchExecution = {
       ...live, id: executionId, sessionId: id, kind: "pi-session", source: live?.source ?? "workflow-record", evidence: live?.evidence ?? [],
       status: metadata.status ?? live?.status ?? "unknown",
-      role: metadata.role ?? live?.role, observedModel: metadata.model ?? live?.observedModel,
+      role: metadata.role ?? linked?.task.role ?? live?.role, observedModel: metadata.model ?? live?.observedModel,
       parentExecutionId: parentId ? observed.get(parentId)?.id ?? `session-${parentId}` : undefined,
     };
     const childSubs = groups.get(executionId) ?? [];
@@ -49,7 +70,11 @@ function tenureClusters(tenure: CollaborationTenure, projection: ResearchProject
     return { sessionExec, title: title(tenure, id), roleObj, isCaptain: id === tenure.mainSessionId,
       origin: parentId ? "lead-agent-created" : id === tenure.mainSessionId ? "user-created" : "unknown",
       creatorSessionId: parentId, creatorLabel: parentId ? title(tenure, parentId) : undefined,
-      assignedRole: metadata.role, childSubs, childRoleGroups: [...byRole].map(([roleName, executions]) => ({
+      assignedRole: metadata.role ?? linked?.task.role,
+      planId: linked?.planId,
+      planTaskId: linked?.task.id,
+      dependsOn: linked?.task.dependsOn,
+      childSubs, childRoleGroups: [...byRole].map(([roleName, executions]) => ({
         roleName, executions, roleObj: { name: roleName, skills: [] }, latest: executions[0]!,
       })),
     };
@@ -661,8 +686,8 @@ export function ResearchDispatchQueueDrawer({
   );
 }
 
-export function ResearchCollaborationPanel({ controller, projection, stale, visible, hideInlineToolbar = false, onAgent }: {
-  controller: Controller; projection: ResearchProjection; stale: boolean; visible: boolean; hideInlineToolbar?: boolean;
+export function ResearchCollaborationPanel({ controller, projection, stale, visible, hideInlineToolbar = false, highlightedPlanId = null, onAgent }: {
+  controller: Controller; projection: ResearchProjection; stale: boolean; visible: boolean; hideInlineToolbar?: boolean; highlightedPlanId?: string | null;
   onAgent(role: ConfiguredRole, execution?: ResearchExecution): void;
 }) {
   const { snapshot, pending, error } = controller;
@@ -709,10 +734,16 @@ export function ResearchCollaborationPanel({ controller, projection, stale, visi
         <button type="button" className="research-workspace-action" disabled={pending} onClick={() => setRemoving(null)}>取消</button>
       </div>}
       {!snapshot.currentTenureId && <p className="text-xs text-[var(--text-secondary)]">请先在上方选定主会话以建立协作拓扑。</p>}
-      {[...snapshot.tenures].reverse().filter(tenure => tenure.status !== "removed").map(tenure =>
+      {[...snapshot.tenures].reverse().filter(tenure => tenure.status !== "removed").map(tenure => {
+        const plans = tenurePlans(snapshot, tenure);
+        return (
         <section key={tenure.id} data-testid="research-collaboration-tenure" aria-label={`批次 #${tenure.ordinal}`}>
           <ResearchAgentCanvas
-            clusters={tenureClusters(tenure, projection)}
+            clusters={tenureClusters(tenure, projection, plans)}
+            plans={plans}
+            mainSessionId={tenure.mainSessionId}
+            showPlanGate={tenure.status === "current"}
+            highlightedPlanId={highlightedPlanId}
             stale={tenure.status === "current" && stale}
             overviewTitle="调度拓扑"
             tenureTitle={`批次 #${tenure.ordinal} · ${title(tenure, tenure.mainSessionId)}`}
@@ -724,8 +755,19 @@ export function ResearchCollaborationPanel({ controller, projection, stale, visi
             roleLabel={role => role}
             onRemoveSession={(sessionId, name) => setRemoving({ tenureId: tenure.id, sessionId, name })}
             removalPending={pending}
+            onJumpPlanTask={tenure.status === "current" ? (planId, taskId, queueRevision) => {
+              void controller.change({
+                action: "start",
+                sessionId: tenure.mainSessionId,
+                planId,
+                taskId,
+                queueRevision: queueRevision ?? 0,
+              });
+            } : undefined}
           />
-        </section>)}
+        </section>
+        );
+      })}
     </>}
   </section>;
 }

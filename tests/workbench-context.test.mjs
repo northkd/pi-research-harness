@@ -291,7 +291,7 @@ test('scientific and publish gates remain without demanding a research budget', 
 
 test('delegation guidance is dynamic and schema-accurate for each active family', () => {
   const pi = buildWorkbenchRecordProtocol(CONTEXT, {}, { selectedTools: ['read', 'subagent'] });
-  assert.match(pi, /subagent\(\{ agent: "research-literature", task: .*async: true, options: \{ context: "fresh" \} \}\)/);
+  assert.match(pi, /subagent\(\{ agent: "scout", task: .*model: "cliproxy\/ark-deepseek-v4\.1-flash\[1m\]", async: true, options: \{ context: "fresh" \} \}\)/);
   assert.doesNotMatch(pi, /Agent\(\{ subagent_type/);
   assert.doesNotMatch(pi, /SubagentWorkflow\(\{/);
   assert.match(pi, /Collaborators may recursively delegate separable work/);

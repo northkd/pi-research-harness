@@ -106,6 +106,7 @@ export function projectDispatchContext(snapshot, params = {}) {
     collaborator: !!snapshot.collaborator, decisionRequired: !!snapshot.decisionRequired,
     childrenPending: !!snapshot.childrenPending, declaredTasks: snapshot.declaredTasks ?? 0,
     counts: countsOf(allTasks), planCount: plans.length, plans: [], omittedPlans: 0,
+    peers: [], omittedPeers: list(snapshot.peers).length + (Number.isSafeInteger(snapshot.omittedPeers) && snapshot.omittedPeers > 0 ? snapshot.omittedPeers : 0),
     hint: 'Execution details remain in child sessions and evidence files. Do not poll or repeat delegated work. For evidence use status with view:detail, planId/taskId and nextOffset; use taskId:self for the original assignment.'
   };
   if (Number.isSafeInteger(snapshot.planHistory?.total) && Number.isSafeInteger(snapshot.planHistory?.shown)) {
@@ -132,9 +133,9 @@ export function projectDispatchContext(snapshot, params = {}) {
       error: identifier(plan?.error), counts: countsOf(tasks), tasks: [], omittedTasks: tasks.length };
     projection.plans.push(row);
     if (bytes(projection) > DISPATCH_CONTEXT_BYTES) { projection.plans.pop(); projection.omittedPlans++; continue; }
+    if (!withEvidence && !params.planId) continue; // Only acknowledge child identities for a named plan.
     const ordered = [...tasks].sort((a, b) => Number(['failed', 'blocked'].includes(b?.status)) - Number(['failed', 'blocked'].includes(a?.status)));
     for (const task of ordered) {
-      if (!withEvidence && registrationOf(task) === 'not-started' && !['queued', 'pending'].includes(task?.status)) continue;
       const receipt = { id: identifier(task?.id), status: identifier(task?.status), role: identifier(task?.role),
         registration: registrationOf(task) };
       if (SESSION_ID.test(task?.sessionId ?? '')) receipt.sessionId = task.sessionId;
@@ -152,6 +153,19 @@ export function projectDispatchContext(snapshot, params = {}) {
       row.tasks.push(receipt); row.omittedTasks--;
       if (bytes(projection) > DISPATCH_CONTEXT_BYTES) { row.tasks.pop(); row.omittedTasks++; }
     }
+  }
+  // Assignment and plan receipts take priority over the optional peer roster.
+  for (const peer of list(snapshot.peers).slice(0, 32)) {
+    const state = ['in_progress', 'queued', 'ended'].includes(peer?.state) ? peer.state : 'ended';
+    const row = {
+      taskId: identifier(peer?.taskId), role: identifier(peer?.role), stage: identifier(peer?.stage),
+      state, rawStatus: identifier(peer?.rawStatus), waitingReason: peer?.waitingReason ? identifier(peer.waitingReason) : null,
+      registration: identifier(peer?.registration), sessionId: SESSION_ID.test(peer?.sessionId ?? '') ? peer.sessionId : null,
+      communicatable: { message: state === 'in_progress' ? true : state === 'queued' ? 'deferred' : false, request: state === 'in_progress' },
+    };
+    projection.peers.push(row);
+    projection.omittedPeers--;
+    if (bytes(projection) > DISPATCH_CONTEXT_BYTES) { projection.peers.pop(); projection.omittedPeers++; }
   }
   // Malformed upstream metadata is still unable to blow up the model result.
   if (bytes(projection) > DISPATCH_CONTEXT_BYTES) {

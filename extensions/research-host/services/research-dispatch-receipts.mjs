@@ -11,8 +11,11 @@ export function createResearchReceiptHandler(options) {
   const delivered = new Set(), pending = new Map();
   return async message => {
     const id = message?.promptId, sessionId = options.getSessionId();
-    const marker = `[${id?.startsWith('research-message-') ? 'research_communication' : 'research_dispatch'} receipt ${id}]`;
-    if (message?.type !== 'send_prompt' || !isResearchDispatchReceiptId(id) || message.sessionId !== sessionId || !message.text?.startsWith(marker)) return options.handle(message);
+    if (message?.type !== 'send_prompt' || !isResearchDispatchReceiptId(id) || message.sessionId !== sessionId) return options.handle(message);
+    const prefixes = id.startsWith('research-message-')
+      ? ['research_communication receipt', 'research_communication peer'] : ['research_dispatch receipt'];
+    const marker = prefixes.map(prefix => `[${prefix} ${id}]`).find(value => message.text?.startsWith(value));
+    if (!marker) return options.handle(message);
     const key = `${sessionId}:${id}`;
     const acknowledge = () => options.sendAck({ type: 'prompt_received', sessionId, promptId: id, fresh: false });
     let inHistory = false;

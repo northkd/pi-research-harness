@@ -200,7 +200,22 @@ export function createResearchCollaborationService(deps) {
       return result;
     });
     const ownerKeys = [...new Set([state.ownerKey, ...state.tenures.map(row => row.dispatchOwnerKey).filter(Boolean)])];
-    const plans = [...new Map(ownerKeys.flatMap(ownerKey => deps.listPlans?.({ cwd: state.cwd, ownerKey }) ?? []).map(row => [row.id, row])).values()].map(plan => ({ ...plan, effectiveConcurrency: plan.concurrency, tasks: plan.tasks.map(task => ({ ...task, ...(task.queueRank === undefined ? {} : { rank: task.queueRank }), ...(task.waitingReason === undefined ? {} : { queueReason: task.waitingReason }) })) }));
+    const scopedPlans = ownerKeys.flatMap(ownerKey => deps.listPlans?.({ cwd: state.cwd, ownerKey }) ?? []);
+    const plans = [...new Map(scopedPlans.map(plan => [plan.id, plan])).values()].map(plan => ({
+      ...plan,
+      tenureId: plan.tenureId ?? null,
+      readOnly: plan.readOnly === true,
+      effectiveConcurrency: plan.concurrency,
+      tasks: plan.tasks.map(task => ({
+        ...task,
+        sessionId: task.sessionId ?? null,
+        dependsOn: task.dependsOn ?? [],
+        waitingReason: task.waitingReason ?? null,
+        error: task.error ?? null,
+        rank: task.rank ?? task.queueRank,
+        ...(task.waitingReason ? { queueReason: task.waitingReason } : {}),
+      })),
+    }));
     return {
       schema: COLLABORATION_SCHEMA, cwd: state.cwd, adopted, revision: state.revision,
       currentTenureId: current?.id ?? null, currentMainSessionId: current?.mainSessionId ?? null,

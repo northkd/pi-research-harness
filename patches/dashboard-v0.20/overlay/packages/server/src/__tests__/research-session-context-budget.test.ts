@@ -23,6 +23,7 @@ it('the actual token-bound prompt registry admits maximum task briefs without em
   expect(prompt).not.toContain('evidence/0/');
   expect(prompt).toContain('dependency-10');
   expect(prompt).toContain('READ-ONLY assignment');
+  for (const text of ['peers roster', 'same dispatchId', 'in_progress', 'queued peer', 'Ended peers', 'peerSettled']) expect(prompt).toContain(text);
   expect(registry.enqueue(row.workflowCwd, prompt + JSON.stringify(context), 'oversized-legacy-body')).toBe(false);
   expect(registry.enqueue(row.workflowCwd, prompt, row.spawnToken)).toBe(true);
   expect(registry.consume(row.workflowCwd, row.spawnToken)).toBe(prompt);

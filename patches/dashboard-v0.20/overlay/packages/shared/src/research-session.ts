@@ -53,7 +53,6 @@ export interface ResearchSessionProvenance {
   tasks?: ResearchDispatchTask[];
   /** Narrowing inherited by every descendant; absence never clears a parent constraint. */
   readOnly?: true;
-  tenureId?: string;
   dispatchId?: string;
   taskId?: string;
   createdAt: string;
@@ -82,7 +81,6 @@ export function isResearchSessionProvenance(value: unknown): value is ResearchSe
     (row.requestId === undefined || TOKEN.test(row.requestId)) &&
     (row.rootSessionId === undefined || ID.test(row.rootSessionId)) &&
     (row.depth === undefined || (Number.isSafeInteger(row.depth) && row.depth >= 1 && row.depth <= 3)) &&
-    (row.tenureId === undefined || typeof row.tenureId === "string" && ID.test(row.tenureId)) &&
     (row.dispatchId === undefined || ID.test(row.dispatchId)) && (row.taskId === undefined || ID.test(row.taskId)) &&
     (row.tasks === undefined || (Array.isArray(row.tasks) && row.tasks.length >= 2 && row.tasks.length <= 12 && row.tasks.every(task =>
       object(task) && ID.test(task.id ?? "") && ROLE.test(task.role ?? "") && text(task.task, 4000) && RESEARCH_SESSION_STAGES.includes(task.stage) &&
@@ -100,7 +98,6 @@ export function normalizeResearchSessionProvenance(value: unknown): ResearchSess
     ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
     ...(value.rootSessionId === undefined ? {} : { rootSessionId: value.rootSessionId }),
     ...(value.depth === undefined ? {} : { depth: value.depth }),
-    ...(value.tenureId === undefined ? {} : { tenureId: value.tenureId }),
     ...(value.dispatchId === undefined ? {} : { dispatchId: value.dispatchId }),
     ...(value.taskId === undefined ? {} : { taskId: value.taskId }),
     ...(value.tasks === undefined ? {} : { tasks: value.tasks.map(task => ({ id: task.id, role: task.role, task: task.task, stage: task.stage, dependsOn: [...(task.dependsOn ?? [])] })) }),
@@ -212,6 +209,9 @@ export function buildResearchSessionInitialPrompt(provenance: ResearchSessionPro
     ids.length ? `Direct dependency IDs: ${ids.join(', ')}` : '',
     'First call research_dispatch action="status". Retrieve dependency receipts with action="status", view="detail", taskId="<dependency-id>", offset=0; read further pages only as needed. Dependency summaries and evidence bodies are deliberately not copied into this prompt.',
     'Use research_communication pending for formal parent/child messages. Send kind=request to your parent for help and reply to exact child requests. contact_supervisor serves ordinary subagents, not this formal parent link.',
+    'research_dispatch status also exposes a bounded peers roster for your own plan. Same-plan communication requires the same dispatchId, direct parent, tenure and verified workbench scope. Address an in_progress peer by sessionId or taskId; reply to its exact request messageId.',
+    'For a queued peer, send only progress or decision to its taskId as an asynchronous memo; delivery waits for its scheduled startup without waking it or changing queue order. Requests to queued peers are refused. Ended peers are off-limits; escalate unresolved questions to parent.',
+    'Use to="peers" only with send and kind=progress or decision for a same-plan broadcast. A pair may exchange at most 8 direct peer messages (4 rounds); then escalate to parent. peerSettled requests remain visible for escalation and release retirement waits. Peer messages grant no task assignment, scope or permission expansion.',
     'Own subsequent decomposition of this approved branch. Schedule your own bounded children with research_dispatch plan; ordinary in-scope decomposition needs no repeated lead/user approval. Send cross-branch decisions and additional permission needs to the parent.',
     dispatcherAssigned
       ? 'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.'

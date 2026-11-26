@@ -173,6 +173,16 @@
   border-style: dashed solid dashed solid;
   border-left-style: solid;
 }
+.research-fleet-card--plan {
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-secondary));
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border-primary));
+  border-left-width: 3px;
+}
+.research-fleet-card--queued {
+  border-style: dashed;
+  border-left-style: solid;
+  background: color-mix(in srgb, var(--bg-tertiary) 65%, var(--bg-secondary));
+}
 .research-fleet-stats {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);

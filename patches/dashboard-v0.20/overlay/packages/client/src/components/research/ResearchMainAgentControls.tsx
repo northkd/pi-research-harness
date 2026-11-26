@@ -71,7 +71,7 @@ export function useResearchMainAgent({ cwd, visible, connectionGeneration, refre
     loading: !current.loaded || managed.pending, error: current.error ?? managed.error, select, available: available && !current.error };
 }
 
-export function ResearchMainAgentControls({ controller, cwd, visible, connectionGeneration, refreshSignal, onRebound, accessSlot, metaSlot }: {
+export function ResearchMainAgentControls({ controller, cwd, visible, connectionGeneration, refreshSignal, onRebound, accessSlot, metaSlot, planSlot }: {
   controller: ReturnType<typeof useResearchMainAgent>;
   cwd: string;
   visible?: boolean;
@@ -80,6 +80,7 @@ export function ResearchMainAgentControls({ controller, cwd, visible, connection
   onRebound?: () => void;
   accessSlot?: ReactNode;
   metaSlot?: ReactNode;
+  planSlot?: ReactNode;
 }) {
   const apiBase = useApiBase();
   const { selectedId, session, sessions, loading, error, select, available } = controller;
@@ -102,7 +103,9 @@ export function ResearchMainAgentControls({ controller, cwd, visible, connection
       const response = await fetch(`${apiBase}/api/session/${encodeURIComponent(target.id)}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: `【研究主 Agent 任务】\n请负责拆解任务、分派适合独立执行的工作、核对交付结果并汇总结论。\n\n${draft.trim()}` }),
+        body: JSON.stringify({
+          text: `【研究主 Agent 任务 · 先 Plan 后 Work】\n请严格遵循「先 Plan 后 Work」：先调用 research_dispatch（action="plan"）提交或更新结构化执行 Plan（明确任务拆解、分工角色、依赖关系与 Multi-Agent 对应关系），再按 Plan 分派与启动独立 Multi-Agent（Work）、跟踪并核对交付结果后汇总结论。\n\n${draft.trim()}`,
+        }),
       });
       const receipt = await response.json().catch(() => ({}));
       if (!response.ok || receipt.success !== true || receipt.transmitted !== true) {
@@ -150,6 +153,7 @@ export function ResearchMainAgentControls({ controller, cwd, visible, connection
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">{metaSlot}</div>
       )}
     </div>
+    {planSlot}
     {composing && <form className="research-main-agent-composer" onSubmit={event => { event.preventDefault(); void send(); }}>
       <textarea data-testid="research-main-agent-prompt" aria-label="任务描述" rows={3} value={draft} disabled={sending} onChange={event => setDraft(event.target.value)} placeholder="描述目标、输入路径或交付要求…" />
       <button data-testid="research-main-agent-send" type="submit" className="research-workspace-action primary" disabled={!canSend || sending || !draft.trim()}>{sending ? "发送中…" : "发送"}</button>

@@ -15,6 +15,9 @@ export interface CollaborationPlanTask {
   role: string;
   task: string;
   status: string;
+  stage?: string;
+  sessionId?: string;
+  requestId?: string;
   waitingReason?: string;
   queueReason?: string;
   queueRank?: number;
@@ -24,14 +27,20 @@ export interface CollaborationPlanTask {
 }
 export interface CollaborationPlan {
   id: string;
+  clientPlanId?: string;
+  mode?: string;
   tenureId?: string;
   parentSessionId: string;
+  rootSessionId?: string;
   revision?: number;
   status?: string;
   concurrency?: number;
   effectiveConcurrency?: number;
   suspendedReason?: string;
   schedulingPaused?: boolean;
+  readOnly?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
   tasks: CollaborationPlanTask[];
 }
 export interface CollaborationNativeQueueItem {

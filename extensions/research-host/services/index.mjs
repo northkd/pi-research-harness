@@ -75,9 +75,12 @@ export function createResearchServices(deps) {
     store: createResearchDispatchStore(path.join(deps.privateDir, 'dispatch')),
     getSession: deps.getSession,
     listSessions: deps.listSessions,
+    history: deps.history,
     authorize: authorizeRetainedReport,
     createSession: sessions.create,
     releaseSession: sessions.release,
+    bindDeferredPeerMessages: input => communication.bindDeferredPeerMessages(input),
+    expireDeferredPeerMessages: input => communication.expireDeferredPeerMessages(input),
     notifyParent: deps.notifyParent,
     beforeLaunch: deps.beforeLaunch,
     ...(managed ? {
@@ -103,6 +106,8 @@ export function createResearchServices(deps) {
       await deps.beforeLaunch({ parent: child });
     },
     reportAssignment: input => dispatch.handle(input),
+    getPeerContext: id => dispatch.getPeerContext(id),
+    getPeerTask: input => dispatch.getPeerTask(input),
     isAssignmentCompleted: token => dispatch.isCompleted(token),
     childrenPending: id => dispatch.isWaitingCoordinator(id),
     notifyParent: deps.notifyParent,

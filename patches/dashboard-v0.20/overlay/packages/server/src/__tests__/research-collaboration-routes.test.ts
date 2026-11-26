@@ -219,4 +219,131 @@ describe("Dashboard managed collaboration route integration", () => {
     expect(state.tenures[0].detachedSessionIds).toEqual(["missing-child", "missing-grandchild"]);
     expect([childFile, descendantFile].map(file => fs.readFileSync(file, "utf8"))).toEqual(original);
   });
+  it("exposes the plan topology and delivers a queued peer note only after admission", async () => {
+    const f = fixture();
+    await f.mutate({ action: "select-main", sessionId: "main-a" });
+    await f.mutate({ action: "limits", maxMultiAgents: 1, maxSubagents: 1 });
+    const post = (tool: string, payload: Record<string, unknown>) =>
+      f.app.inject({ method: "POST", url: `/api/res-workflow/${tool}`, payload });
+    const created = await post("dispatch", {
+      sessionId: "main-a", action: "plan", planId: "peer-plan", concurrency: 2,
+      tasks: ["one", "two"].map(id => ({ id, role: "research-worker", task: `Private task ${id}`, stage: "2-experiment" })),
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const state = await f.snapshot();
+    expect(state.plans[0]).toMatchObject({ id: created.json().plans[0].id, clientPlanId: "peer-plan", mode: "tasks",
+      parentSessionId: "main-a", rootSessionId: "main-a", tenureId: state.currentTenureId,
+      status: "running", createdAt: expect.any(String), updatedAt: expect.any(String), readOnly: false });
+    expect(state.plans[0].tasks[1]).toMatchObject({ id: "two", role: "research-worker", stage: "2-experiment",
+      task: "Private task two", status: "queued", sessionId: null, dependsOn: [], waitingReason: "capacity", rank: 1, queueRank: 1, error: null });
+    const roster = await post("dispatch", { sessionId: "worker-1", action: "status" });
+    expect(roster.json().peers).toMatchObject([{ taskId: "two", state: "queued", sessionId: null }]);
+    expect(roster.body).not.toContain("Private task two");
+    const note = { sessionId: "worker-1", action: "send", to: "two", summary: "Use the reviewed units." };
+    const request = await post("communication", { ...note, requestId: "ask-two", kind: "request" });
+    expect(request.statusCode, request.body).toBe(409);
+    expect(request.json().code).toBe("research-communication-peer-queued");
+    const memo = await post("communication", { ...note, requestId: "memo-two", kind: "progress" });
+    expect(memo.json()).toMatchObject({ deferred: true, targetState: "queued" });
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify((await f.snapshot()).plans)).not.toContain(note.summary);
+    await f.mutate({ action: "limits", maxMultiAgents: 2, maxSubagents: 1 });
+    const mailbox = await post("communication", { sessionId: "worker-2", action: "pending" });
+    expect(mailbox.json().messages).toMatchObject([{ from: "worker-1", to: "worker-2", summary: note.summary }]);
+  });
+
+  it("settles an unresolved peer request immediately when its recipient leaves the live registry for the archive", async () => {
+    const f = fixture();
+    await f.mutate({ action: "select-main", sessionId: "main-a" });
+    const post = (tool: string, payload: Record<string, unknown>) =>
+      f.app.inject({ method: "POST", url: `/api/res-workflow/${tool}`, payload });
+    const created = await post("dispatch", {
+      sessionId: "main-a", action: "plan", planId: "archive-peer-plan", concurrency: 2,
+      tasks: ["one", "two"].map(id => ({ id, role: "research-worker", task: `Private task ${id}`, stage: "2-experiment" })),
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    expect(f.spawn).toHaveBeenCalledTimes(2);
+    const request = await post("communication", { sessionId: "worker-1", action: "send", to: "worker-2",
+      requestId: "archive-peer-request", kind: "request", summary: "Confirm the reviewed units." });
+    expect(request.statusCode, request.body).toBe(200);
+    const before = await post("communication", { sessionId: "worker-1", action: "pending" });
+    expect(before.json().retirement.supervisorRequests).toContain(request.json().message.id);
+
+    f.sessionManager.update("worker-2", { status: "ended", live: false });
+    expect(f.archive.archiveSession("worker-2", "manual").ok).toBe(true);
+    expect(f.sessionManager.get("worker-2")).toBeUndefined();
+    const pending = await post("communication", { sessionId: "worker-1", action: "pending" });
+    expect(pending.statusCode, pending.body).toBe(200);
+    expect(pending.json().messages).toContainEqual(expect.objectContaining({ id: request.json().message.id,
+      peerSettled: true, notice: expect.stringContaining("parent") }));
+    expect(pending.json().retirement.supervisorRequests).toEqual([]);
+    const send = await post("communication", { sessionId: "worker-1", action: "send", to: "worker-2",
+      requestId: "archive-peer-followup", kind: "progress", summary: "Reviewed units recorded." });
+    expect(send.statusCode, send.body).toBe(409);
+    expect(send.json().code).toBe("research-communication-peer-ended");
+    expect(f.sessionManager.get("worker-2")).toBeUndefined();
+    expect(f.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses one native lease pool and rejects relayed or unverified local requests", async () => {
+    const f = fixture();
+    await f.mutate({ action: "select-main", sessionId: "main-a" });
+    await f.mutate({ action: "limits", maxMultiAgents: 2, maxSubagents: 1 });
+    const body = { sessionId: "main-a", action: "subagent-acquire", requestId: "first-native", attemptId: "first-attempt" };
+    expect((await f.native(body, {})).statusCode).toBe(403);
+    expect((await f.native(body, { "x-pi-local-token": f.token, "x-forwarded-for": "192.0.2.1" })).statusCode).toBe(403);
+    const first = await f.native(body);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json().status).toBe("acquired");
+    const secondBody = { ...body, requestId: "second-native", attemptId: "second-attempt" };
+    const second = await f.native(secondBody);
+    expect(second.statusCode, second.body).toBe(200);
+    expect(second.json().status).toBe("queued");
+    expect((await f.snapshot()).nativeQueue.map((row: { status: string }) => row.status)).toEqual(["launching", "queued"]);
+    const released = await f.native({ ...body, action: "subagent-release", leaseToken: first.json().leaseToken });
+    expect(released.statusCode, released.body).toBe(200);
+    expect((await f.native(secondBody)).json().status).toBe("acquired");
+  });
+
+  it("releases an existing native lease after its parent is archived", async () => {
+    const f = fixture();
+    await f.mutate({ action: "select-main", sessionId: "main-a" });
+    const body = { sessionId: "main-a", action: "subagent-acquire", requestId: "archived-native", attemptId: "archived-attempt" };
+    const acquired = await f.native(body);
+    expect(acquired.statusCode, acquired.body).toBe(200);
+    expect(acquired.json().status).toBe("acquired");
+    f.sessionManager.update("main-a", { status: "ended", live: false });
+    expect(f.archive.archiveSession("main-a", "manual").ok).toBe(true);
+    expect(f.sessionManager.get("main-a")).toBeUndefined();
+    expect((await f.native({ ...body, requestId: "new-archived-native", attemptId: "new-archived-attempt" })).statusCode).toBe(404);
+    expect((await f.native({ ...body, action: "subagent-heartbeat", phase: "launching", leaseToken: acquired.json().leaseToken })).statusCode).toBe(404);
+    const heartbeat = await f.native({ ...body, action: "subagent-heartbeat", phase: "running", leaseToken: acquired.json().leaseToken });
+    expect(heartbeat.statusCode, heartbeat.body).toBe(200);
+    const released = await f.native({ ...body, action: "subagent-release", leaseToken: acquired.json().leaseToken });
+    expect(released.statusCode, released.body).toBe(200);
+    expect(released.json().status).toBe("released");
+    expect((await f.snapshot()).nativeQueue[0].status).toBe("released");
+  });
+
+  it("removes a frozen historical child after its row leaves the registry", async () => {
+    const f = fixture();
+    let state = await f.mutate({ action: "select-main", sessionId: "main-a" });
+    const firstTenure = state.currentTenureId;
+    const provenance: ResearchSessionProvenance = {
+      schema: "pi-research-session.v1", parentSessionId: "main-a", creatorSessionId: "main-a", creatorAgent: "research_session",
+      role: "research-worker", task: "Synthetic lost-history assignment", stage: "2-experiment", workflowCwd: f.cwd,
+      charterHash: f.charterHash, adoptionId: f.adoptionId, spawnToken: "synth-missing", createdAt: new Date().toISOString(),
+      tenureId: firstTenure, origin: "research_session", relation: "dispatch",
+    };
+    const childFile = f.register("missing-child", provenance);
+    const descendantFile = f.register("missing-grandchild", { ...provenance, parentSessionId: "missing-child", creatorSessionId: "missing-child", spawnToken: "synth-grandchild" });
+    const original = [childFile, descendantFile].map(file => fs.readFileSync(file, "utf8"));
+    await f.mutate({ action: "select-main", sessionId: "main-b" });
+    f.sessionManager.remove("missing-child");
+    f.sessionManager.remove("missing-grandchild");
+    state = await f.mutate({ action: "detach", sessionId: "missing-child", tenureId: firstTenure });
+    expect(state.currentMainSessionId).toBe("main-b");
+    expect(state.tenures[0].detachedSessionIds).toEqual(["missing-child", "missing-grandchild"]);
+    expect([childFile, descendantFile].map(file => fs.readFileSync(file, "utf8"))).toEqual(original);
+  });
 });

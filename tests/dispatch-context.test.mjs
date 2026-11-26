@@ -134,3 +134,54 @@ test('a prerequisite remains addressable when an owned task has the same ID', ()
   assert.equal(JSON.parse(own.content).task.summary, 'own receipt');
   assert.equal(JSON.parse(dependency.content).dependency.summary, 'prerequisite receipt');
 });
+
+test('peer roster forwards only contact metadata and derives three-state capabilities', () => {
+  const snapshot = { status: 'ok', collaborator: true, plans: [], peers: ['in_progress', 'queued', 'ended'].map((state, index) => ({
+    taskId: 'peer-' + index, role: 'research-critic', stage: '3-review', state,
+    rawStatus: ['running', 'queued', 'completed'][index], waitingReason: state === 'queued' ? 'capacity' : null,
+    registration: state === 'queued' ? 'not-started' : 'registered', sessionId: state === 'queued' ? null : 'session-' + index,
+    task: 'PRIVATE_SIBLING_TASK', summary: 'PRIVATE_SIBLING_SUMMARY', evidence: ['PRIVATE_SIBLING_EVIDENCE'],
+    communicatable: { message: true, request: true },
+  })) };
+  const projected = projectDispatchContext(snapshot);
+  assert.equal(projected.omittedPeers, 0);
+  assert.equal(projected.peers.length, 3);
+  assert.deepEqual(projected.peers.map(peer => peer.communicatable), [
+    { message: true, request: true }, { message: 'deferred', request: false }, { message: false, request: false },
+  ]);
+  assert.equal(projected.peers[1].sessionId, null);
+  assert.equal(projected.peers[1].waitingReason, 'capacity');
+  assert.deepEqual(Object.keys(projected.peers[0]), ['taskId', 'role', 'stage', 'state', 'rawStatus', 'waitingReason', 'registration', 'sessionId', 'communicatable']);
+  assert.equal(JSON.stringify(projected).includes('PRIVATE_SIBLING_'), false);
+});
+
+test('peer overflow preserves assignments, plans and all failure counts inside the summary budget', () => {
+  const snapshot = largeSnapshot();
+  snapshot.assignment = { planId: 'parent-plan', taskId: 'self', status: 'running', dependencies: [{ id: 'prerequisite' }] };
+  snapshot.peers = Array.from({ length: 32 }, (_, index) => ({ taskId: 'peer-' + index, role: 'research-critic',
+    stage: '3-review', state: 'in_progress', rawStatus: 'running', registration: 'registered', sessionId: 'session-' + index,
+    waitingReason: '材🧪"\\'.repeat(3000), task: 'PRIVATE_TASK'.repeat(10000) }));
+  snapshot.omittedPeers = 7;
+  const expected = projectDispatchContext({ ...snapshot, peers: [], omittedPeers: 0 });
+  const projected = projectDispatchContext(snapshot);
+  assert.ok(dispatchContextBytes(projected) <= DISPATCH_CONTEXT_BYTES);
+  assert.deepEqual(projected.assignment, expected.assignment);
+  assert.deepEqual(projected.plans, expected.plans);
+  assert.deepEqual(projected.counts, expected.counts);
+  assert.equal(projected.counts.failed, 1);
+  assert.ok(projected.omittedPeers > 7);
+  assert.equal(projected.peers.length + projected.omittedPeers, 39);
+  assert.equal(JSON.stringify(projected).includes('PRIVATE_TASK'), false);
+});
+
+test('unbounded peer inputs cap roster size and count omitted contacts', () => {
+  const snapshot = { status: 'ok', plans: [], peers: Array.from({ length: 100 }, (_, index) => ({
+    taskId: 'peer-' + index, role: 'worker', state: 'queued', rawStatus: 'queued', registration: 'not-started',
+    waitingReason: '🧪"\\'.repeat(5000),
+  })) };
+  const projected = projectDispatchContext(snapshot);
+  assert.ok(projected.peers.length > 0 && projected.peers.length <= 32);
+  assert.equal(projected.peers.length + projected.omittedPeers, 100);
+  assert.ok(dispatchContextBytes(projected) <= DISPATCH_CONTEXT_BYTES);
+  assert.ok(projected.peers.every(peer => Buffer.byteLength(JSON.stringify(peer.waitingReason)) <= 180));
+});

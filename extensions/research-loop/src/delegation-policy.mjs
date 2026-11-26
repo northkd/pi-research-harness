@@ -1,5 +1,5 @@
 /**
- * Dynamic delegation policy for joined research workbench sessions.
+ * Dynamic delegation policy for research workbench and standalone sessions.
  *
  * Capabilities are derived only from the tools Pi reports as active for the
  * current prompt (event.systemPromptOptions.selectedTools). The module never
@@ -7,8 +7,17 @@
  * and a bounded context nudge; it never blocks a direct tool.
  */
 
+import { readFileSync } from 'node:fs';
+
 export const DELEGATION_NUDGE_TYPE = 'research-delegation-nudge';
 export const DEFAULT_BULK_THRESHOLD = 6;
+
+// Load the release policy once so prompt turns share its exact priority chains.
+const MODEL_POLICY = JSON.parse(readFileSync(new URL('../model-policy.json', import.meta.url), 'utf8'));
+const MODEL_ORDERS = Object.fromEntries(['worker', 'commander', 'intelligence'].map(tier => [
+  tier,
+  [...MODEL_POLICY.tiers[tier].models, ...(MODEL_POLICY.tiers[tier].fallbackChain ?? [])].join(' -> '),
+]));
 
 /** Read/search tools whose repeated use in the lead context should trigger a nudge. */
 const BULK_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'bash', 'web_search', 'fetch_content']);
@@ -206,6 +215,26 @@ function familySummary(caps) {
   return labels.join(', ');
 }
 
+function routingGuidance(caps) {
+  const research = caps.researchSession || caps.researchDispatch;
+  const lines = research ? [
+    'Joined res-workflow routing: use the full catalog of research-* roles, utility pi-subagents and agy-advisor according to the available tools.',
+    '- Reserve research-* roles and formal Multi-Agent work for scientific hypotheses, theory, literature synthesis and critic work. Use research_dispatch action=plan when available for the confirmed scientific task graph.',
+    '- Offload engineering, repository search, logs, diff review and verification to utility pi-subagents in subordinate capacity slots. Respect the installed concurrency limit, normally three child slots per collaborator.',
+  ] : [
+    'Standalone / non-research routing: primarily choose the seven utility pi-subagents scout, researcher, reviewer, evidence-auditor, worker, oracle and delegate. Use agy-advisor on demand. Use research-* scientific roles only when explicitly requested.',
+  ];
+  if (caps.piSubagents) lines.push(
+    '- Judge scope before reading: unknown multi-directory or log searches go to parallel scout tasks, post-edit diff/compliance checks to reviewer, isolated build/fix work to worker, external lookup to researcher, difficult evidence verification to evidence-auditor, plan consistency to oracle and bounded general work to delegate. Read or grep one known file directly.',
+    '- The parent must pass an explicit top-level model dynamically for every utility role, selected by work form and remaining tier quota. Keep utility roles free of fixed model pins.',
+    `- Worker order: ${MODEL_ORDERS.worker}. Exhaust the Flash pool before Terra, then use the policy fallback chain.`,
+    `- Commander order: ${MODEL_ORDERS.commander}. When quota is exhausted, switch directly to the next model in this order.`,
+    `- Intelligence order: ${MODEL_ORDERS.intelligence}. Escalate to the next reasoning level when unsolved or higher reasoning is required. Routine scout/researcher/worker/delegate work uses worker quota, review/oracle work uses commander quota, and difficult evidence/root-cause work uses intelligence quota.`,
+    '- agy-advisor discovers live agy models and effort levels, then obtains user confirmation of the exact model + effort before executing agy or agy-subagent. A child routes that question through contact_supervisor to the parent ask_user UI. Retain workspace read-only and export restrictions.',
+  );
+  return lines;
+}
+
 /**
  * Build compact, schema-accurate guidance for the active delegation tools.
  * Returns '' when no delegation tool is active or the user restricted it.
@@ -232,13 +261,14 @@ export function buildDelegationGuidance({ selectedTools, restrictions, env } = {
     'Route work deliberately:',
     '- Delegate bulk or independent work: broad multi-file exploration, long logs or papers, independent batch analysis, multiple source comparisons, or a second independent check.',
     `- Do the work directly: one known file, one lookup, one trivial check,${restriction.readOnly ? ' or a small read-only inspection.' : ' or a small edit.'}`,
+    ...routingGuidance(caps),
     'Verified call shapes (use only the tools listed above; omit examples for absent families):',
   ];
   if (restriction.readOnly) {
     lines.push('READ-ONLY MODE: delegate only read-only analysis. Tell each child: do not edit or write files, do not mutate state, do not install packages, and do not run state-changing commands. Return findings and evidence paths only.');
   }
   if (caps.piSubagents) {
-    lines.push('  subagent({ agent: "research-literature", task: "Answer <bounded question>. Return a short conclusion and evidence paths only.", async: true, options: { context: "fresh" } })');
+    lines.push(`  subagent({ agent: "scout", task: "Answer <bounded question>. Return a short conclusion and evidence paths only.", model: ${JSON.stringify(MODEL_POLICY.tiers.worker.models[0])}, async: true, options: { context: "fresh" } })`);
   }
   if (caps.tintinAgent) {
     lines.push('  Agent({ subagent_type: "Explore", prompt: "Answer <bounded question>. Return a short conclusion and evidence paths only.", description: "Explore <area>", run_in_background: true })');
@@ -248,7 +278,7 @@ export function buildDelegationGuidance({ selectedTools, restrictions, env } = {
   }
   lines.push(
     'Guidelines:',
-    '- For pi-subagents, put `agent` and `task` at the top level and other controls under `options`; do not use the old `subagent(agentName, prompt)` form. Check the actual agent/workflow list before naming one.',
+    '- For pi-subagents, put `agent`, `task` and `model` at the top level and other controls under `options`; do not use the old `subagent(agentName, prompt)` form. Check the actual agent/workflow list before naming one.',
     '- Give each child a bounded question, expected output, and evidence paths. Never ask a child to run model training/serving or other unauthorized model work.',
     '- Keep the lead context small: request a short conclusion plus file paths, then verify key claims yourself; do not import full child transcripts or dumps.',
     '- Collaborators may recursively delegate separable work inside the same owner, workspace, charter and permission scope. Respect installed depth, role and concurrency limits; SSH, agy and supervisor roles remain leaves.',
@@ -276,6 +306,9 @@ export function buildDelegationNudge(count, { threshold = DEFAULT_BULK_THRESHOLD
     `[Delegation nudge] ${count} broad read/search operations have run in this lead context while delegation is available.`,
     'If the remaining work is still broad or parallel, stop bulk-reading here and dispatch a bounded specialist using the active tool shape; ask for a short conclusion plus evidence paths.',
     'If this is one known file or a trivial check, continue directly.',
+    caps.researchSession || caps.researchDispatch
+      ? 'Use utility subagents for engineering/search/diff chores within subordinate slots, reserving research-* and formal plans for scientific work.'
+      : 'Prefer scout for unknown multi-directory/log exploration, reviewer for post-edit checks and worker for an isolated build/fix. Choose utility-role models dynamically by the three-tier quota order in the routing guidance.',
   ];
   if (restriction.readOnly) {
     lines.push('Read-only mode: the specialist must not edit or write files, mutate state, install packages, or run state-changing commands; ask for findings and evidence paths only.');
@@ -295,6 +328,7 @@ export function registerDelegationPolicy(pi, options = {}) {
     : DEFAULT_BULK_THRESHOLD;
   const env = options.env ?? process.env;
   const isJoinedPredicate = typeof options.isJoined === 'function' ? options.isJoined : null;
+  const selectedToolsFor = options.getSelectedTools ?? (event => event?.systemPromptOptions?.selectedTools);
   const states = new Map();
 
   // Fail closed: a globally installed extension must not nudge unrelated sessions.
@@ -334,7 +368,7 @@ export function registerDelegationPolicy(pi, options = {}) {
     state.bulk = 0;
     state.nudged = false;
     state.nudgePending = false;
-    state.caps = detectDelegationTools(event?.systemPromptOptions?.selectedTools);
+    state.caps = detectDelegationTools(selectedToolsFor(event, ctx));
     if (!state.joined) return undefined;
     if (event?.messageType === 'user' && typeof event.prompt === 'string') {
       state.restrictions = mergeDelegationEventRestrictions(state.restrictions, event);

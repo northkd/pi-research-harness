@@ -1,8 +1,8 @@
 {
   "package": "pi-subagents",
   "version": "0.79.2",
-  "patch": "patches/subagents/0008-live-scheduling-0792.patch",
-  "patchSha256": "ccb237c2260040aa0f0cca2b68d435d0385351199eb8d2141e8161bc4563c283",
+  "patch": "patches/subagents/0012-live-scheduling-catalog-0792.patch",
+  "patchSha256": "95263a44b480fb1c0c8e4d7e4f50572b741dda53e9d34c3d1931a7e4d9d166ea",
   "files": {
     "src/extension/rpc.js": {
       "beforeSha256": "f1ccc4ffbc3d59058fbaed1c3e6777402e1e048c40ac31068611743fe48f0b2e",
@@ -43,12 +43,33 @@
     "src/runs/shared/research-subagent-scheduling.mjs": {
       "beforeSha256": null,
       "afterSha256": "94c099b8c98bd30bef526301691708c9ef4bf9812fc8c05d4f64f22279a66e3c"
+    },
+    "src/agents/advertised-agent-prompt.js": {
+      "beforeSha256": "0363fe6096b679d23141f11c52d3d761f23a787e2c0e5efb12744f29a0cdd9a6",
+      "afterSha256": "8cd5f7ce7964d618a045e5f5bc6802be225792f951390df08ada22d340d654bd"
     }
   },
   "upgrades": [
     {
+      "patch": "patches/subagents/0013-advertised-catalog-upgrade-0792.patch",
+      "patchSha256": "3e70e63297332c83a205b05ff1734d19b04ed78954e733ac44db5546fd51ada4",
+      "files": {
+        "src/extension/rpc.js": "2a4f20c9ec25c025f963c6d45719ead62cb7cb39499531d4c6e473dea51e2f03",
+        "src/runs/shared/child-session.js": "378404c121c7ba9b6351da16c1fbb04ec149500ca00f120c446309d76cda1bbc",
+        "src/runs/shared/research-model-selection.mjs": "3e5ac3eeb2e5ad1372a57e65889513e9aff928051afbe3df732ca65c57660524",
+        "src/runs/foreground/execution.js": "983c8ee0acfdb2c4d016d61b80f4595340e003375fd04a35f553d8098acff5a9",
+        "src/runs/background/run-child-session.js": "0737f70f72e99a02221b062eea0b55584dc94c5afa7fe5edd8c006d8a6488bc5",
+        "src/runs/shared/child-session.d.ts": "481d3ce0717e025d4b7a32923ff1aea6aabbed7c80030eac1e651380542d0423",
+        "src/runs/shared/subagent-prompt-runtime.js": "bf64bbd8c3a3e70801cc85c18863f8ec7e03346e3bd6eb72b5851621a687ae50",
+        "src/runs/shared/subagent-prompt-runtime.d.ts": "39b38b518db44153abacfe23bd64dc92af9d53670412c2b167a8caeb1e491114",
+        "src/runs/shared/research-skill-context.mjs": "5592d45b48f2ecc1f4cadce91b60dfe29af45aa8722a96b52ba198e3abbf0f84",
+        "src/runs/shared/research-subagent-scheduling.mjs": "94c099b8c98bd30bef526301691708c9ef4bf9812fc8c05d4f64f22279a66e3c",
+        "src/agents/advertised-agent-prompt.js": "0363fe6096b679d23141f11c52d3d761f23a787e2c0e5efb12744f29a0cdd9a6"
+      }
+    },
+    {
       "patch": "patches/subagents/0009-live-scheduling-upgrade-skills-0792.patch",
-      "patchSha256": "2066617bc94ba35f7a9852994e86cae876f2249dfe047eff1c33945e83867a13",
+      "patchSha256": "8f8b65b1baad0f42d0ebb61950e96cef6c451dc247ce76b25cc61449352c2c28",
       "files": {
         "src/extension/rpc.js": "2a4f20c9ec25c025f963c6d45719ead62cb7cb39499531d4c6e473dea51e2f03",
         "src/runs/shared/child-session.js": "378404c121c7ba9b6351da16c1fbb04ec149500ca00f120c446309d76cda1bbc",
@@ -59,12 +80,13 @@
         "src/runs/shared/subagent-prompt-runtime.js": "bf64bbd8c3a3e70801cc85c18863f8ec7e03346e3bd6eb72b5851621a687ae50",
         "src/runs/shared/subagent-prompt-runtime.d.ts": "39b38b518db44153abacfe23bd64dc92af9d53670412c2b167a8caeb1e491114",
         "src/runs/shared/research-skill-context.mjs": "5592d45b48f2ecc1f4cadce91b60dfe29af45aa8722a96b52ba198e3abbf0f84",
-        "src/runs/shared/research-subagent-scheduling.mjs": null
+        "src/runs/shared/research-subagent-scheduling.mjs": null,
+        "src/agents/advertised-agent-prompt.js": "0363fe6096b679d23141f11c52d3d761f23a787e2c0e5efb12744f29a0cdd9a6"
       }
     },
     {
       "patch": "patches/subagents/0010-live-scheduling-upgrade-model-0792.patch",
-      "patchSha256": "00f01eba1c2ce3feb53f8b140e6ea2b7cdaabde1b7849a59282a1f16128ad33d",
+      "patchSha256": "97fcee0f969224812ee30c5a9ccd6f357a2447d9a1a17c073f16297ab37301a7",
       "files": {
         "src/extension/rpc.js": "2a4f20c9ec25c025f963c6d45719ead62cb7cb39499531d4c6e473dea51e2f03",
         "src/runs/shared/child-session.js": "378404c121c7ba9b6351da16c1fbb04ec149500ca00f120c446309d76cda1bbc",
@@ -75,12 +97,13 @@
         "src/runs/shared/subagent-prompt-runtime.js": "21e248d6d4ca560b0d4496b3d3d1710251fd4838c8a6608f061df39817cac153",
         "src/runs/shared/subagent-prompt-runtime.d.ts": "b989cfebc7b9a23f77db3198d46ceb002bd80cd19d852fed7e49b4dfd3927031",
         "src/runs/shared/research-skill-context.mjs": null,
-        "src/runs/shared/research-subagent-scheduling.mjs": null
+        "src/runs/shared/research-subagent-scheduling.mjs": null,
+        "src/agents/advertised-agent-prompt.js": "0363fe6096b679d23141f11c52d3d761f23a787e2c0e5efb12744f29a0cdd9a6"
       }
     },
     {
       "patch": "patches/subagents/0011-live-scheduling-upgrade-budget-0792.patch",
-      "patchSha256": "08127b7435717581d67171ddb6754a15bd38f230592413d925d6cdcb0c1a6074",
+      "patchSha256": "c24251a495f1af98f0bfa043b22a185886449380a846592ee38fdc5afeae73c5",
       "files": {
         "src/extension/rpc.js": "2a4f20c9ec25c025f963c6d45719ead62cb7cb39499531d4c6e473dea51e2f03",
         "src/runs/shared/child-session.js": "b7ca8b7046208bb8d51c696d18c301af1334aa035b5c3f123dfc93b567312787",
@@ -91,7 +114,8 @@
         "src/runs/shared/subagent-prompt-runtime.js": "21e248d6d4ca560b0d4496b3d3d1710251fd4838c8a6608f061df39817cac153",
         "src/runs/shared/subagent-prompt-runtime.d.ts": "b989cfebc7b9a23f77db3198d46ceb002bd80cd19d852fed7e49b4dfd3927031",
         "src/runs/shared/research-skill-context.mjs": null,
-        "src/runs/shared/research-subagent-scheduling.mjs": null
+        "src/runs/shared/research-subagent-scheduling.mjs": null,
+        "src/agents/advertised-agent-prompt.js": "0363fe6096b679d23141f11c52d3d761f23a787e2c0e5efb12744f29a0cdd9a6"
       }
     }
   ],

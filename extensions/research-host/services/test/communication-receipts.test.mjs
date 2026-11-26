@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { createResearchReceiptHandler, isResearchDispatchReceiptId } from '../research-dispatch-receipts.mjs';
 const id = 'research-message-message-' + 'a'.repeat(48);
 const text = `[research_communication receipt ${id}] Request from child.`;
-test('formal communication receipts deduplicate across bridge restart and ack after native acceptance', async () => {
+for (const channel of ['receipt', 'peer']) test(`communication ${channel} wakeups deduplicate across bridge restart and ack after native acceptance`, async () => {
   let launches = 0; const history = [], acks = [];
   const options = { getSessionId: () => 'parent', readHistory: () => history,
     handle: async message => { launches++; assert.equal(acks.length, 0); history.push({ message: { role: 'user', content: message.text } }); },
     sendAck: value => acks.push(value) };
-  const message = { type: 'send_prompt', sessionId: 'parent', promptId: id, text };
+  const message = { type: 'send_prompt', sessionId: 'parent', promptId: id, text: `[research_communication ${channel} ${id}] Read pending.` };
   await createResearchReceiptHandler(options)(message);
   await createResearchReceiptHandler(options)(message);
   assert.equal(launches, 1); assert.equal(acks.length, 2);

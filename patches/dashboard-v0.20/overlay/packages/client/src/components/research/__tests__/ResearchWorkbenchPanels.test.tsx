@@ -135,7 +135,7 @@ describe("research scientific panels", () => {
     ]})})));
     const props={ stage:null, includeUnstaged:true, stale:false, onAgent:vi.fn(), cwd:"/project" };
     const view=render(<ResearchExecutionPanels {...props} projection={projectResearch(snapshot,observed)} />);
-    await waitFor(() => expect(screen.getByRole("button",{name:"聚焦派生任务"}).getAttribute("data-origin")).toBe("lead-agent-created"));
+    await waitFor(() => expect(screen.getByRole("button",{name:/^展开 派生任务/}).getAttribute("data-origin")).toBe("lead-agent-created"));
     fireEvent.click(within(screen.getByRole("group",{name:"协作视图布局"})).getByRole("button",{name:"列表"}));
     expect(screen.getAllByText(/Agent 派生 · 创建者：用户主会话/).length).toBeGreaterThan(0);
     observed.executions.push({id:"session-other",sessionId:"other",kind:"pi-session",status:"idle"});
@@ -143,7 +143,7 @@ describe("research scientific panels", () => {
     view.rerender(<ResearchExecutionPanels {...props} projection={projectResearch(snapshot,observed)} />);
     expect(screen.getAllByText(/Agent 派生 · 创建者：父关系冲突/).length).toBeGreaterThan(0);
     fireEvent.click(within(screen.getByRole("group",{name:"协作视图布局"})).getByRole("button",{name:"画布"}));
-    expect(within(screen.getByRole("button",{name:"聚焦派生任务"})).getByTestId("canvas-session-creator").textContent).toContain("父关系冲突");
+    expect(within(screen.getByRole("button",{name:/^展开 派生任务/})).getByTestId("canvas-session-creator").textContent).toContain("父关系冲突");
     expect(screen.queryAllByTestId("canvas-parent-edge")).toHaveLength(0);
   });
 

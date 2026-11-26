@@ -1141,7 +1141,7 @@ export const ResearchExecutionPanels = forwardRef(function ResearchExecutionPane
                         </span>
                       </div>
                       <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-                        先查看会话总览，点击会话聚焦其下属角色；也可切换到详细列表。
+                        先按 Plan 查看协同层级，点击节点可在拓扑图中直接展开下级节点，点击「详情与纠偏」查看明细；也可切换到详细列表。
                       </p>
                     </div>
 

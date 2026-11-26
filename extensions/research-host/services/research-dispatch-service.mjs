@@ -10,6 +10,13 @@ const TERMINAL = new Set(['completed', 'failed', 'blocked']);
 const ACTIVE = new Set(['launching', 'running', 'recovery-required']);
 const TRANSIENT_ADMISSION = new Set(['research-session-concurrency-limit', 'research-session-capacity-limit', 'research-session-resident-limit', 'research-session-memory-limit', 'research-session-resource-budget-unavailable']);
 const ENDED = new Set(['ended', 'closed', 'archived']);
+/** Shared mailbox/roster state. Terminal task or session state takes precedence. */
+export function researchDispatchPeerState(task, session) {
+  if (TERMINAL.has(task?.status) || ENDED.has(session?.status) || Number.isFinite(session?.archivedAt)) return 'ended';
+  if (task?.status === 'queued') return 'queued';
+  return ACTIVE.has(task?.status) ? 'in_progress' : 'ended';
+}
+
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -74,6 +81,8 @@ export function createResearchDispatchStore(directory) {
 export function createResearchDispatchService(deps) {
   const now = deps.now ?? (() => new Date());
   const plans = new Map((deps.store?.readAll() ?? []).map(row => [row.id, clone(row)]));
+  // Native registration can confirm without changing the task's stored session id.
+  const peerMailboxStates = new Map();
   const settledReservations = new Set();
   const releaseReservation = async token => {
     if (!token || settledReservations.has(token)) return;
@@ -92,7 +101,7 @@ export function createResearchDispatchService(deps) {
     const previous = plans.get(plan.id);
     const revision = previous ? (previous.revision ?? 1) + (queueSignature(previous) === queueSignature(plan) ? 0 : 1) : 1;
     const saved = clone({ ...plan, revision, updatedAt: now().toISOString() });
-    deps.store?.write(saved); plans.set(saved.id, saved);
+    deps.store?.write(saved); plans.set(saved.id, saved); synchronizePeerMailboxes(saved);
     // The caller continues from the same copy after each durable state change.
     plan.revision = revision;
     return saved;
@@ -104,16 +113,90 @@ export function createResearchDispatchService(deps) {
     concurrency: plan.effectiveConcurrency ?? plan.concurrency, requestedConcurrency: plan.concurrency, schedulingPaused: plan.schedulingPaused === true,
     ...(plan.readOnly === true ? { readOnly: true } : {}), error: plan.error, suspendedReason: plan.suspendedReason,
     tasks: taskOrder(plan).map((row, index) => {
-      if (!compact) return { ...row, queueRank: index };
+      if (!compact) return { ...row, rank: row.rank ?? index, queueRank: index };
       const { summary: _summary, evidence: _evidence, task, ...state } = row;
       const characters = Array.from(task);
-      return { ...state, task: characters.slice(0, 240).join(''), taskTruncated: characters.length > 240, queueRank: index };
+      return { ...state, task: characters.slice(0, 240).join(''), taskTruncated: characters.length > 240, rank: row.rank ?? index, queueRank: index };
     }), createdAt: plan.createdAt, updatedAt: plan.updatedAt });
   const matchesTask = (plan, task, child) => {
     const p = researchProvenanceOf(child);
     return p && (p.spawnToken === task.spawnToken || p.requestId === task.requestId) && p.parentSessionId === plan.parentSessionId && p.adoptionId === plan.adoptionId && p.charterHash === plan.charterHash && p.workflowCwd === plan.cwd && (!plan.tenureId || p.tenureId === plan.tenureId || plan.importedLegacy === true && !p.tenureId);
   };
   const childFor = (plan, task) => sessions().find(child => child.nativeRegistrationConfirmed !== false && matchesTask(plan, task, child));
+
+  // Internal metadata lookup only. Formal dispatch identity is required even
+  // when historical direct children share a parent and matching request tokens.
+  function formalPeerSession(plan, task, session) {
+    const p = researchProvenanceOf(session);
+    return session?.nativeRegistrationConfirmed !== false && p?.dispatchId === plan.id && p?.taskId === task.id
+      && p.parentSessionId === plan.parentSessionId && p.workflowCwd === plan.cwd
+      && p.charterHash === plan.charterHash && p.adoptionId === plan.adoptionId
+      && (p.tenureId ?? null) === (plan.tenureId ?? null)
+      && (!task.sessionId || task.sessionId === session.id)
+      && (!!task.spawnToken && p.spawnToken === task.spawnToken || !!task.requestId && p.requestId === task.requestId);
+  }
+  function peerTask(plan, task, availableSessions) {
+    const storedSessionId = ID.test(task.sessionId ?? '') ? task.sessionId : null;
+    let session = null;
+    if (task.status !== 'queued') {
+      const stored = storedSessionId ? deps.getSession(storedSessionId) : null;
+      if (stored && formalPeerSession(plan, task, stored)) session = stored;
+      if (!session && storedSessionId) {
+        // History proves retirement only. Read the exact recorded identity and
+        // never turn an archived summary into live participation authority.
+        session = deps.history?.().find(row => row.id === storedSessionId && row.cwd === plan.cwd
+          && Number.isFinite(row.archivedAt) && formalPeerSession(plan, task, row));
+      }
+      if (!session && !storedSessionId && ACTIVE.has(task.status)) {
+        session = (availableSessions ?? sessions()).find(row => formalPeerSession(plan, task, row));
+      }
+    }
+    const state = researchDispatchPeerState(task, session);
+    const sessionId = session?.id ?? (TERMINAL.has(task.status) ? storedSessionId : null);
+    return { taskId: task.id, role: task.role, stage: task.stage, state, rawStatus: task.status,
+      waitingReason: task.waitingReason ?? null,
+      registration: sessionId ? 'registered' : task.launchedAt ? 'pending' : 'not-started',
+      sessionId,
+      communicatable: { message: state === 'in_progress' ? true : state === 'queued' ? 'deferred' : false,
+        request: state === 'in_progress' } };
+  }
+  function getPeerContext(sessionId) {
+    const session = deps.getSession(sessionId), p = researchProvenanceOf(session);
+    if (session?.nativeRegistrationConfirmed === false || !ID.test(p?.dispatchId ?? '') || !ID.test(p?.taskId ?? '')) return null;
+    const plan = plans.get(p.dispatchId), task = plan?.tasks.find(row => row.id === p.taskId);
+    if (!plan || plan.kind !== 'plan' || !task || !formalPeerSession(plan, task, session)) return null;
+    const availableSessions = sessions(), own = peerTask(plan, task, availableSessions);
+    if (own.sessionId !== sessionId) return null;
+    return { plan: { id: plan.id, parentSessionId: plan.parentSessionId, rootSessionId: plan.rootSessionId,
+      tenureId: plan.tenureId ?? null, cwd: plan.cwd, ownerKey: plan.ownerKey,
+      charterHash: plan.charterHash, adoptionId: plan.adoptionId }, task: own, state: own.state,
+      peers: plan.tasks.filter(row => row.id !== task.id).map(row => peerTask(plan, row, availableSessions)) };
+  }
+  function getPeerTask({ planId, taskId }) {
+    const plan = plans.get(planId), task = plan?.tasks.find(row => row.id === taskId);
+    return plan?.kind === 'plan' && task ? peerTask(plan, task) : null;
+  }
+  function synchronizePeerMailboxes(plan) {
+    if (plan.kind !== 'plan') return;
+    const availableSessions = sessions();
+    for (const task of plan.tasks) {
+      const target = peerTask(plan, task, availableSessions);
+      const key = plan.id + ':' + task.id;
+      const state = target.state === 'ended' ? 'ended' : target.sessionId ? 'session:' + target.sessionId : null;
+      const previous = peerMailboxStates.get(key);
+      peerMailboxStates.set(key, state);
+      if (!state || state === previous) continue;
+      let operation;
+      if (target.state === 'ended') {
+        operation = () => deps.expireDeferredPeerMessages?.({ planId: plan.id, taskId: task.id });
+      } else {
+        operation = () => deps.bindDeferredPeerMessages?.({ planId: plan.id, taskId: task.id, sessionId: target.sessionId });
+      }
+      // Communication may itself await dispatch reporting. Enqueue without
+      // awaiting its serialization lane. Its inbox/tick repairs durable mailboxes.
+      if (operation) Promise.resolve().then(operation).catch(() => {});
+    }
+  }
   const terminalize = (task, status, error) => { task.status = status; task.error = error; task.finishedAt = now().toISOString(); };
   function acknowledge(plan, promptId) {
     const copy = clone(plan), at = now().toISOString();
@@ -547,7 +630,9 @@ export function createResearchDispatchService(deps) {
     }) : [];
     const historyCounts = { total: 0, completed: 0, failed: 0, blocked: 0, active: 0, queued: 0 };
     for (const plan of all) for (const task of plan.tasks) { historyCounts.total++; historyCounts[TERMINAL.has(task.status) || task.status === 'queued' ? task.status : 'active']++; }
-    return { status: 'ok', tool: 'research_dispatch', sessionId: verified.parent.id, plans: visible, planHistory: { total: all.length, shown: visible.length, counts: historyCounts }, atomicReason: atomic?.reason ?? null, collaborator: !!collaborator, brief, assignment: assignment[0] ?? null, declaredTasks: collaborator?.tasks?.length ?? 0, decisionRequired: !atomic && !all.length, childrenPending: all.some(plan => !TERMINAL.has(plan.status)) };
+    const peerContext = getPeerContext(verified.parent.id);
+    const peers = peerContext && scopeMatches(peerContext.plan, verified) ? peerContext.peers : [];
+    return { status: 'ok', tool: 'research_dispatch', sessionId: verified.parent.id, peers: peers.slice(0, 32), omittedPeers: Math.max(0, peers.length - 32), plans: visible, planHistory: { total: all.length, shown: visible.length, counts: historyCounts }, atomicReason: atomic?.reason ?? null, collaborator: !!collaborator, brief, assignment: assignment[0] ?? null, declaredTasks: collaborator?.tasks?.length ?? 0, decisionRequired: !atomic && !all.length, childrenPending: all.some(plan => !TERMINAL.has(plan.status)) };
   }
 
   async function manageQueueInternal(input) {
@@ -589,6 +674,7 @@ export function createResearchDispatchService(deps) {
 
   return {
     handle: input => serial(() => handleInternal(input)), tick: () => serial(advance),
+    getPeerContext, getPeerTask,
     manageQueue: input => serial(() => manageQueueInternal(input)),
     listForScope: ({ cwd, ownerKey }) => [...plans.values()].filter(plan => plan.kind === 'plan' && plan.cwd === cwd && plan.ownerKey === ownerKey).map(plan => publicPlan(plan, true)),
     suspendSessions: (sessionIds, reason = 'research-collaboration-detached', tenureId) => serial(async () => {

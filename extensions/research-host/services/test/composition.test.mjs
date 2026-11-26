@@ -72,6 +72,24 @@ function fixture(t) {
 const tasks = ['one', 'two'].map(id => ({ id, role: 'research-worker', task: 'Synthetic bounded task ' + id,
   stage: '2-experiment', dependsOn: [] }));
 
+test('queued peer mail survives restart and is delivered when a parent report frees its slot', async t => {
+  const f = fixture(t);
+  await f.selectMain();
+  const communicate = (sessionId, body) => f.services().communication.handle({ principal: f.principal, body: { sessionId, ...body } });
+  await f.call({ sessionId: 'lead', action: 'plan', planId: 'mailbox-plan', tasks });
+  const note = { action: 'send', requestId: 'note-for-two', kind: 'decision', to: 'two', summary: 'Use the agreed units.' };
+  assert.equal((await communicate('worker-1', note)).deferred, true);
+  await f.restart();
+  await communicate('worker-1', note);
+  assert.equal(f.launches(), 1);
+  await communicate('worker-1', { action: 'report', requestId: 'one-complete', to: 'parent', status: 'completed', summary: 'Units checked.' });
+  assert.equal(f.launches(), 2);
+  const inbox = await communicate('worker-2', { action: 'pending' });
+  assert.deepEqual(inbox.messages.map(row => [row.from, row.to, row.kind, row.summary]),
+    [['worker-1', 'worker-2', 'decision', note.summary]]);
+  assert.ok(f.notifications.some(([to, body]) => to === 'worker-2' && body.includes('[research_communication peer')));
+});
+
 test('standalone composition retains queue, reservations and receipts across restart', async t => {
   const f = fixture(t);
   await f.selectMain();

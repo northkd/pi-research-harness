@@ -113,9 +113,9 @@ describe("research workspace surfaces", () => {
     vi.stubGlobal("fetch", vi.fn(async url => response(String(url).includes("/collaboration") ? collaboration
       : { data: [{ id: "collab", cwd: "/test/project", name: "实验协作者", nameSource: "manual", researchSession: provenance }] })));
     render(<ResearchPipelinePage cwd="/test/project" surface="agents" />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "聚焦实验协作者" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "聚焦实验协作者" }));
-    fireEvent.click(screen.getByRole("button", { name: "详情与纠偏" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^展开 实验协作者/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /^展开 实验协作者/ }));
+    fireEvent.click(screen.getByRole("button", { name: "查看 实验协作者 会话详情" }));
     expect(screen.getByTestId("research-correction-target").textContent).toContain("发送到会话 collab");
     expect(screen.queryByText("暂无可验证运行记录")).toBeNull();
   });
@@ -159,7 +159,15 @@ describe("research workspace surfaces", () => {
     expect(within(oldTree).getByText("调度拓扑")).toBeTruthy();
     expect(within(newTree).getByText("调度拓扑")).toBeTruthy();
     expect(within(oldTree).getAllByTestId("canvas-parent-edge")).toHaveLength(1);
-    expect(within(newTree).getAllByTestId("canvas-parent-edge")).toHaveLength(1);
+    expect(within(newTree).getAllByTestId("canvas-parent-edge")).toHaveLength(4);
+    expect(within(newTree).getByTestId("canvas-plan-node").textContent).toContain("queued-plan");
+    expect(within(newTree).getByTestId("canvas-captain-plan-progress").textContent).toContain("Plan 进度 0/1");
+    const mainProgress = screen.getByTestId("research-main-plan-progress");
+    expect(mainProgress.textContent).toContain("主 Agent Plan 进度：0/1 个 Plan 已结束");
+    expect(mainProgress.textContent).toContain("排队中 1");
+    expect(mainProgress.textContent).toContain("已结束 1");
+    fireEvent.click(within(mainProgress).getByRole("button", { name: /queued-plan/ }));
+    expect(within(newTree).getByTestId("canvas-plan-node").className).toContain("ring-2");
     expect(within(oldTree).queryByText("当前协作者")).toBeNull();
     expect(screen.getAllByRole("button", { name: /^从当前批次移除 / })).toHaveLength(4);
     expect(screen.getByText("Multi-Agent 1")).toBeTruthy();
@@ -177,8 +185,8 @@ describe("research workspace surfaces", () => {
     await waitFor(() => expect(multiInput.disabled).toBe(false));
     fireEvent.click(within(oldTree).getByRole("button", { name: "从当前批次移除 上一轮协作者" }));
     fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
-    await waitFor(() => expect(within(oldTree).queryByRole("button", { name: "聚焦上一轮协作者" })).toBeNull());
-    expect(within(newTree).getByRole("button", { name: "聚焦当前协作者" })).toBeTruthy();
+    await waitFor(() => expect(within(oldTree).queryByRole("button", { name: /^展开 上一轮协作者/ })).toBeNull());
+    expect(within(newTree).getByRole("button", { name: /^展开 当前协作者/ })).toBeTruthy();
     const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => JSON.parse(String(init?.body)));
     expect(posts).toEqual([
       { cwd: "/test/project", expectedRevision: 8, action: "limits", maxMultiAgents: 2, maxSubagents: 1 },
@@ -202,8 +210,7 @@ describe("research workspace surfaces", () => {
     };
     vi.stubGlobal("fetch", vi.fn(async url => response(String(url).includes("/collaboration") ? state : { data: [] })));
     render(<ResearchPipelinePage cwd={state.cwd} surface="agents" />);
-    fireEvent.click(await screen.findByRole("button", { name: "聚焦原实验会话" }));
-    fireEvent.click(screen.getByRole("button", { name: "详情与纠偏" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看 原实验会话 会话详情" }));
     expect(screen.getByTestId("research-correction-target").textContent).toContain("发送到会话 old-worker");
   });
 
@@ -215,14 +222,15 @@ describe("research workspace surfaces", () => {
       sessionIds: ["main"], snapshots: { main: { title: "研究主会话" } } }];
     vi.stubGlobal("fetch", vi.fn(async url => response(String(url).includes("/collaboration") ? state : { data: [] })));
     render(<ResearchPipelinePage cwd="/test/project" surface="agents" />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "聚焦研究主会话" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^展开 研究主会话/ })).toBeTruthy());
+    expect(screen.getByTestId("canvas-plan-awaiting-node")).toBeTruthy();
     state.tenures[0]!.sessionIds.push("registered-worker");
     state.tenures[0]!.snapshots["registered-worker"] = { title: "刚注册的协作者", parentSessionId: "main" };
     state.revision++;
     act(() => liveState.socket!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
       type: "session_added", session: { id: "registered-worker", cwd: "/test/project" },
     }) })));
-    await waitFor(() => expect(screen.getByRole("button", { name: "聚焦刚注册的协作者" })).toBeTruthy(), { timeout: 1500 });
+    await waitFor(() => expect(screen.getByRole("button", { name: /^展开 刚注册的协作者/ })).toBeTruthy(), { timeout: 1500 });
     expect(screen.getAllByTestId("canvas-parent-edge")).toHaveLength(1);
   });
 

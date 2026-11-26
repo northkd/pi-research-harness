@@ -74,3 +74,18 @@ test('released skill filter and every upgrade patch match their authenticated ma
     assert.equal(sha(fs.readFileSync(new URL('../' + entry.patch, import.meta.url))), entry.patchSha256);
   }
 });
+
+test('catalog expansion is authenticated for upstream and every supported previous release', () => {
+  const metadata = JSON.parse(fs.readFileSync(new URL('../config/subagents-v020.json', import.meta.url), 'utf8'));
+  const catalog = 'src/agents/advertised-agent-prompt.js';
+  assert.match(metadata.files[catalog].beforeSha256, /^[a-f0-9]{64}$/);
+  assert.match(metadata.files[catalog].afterSha256, /^[a-f0-9]{64}$/);
+  assert.notEqual(metadata.files[catalog].beforeSha256, metadata.files[catalog].afterSha256);
+  for (const entry of [metadata, ...metadata.upgrades]) {
+    const patch = fs.readFileSync(new URL('../' + entry.patch, import.meta.url), 'utf8');
+    assert.match(patch, /--- a\/src\/agents\/advertised-agent-prompt\.js/);
+    assert.match(patch, /\+const MAX_ADVERTISED_AGENTS = 25;/);
+    assert.match(patch, /\+const MAX_CATALOG_BYTES = 20_480;/);
+    if (entry !== metadata) assert.equal(entry.files[catalog], metadata.files[catalog].beforeSha256);
+  }
+});

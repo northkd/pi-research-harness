@@ -1,4 +1,4 @@
-/** Durable direct-parent messages. Transport receipt, processing and reply are independent. */
+/** Durable parent/child and same-plan peer messages. Transport receipt, processing and reply are independent. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -73,7 +73,139 @@ export function createResearchCommunicationService(deps) {
   const projection = row => ({ id: row.id, from: row.from, to: row.to, kind: row.kind, summary: row.summary,
     evidence: row.evidence, status: row.status, replyTo: row.replyTo, createdAt: row.createdAt,
     delivered: !!row.deliveredAt, processed: !!row.processedAt, resolved: !!row.resolvedBy,
-    notificationId: row.notificationId, processExitVerified: false });
+    notificationId: row.notificationId, processExitVerified: false,
+    ...(row.edgeKind === 'peer' ? { edgeKind: 'peer', sourceTaskId: row.sourceTaskId, sourceRole: row.sourceRole,
+      targetPlanId: row.targetPlanId, targetTaskId: row.targetTaskId, deferredToQueued: !!row.deferredToQueued,
+      deferred: !row.boundAt && !row.expiredAt, peerSettled: peerSettled(row),
+      ...(row.expiredAt ? { expired: true } : {}),
+      ...(peerSettled(row) ? { notice: 'Peer assignment ended. Escalate unresolved work to parent.' } : {}) } : {}) });
+
+  function peerContext(verified) {
+    const p = researchProvenanceOf(verified.parent);
+    const context = deps.getPeerContext?.(verified.parent.id);
+    if (!context || !ID.test(p?.dispatchId ?? '') || !ID.test(p?.taskId ?? '')
+        || context.plan.id !== p.dispatchId || context.task.taskId !== p.taskId
+        || context.plan.parentSessionId !== p.parentSessionId
+        || (context.plan.tenureId ?? null) !== (p.tenureId ?? null)) fail(403, 'relationship-invalid');
+    if (!sameScope(context.plan, verified)) fail(409, 'scope-mismatch');
+    return context;
+  }
+  const peerTask = (planId, taskId) => deps.getPeerTask?.({ planId, taskId });
+  function receivedBy(row, verified) {
+    const p = researchProvenanceOf(verified.parent);
+    return row.to === verified.parent.id && (row.edgeKind !== 'peer'
+      || row.boundAt && row.targetPlanId === p?.dispatchId && row.targetTaskId === p?.taskId
+      && row.senderParentId === p?.parentSessionId && (row.tenureId ?? null) === (p?.tenureId ?? null));
+  }
+  function peerSettled(row) {
+    if (row.edgeKind !== 'peer' || row.kind !== 'request' || row.resolvedBy) return false;
+    return row.peerSettled === true || [
+      [row.sourceTaskId, row.from], [row.targetTaskId, row.boundAt ? row.to : null],
+    ].some(([taskId, sessionId]) => {
+      const task = peerTask(row.targetPlanId, taskId);
+      return task?.state === 'ended' || !!sessionId && ENDED.has(deps.getSession(sessionId)?.status);
+    });
+  }
+  function refreshPeerMessages() {
+    for (let row of messages.values()) {
+      if (row.edgeKind !== 'peer') continue;
+      // Repair the second half of an interrupted durable reply before notifying
+      // either endpoint or evaluating retirement.
+      const original = row.kind === 'reply' ? messages.get(row.replyTo) : null;
+      if (original?.edgeKind === 'peer' && original.kind === 'request' && !original.resolvedBy
+          && original.from === row.to && original.to === row.from && sameScope(original, row)
+          && original.targetPlanId === row.targetPlanId && original.sourceTaskId === row.targetTaskId
+          && original.targetTaskId === row.sourceTaskId) {
+        persist({ ...original, resolvedBy: row.id, processedAt: original.processedAt ?? now().toISOString() });
+      }
+      const target = row.boundAt || row.expiredAt ? null : peerTask(row.targetPlanId, row.targetTaskId);
+      if (target?.state === 'ended') {
+        row = persist({ ...row, expiredAt: now().toISOString(), processedAt: row.processedAt ?? now().toISOString() });
+      } else if (target?.state === 'in_progress' && target.sessionId) {
+        const session = deps.getSession(target.sessionId), p = researchProvenanceOf(session);
+        if (p?.dispatchId === row.targetPlanId && p.taskId === row.targetTaskId
+            && p.parentSessionId === row.senderParentId && (p.tenureId ?? null) === (row.tenureId ?? null)) {
+          row = persist({ ...row, to: target.sessionId, boundAt: now().toISOString() });
+        }
+      }
+      if (peerSettled(row) && !row.peerSettled) persist({ ...row, peerSettled: true });
+    }
+  }
+  async function peerReceiver(input, verified, target, exactTaskId) {
+    const context = peerContext(verified);
+    const byTask = context.peers.find(row => row.taskId === (exactTaskId ?? target));
+    const bySession = context.peers.find(row => row.sessionId === target);
+    if (!exactTaskId && byTask && deps.getSession(target) && byTask.sessionId !== target) fail(403, 'relationship-invalid');
+    const peer = exactTaskId ? byTask : byTask ?? bySession;
+    if (!peer || peer.taskId === context.task.taskId || peer.sessionId === verified.parent.id) fail(403, 'relationship-invalid');
+    if (context.state === 'ended' || peer.state === 'ended') fail(409, 'peer-ended');
+    if (peer.sessionId) {
+      let checked;
+      try { checked = await deps.authorize({ sessionId: peer.sessionId, principal: input.principal, expiresAt: input.expiresAt }); }
+      catch { fail(404, 'recipient-not-found'); }
+      assertOpen();
+      if (!sameScope(checked, verified)) fail(409, 'scope-mismatch');
+      const p = researchProvenanceOf(checked.parent);
+      if (p?.dispatchId !== context.plan.id || p.taskId !== peer.taskId
+          || p.parentSessionId !== context.plan.parentSessionId
+          || (p.tenureId ?? null) !== (context.plan.tenureId ?? null)) fail(403, 'relationship-invalid');
+    }
+    const fresh = peerContext(verified), current = fresh.peers.find(row => row.taskId === peer.taskId);
+    if (fresh.state === 'ended' || current?.state === 'ended') fail(409, 'peer-ended');
+    if (!current || current.sessionId !== peer.sessionId) fail(403, 'relationship-invalid');
+    return { context: fresh, peer: current };
+  }
+  async function sendPeer(input, verified, target, kind, evidence, original, broadcast = false) {
+    const { context, peer } = await peerReceiver(input, verified, target, original?.sourceTaskId ?? (broadcast ? target : undefined));
+    if (original && peer.sessionId !== original.from) fail(403, 'relationship-invalid');
+    if (peer.state === 'queued' && (kind === 'request' || kind === 'reply')) fail(409, 'peer-queued');
+    if (original && peerSettled(original)) fail(409, 'peer-settled');
+    const body = input.body;
+    // Eight unicast messages (four request/reply rounds) per unordered task pair.
+    // Broadcast fanouts carry no request and do not consume this pair budget.
+    const pair = [context.task.taskId, peer.taskId].sort();
+    const id = 'message-' + hash(JSON.stringify([scopeOf(verified), verified.parent.id, body.requestId,
+      ...(broadcast ? ['peers', peer.taskId] : [])])).slice(0, 48);
+    const fingerprint = hash(JSON.stringify([scopeOf(verified), verified.parent.id, context.plan.id, peer.taskId,
+      kind, body.summary, evidence, original?.id ?? null, broadcast]));
+    let saved = messages.get(id);
+    if (saved && saved.fingerprint !== fingerprint) fail(409, 'request-conflict');
+    if (original?.resolvedBy && original.resolvedBy !== id) fail(409, 'reply-conflict');
+    if (!saved && !broadcast && [...messages.values()].filter(row => row.edgeKind === 'peer' && !row.broadcast
+        && row.targetPlanId === context.plan.id && JSON.stringify(row.peerPair) === JSON.stringify(pair)).length >= 8) fail(409, 'peer-loop-limit');
+    saved ??= persist({ schema: SCHEMA, id, ...scopeOf(verified), from: verified.parent.id,
+      to: peer.sessionId ?? peer.taskId, senderParentId: context.plan.parentSessionId, edgeKind: 'peer',
+      sourceTaskId: context.task.taskId, sourceRole: context.task.role, targetPlanId: context.plan.id,
+      targetTaskId: peer.taskId, tenureId: context.plan.tenureId ?? null, peerPair: pair,
+      ...(broadcast ? { broadcast: true } : {}), ...(peer.state === 'queued' ? { deferredToQueued: true } : {}),
+      ...(peer.sessionId ? { boundAt: now().toISOString() } : {}),
+      kind, summary: body.summary, evidence, ...(original ? { replyTo: original.id } : {}),
+      fingerprint, notificationId: 'research-message-' + id, createdAt: now().toISOString() });
+    if (original && !original.resolvedBy) persist({ ...original, resolvedBy: saved.id, processedAt: now().toISOString() });
+    return { status: 'ok', tool: 'research_communication', message: projection(saved), persisted: true,
+      deferred: !saved.boundAt, targetState: peer.state };
+  }
+  async function broadcastPeers(input, verified, kind, evidence) {
+    if (!['progress', 'decision'].includes(kind)) fail(400, 'kind-invalid');
+    const context = peerContext(verified);
+    if (context.state === 'ended') fail(409, 'peer-ended');
+    const recipients = context.peers.filter(peer => peer.state !== 'ended');
+    // Validate the whole audience before writing any fanout. Retried partial disk
+    // failures reuse each recipient's deterministic message identity.
+    for (const peer of recipients) await peerReceiver(input, verified, peer.taskId, peer.taskId);
+    const sent = [];
+    for (const peer of recipients) sent.push(await sendPeer(input, verified, peer.taskId, kind, evidence, undefined, true));
+    await deliver();
+    const activeCount = recipients.filter(peer => peer.state === 'in_progress').length;
+    return { status: 'ok', tool: 'research_communication', persisted: true,
+      // Count accepted live wakeups separately from persisted active recipients.
+      deliveredCount: sent.filter(result => {
+        const saved = messages.get(result.message.id);
+        return !!(saved?.lastSentAt || saved?.deliveredAt);
+      }).length, activeCount,
+      queuedCount: recipients.filter(peer => peer.state === 'queued').length,
+      skippedEnded: context.peers.length - recipients.length, messages: sent.map(result => ({ id: result.message.id, targetTaskId: result.message.targetTaskId, deferred: result.deferred })) };
+  }
 
   async function authorize(input, retainedReport = false) {
     try { return await deps.authorize(input); }
@@ -129,7 +261,7 @@ export function createResearchCommunicationService(deps) {
   }
   const settledAssignmentCommand = (message, recipient) => {
     const p = researchProvenanceOf(recipient);
-    return ['request', 'reply', 'decision'].includes(message.kind) && p?.parentSessionId === message.from
+    return message.edgeKind !== 'peer' && ['request', 'reply', 'decision'].includes(message.kind) && p?.parentSessionId === message.from
       && !!p.spawnToken && deps.isAssignmentCompleted?.(p.spawnToken) === true;
   };
   async function allowDownwardMessage(verified, checked, kind) {
@@ -144,6 +276,7 @@ export function createResearchCommunicationService(deps) {
   }
   async function deliver() {
     if (disposed) return;
+    refreshPeerMessages();
     for (let saved of messages.values()) {
       if (disposed) return;
       // Releasing an already authenticated exact-token result is cleanup, not
@@ -152,16 +285,23 @@ export function createResearchCommunicationService(deps) {
       try { saved = await settleResultRelease(saved); } catch { continue; }
       if (!deps.notifyParent) continue;
       // Checkpoints stay durable for status views without starting a model turn.
-      if (saved.kind === 'progress' || saved.kind === 'result' && saved.status === 'partial' || saved.assignmentReported === true) continue;
+      if (saved.kind === 'progress' && saved.edgeKind !== 'peer' || saved.kind === 'result' && saved.status === 'partial' || saved.assignmentReported === true) continue;
       // A durable resume intent is not permission to deliver before capacity
       // admission succeeds. A retry with the same requestId repairs this intent.
       if (saved.resumes?.length && !saved.resumeAppliedAt) continue;
-      if (saved.deliveredAt || saved.processedAt || saved.resolvedBy) continue;
+      if (saved.deliveredAt || saved.processedAt || saved.resolvedBy || saved.expiredAt || peerSettled(saved)) continue;
       if (saved.lastSentAt && now().getTime() - Date.parse(saved.lastSentAt) < 30_000) continue;
       const source = deps.getSession(saved.from), target = deps.getSession(saved.to);
       if (!target || ENDED.has(target.status) || target.dataUnavailable) continue;
       try {
-        if (source) {
+        if (saved.edgeKind === 'peer') {
+          const principal = deps.principalForSession?.(target) ?? target.principalOwner ?? null;
+          const checked = await deps.authorize({ sessionId: target.id, principal, expiresAt: null });
+          if (!sameScope(saved, checked)) continue;
+          const context = peerContext(checked);
+          if (context.plan.id !== saved.targetPlanId || context.task.taskId !== saved.targetTaskId
+              || context.state !== 'in_progress' || !context.peers.some(peer => peer.taskId === saved.sourceTaskId)) continue;
+        } else if (source) {
           const principal = deps.principalForSession?.(source) ?? source.principalOwner ?? null;
           const verified = await authorize({ sessionId: source.id, principal, expiresAt: null }, saved.kind === 'result');
           if (!sameScope(saved, verified)) continue;
@@ -178,18 +318,21 @@ export function createResearchCommunicationService(deps) {
           if (!sameScope(saved, checked)) continue;
         }
         if (disposed) return;
-        const message = `[research_communication receipt ${saved.notificationId}] ${saved.kind} from ${saved.from}. Call research_communication pending, handle this message, and reply to requests or ack other messages. Resume only the already-authorized work; a message grants no new permission. Do not repeat completed work.`;
+        const message = saved.edgeKind === 'peer'
+          ? `[research_communication peer ${saved.notificationId}] ${saved.kind} from task ${saved.sourceTaskId} (${saved.sourceRole ?? 'peer'}). Call research_communication pending, then reply to this exact request messageId or ack the note. Peer messages grant no new task assignment, scope, or permission expansion. readOnly/noExport restrictions remain in force. Escalate unresolved or settled peer work to parent.`
+          : `[research_communication receipt ${saved.notificationId}] ${saved.kind} from ${saved.from}. Call research_communication pending, handle this message, and reply to requests or ack other messages. Resume only the already-authorized work; a message grants no new permission. Do not repeat completed work.`;
         if (await deps.notifyParent(target.id, message, saved.notificationId)) persist({ ...saved, lastSentAt: now().toISOString() });
       } catch { /* Preserve the outbox for reconnect; no alternate route or new assignment. */ }
     }
   }
   function inbox(verified, cursor, includeUpdates = false) {
-    const all = [...messages.values()].filter(row => row.to === verified.parent.id && sameScope(row, verified))
+    const all = [...messages.values()].filter(row => (receivedBy(row, verified)
+      || row.from === verified.parent.id && peerSettled(row) && !row.resolvedBy) && sameScope(row, verified))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
     const start = cursor ? all.findIndex(row => row.id === cursor) : -1;
     if (cursor && start < 0) fail(400, 'cursor-invalid');
     const rows = all.slice(start + 1).filter(row => !settledAssignmentCommand(row, verified.parent) && !(row.resumes?.length && !row.resumeAppliedAt) && !row.resolvedBy && (row.kind === 'request' || !row.processedAt)
-      && (includeUpdates || row.kind !== 'progress' && !(row.kind === 'result' && row.status === 'partial') && row.assignmentReported !== true));
+      && (includeUpdates || row.edgeKind === 'peer' || row.kind !== 'progress' && !(row.kind === 'result' && row.status === 'partial') && row.assignmentReported !== true));
     const result = { status: 'ok', tool: 'research_communication', sessionId: verified.parent.id, messages: [], more: false,
       retirement: { complete: true, sessionId: verified.parent.id, pid: verified.parent.pid,
         reportId: [...messages.values()].find(row => row.from === verified.parent.id && sameScope(row, verified)
@@ -198,8 +341,8 @@ export function createResearchCommunicationService(deps) {
           const p = researchProvenanceOf(child);
           return p?.parentSessionId === verified.parent.id && p.charterHash === verified.charterHash && p.adoptionId === verified.adoptionId && (!ENDED.has(child.status) || (child.dataUnavailable && child.live !== false));
         }).map(child => ({ id: child.id, status: child.status })),
-        supervisorRequests: [...messages.values()].filter(row => sameScope(row, verified) && row.kind === 'request' && !row.resolvedBy && !settledAssignmentCommand(row, deps.getSession(row.to))
-          && (row.from === verified.parent.id || row.to === verified.parent.id)).map(row => row.id) } };
+        supervisorRequests: [...messages.values()].filter(row => sameScope(row, verified) && !peerSettled(row) && row.kind === 'request' && !row.resolvedBy && !settledAssignmentCommand(row, deps.getSession(row.to))
+          && (row.from === verified.parent.id || receivedBy(row, verified))).map(row => row.id) } };
     if (result.retirement.formalChildren.length > 16 || result.retirement.supervisorRequests.length > 16) {
       result.retirement.complete = false;
       result.retirement.formalChildren = result.retirement.formalChildren.slice(0, 16);
@@ -217,14 +360,15 @@ export function createResearchCommunicationService(deps) {
   }
   async function handle(input) {
     const verified = await actor(input), body = input.body;
+    refreshPeerMessages();
     const allowed = new Set(['sessionId', 'action', 'requestId', 'to', 'kind', 'summary', 'evidence', 'messageId', 'status', 'cursor']);
     if (Object.keys(body).some(key => !allowed.has(key))) fail(400, 'unknown-field');
     if (['pending', 'status'].includes(body.action)) return inbox(verified, body.cursor, body.action === 'status');
     if (body.action === 'ack') {
       const saved = messages.get(body.messageId);
-      if (!saved || saved.to !== verified.parent.id || !sameScope(saved, verified)) fail(404, 'message-not-found');
+      if (!saved || !receivedBy(saved, verified) || !sameScope(saved, verified)) fail(404, 'message-not-found');
       persist({ ...saved, processedAt: saved.processedAt ?? now().toISOString() });
-      return { status: 'ok', tool: 'research_communication', acknowledged: saved.id, replyRequired: saved.kind === 'request' && !saved.resolvedBy };
+      return { status: 'ok', tool: 'research_communication', acknowledged: saved.id, replyRequired: saved.kind === 'request' && !saved.resolvedBy && !peerSettled(saved) };
     }
     if (!['send', 'reply', 'report'].includes(body.action) || !ID.test(body.requestId ?? '') || !text(body.summary, 4000)) fail(400, 'message-invalid');
     const evidence = body.evidence ?? [];
@@ -233,17 +377,28 @@ export function createResearchCommunicationService(deps) {
     let original;
     if (body.action === 'reply') {
       original = messages.get(body.messageId);
-      if (!original || original.kind !== 'request' || original.to !== verified.parent.id || !sameScope(original, verified)) fail(404, 'request-not-found');
+      if (!original || original.kind !== 'request' || !receivedBy(original, verified) || !sameScope(original, verified)) fail(404, 'request-not-found');
     }
+    if (body.to === 'peers' && body.action === 'reply') fail(403, 'relationship-invalid');
     const p = researchProvenanceOf(verified.parent);
     if (body.action === 'report' && (!p?.parentSessionId || !ID.test(p.spawnToken ?? ''))) fail(400, 'parent-required');
     if (body.action === 'report' && body.to !== undefined && body.to !== 'parent' && body.to !== p.parentSessionId) fail(403, 'report-parent-required');
-    const target = original?.from ?? (body.to && body.to !== 'parent' ? body.to : p?.parentSessionId);
-    if (!target) fail(400, 'parent-required');
-    const checked = await receiver(input, verified, target, body.action === 'report');
     const kind = body.action === 'report' ? 'result' : body.action === 'reply' ? 'reply' : body.kind ?? 'progress';
     if (!['progress', 'request', 'decision', 'reply', 'result'].includes(kind)
         || body.action === 'send' && ['reply', 'result'].includes(kind)) fail(400, 'kind-invalid');
+    if (body.action === 'send' && body.to === 'peers') return broadcastPeers(input, verified, kind, evidence);
+    const target = original?.from ?? (body.to && body.to !== 'parent' ? body.to : p?.parentSessionId);
+    if (!target) fail(400, 'parent-required');
+    const targetSession = deps.getSession(target), targetProvenance = researchProvenanceOf(targetSession);
+    const parentAddressed = !original && (body.to === undefined || body.to === 'parent');
+    const taskAddressed = !original && !parentAddressed && deps.getPeerContext?.(verified.parent.id)?.peers.some(peer => peer.taskId === target);
+    const directEdge = parentAddressed || !taskAddressed && (target === p?.parentSessionId || targetProvenance?.parentSessionId === verified.parent.id);
+    if (body.action !== 'report' && (original?.edgeKind === 'peer' || !directEdge && deps.getPeerContext?.(verified.parent.id))) {
+      const result = await sendPeer(input, verified, target, kind, evidence, original);
+      await deliver();
+      return result;
+    }
+    const checked = await receiver(input, verified, target, body.action === 'report');
     if (body.action === 'report' && !['completed', 'partial', 'blocked', 'failed'].includes(body.status)) fail(400, 'report-invalid');
     await allowDownwardMessage(verified, checked, kind);
     const fingerprint = hash(JSON.stringify([scopeOf(verified), verified.parent.id, target, kind, body.summary, evidence, body.status ?? null, original?.id ?? null]));
@@ -292,8 +447,17 @@ export function createResearchCommunicationService(deps) {
   }
   return {
     handle: input => serial(() => handle(input)), tick: () => serial(deliver),
+    bindDeferredPeerMessages: ({ planId, taskId, sessionId }) => serial(async () => {
+      const task = peerTask(planId, taskId);
+      if (task?.sessionId !== sessionId || task.state !== 'in_progress') return;
+      await deliver();
+    }),
+    expireDeferredPeerMessages: ({ planId, taskId }) => serial(async () => {
+      if (peerTask(planId, taskId)?.state !== 'ended') return;
+      refreshPeerMessages();
+    }),
     acknowledgeReceipt: (sessionId, promptId) => serial(async () => {
-      const saved = [...messages.values()].find(row => row.to === sessionId && row.notificationId === promptId);
+      const saved = [...messages.values()].find(row => row.to === sessionId && (row.edgeKind !== 'peer' || row.boundAt) && row.notificationId === promptId);
       if (saved && !saved.deliveredAt) persist({ ...saved, deliveredAt: now().toISOString() });
     }),
     isCompleted: token => [...messages.values()].some(row => row.kind === 'result' && row.spawnToken === token && row.capacityReleased === true && row.capacityReleasePending !== true && !row.resumedBy),

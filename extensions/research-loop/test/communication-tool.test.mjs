@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { charterBindingFixture } from '../../../tests/fixtures/charter-binding.mjs';
 import { registerWorkbenchCommunicationTool, createResearchCommunicationClient } from '../src/workbench-communication-tool.mjs';
 import { registerWorkbenchDispatchTool } from '../src/workbench-dispatch-tool.mjs';
 
@@ -8,6 +9,36 @@ function toolFixture(request) {
   registerWorkbenchCommunicationTool({ registerTool: tool => tools.set(tool.name, tool), on: (name, fn) => hooks.set(name, fn), sendUserMessage: (...args) => wakes.push(args) }, { request });
   return { tools, hooks, wakes };
 }
+test('peer failures explain the allowed next action without retrying or granting authority', async () => {
+  for (const suffix of ['queued', 'ended', 'loop-limit', 'settled']) {
+    const code = 'research-communication-peer-' + suffix;
+    let requests = 0;
+    const f = toolFixture(async () => { requests++; throw new Error(code); });
+    const tool = f.tools.get('research_communication');
+    const reply = await tool.execute('peer-test', { action: 'send', to: 'task-b', requestId: 'peer-question',
+      kind: 'request', summary: 'Need an existing result' }, undefined, undefined, {});
+    assert.equal(reply.isError, true);
+    assert.equal(reply.details.error, code);
+    assert.equal(reply.details.retryable, false);
+    assert.ok(reply.details.nextAction.includes('parent'));
+    assert.ok(reply.details.message.length > 0);
+    assert.equal(requests, 1);
+  }
+});
+
+test('communication transport preserves peer task addressing and broadcast intents', async () => {
+  const sent = [];
+  const client = createResearchCommunicationClient({ readContext: () => ({ sessionId: 'actual' }),
+    resolveAuth: () => ({ baseUrl: 'http://127.0.0.1:8000', token: 'synthetic' }),
+    fetchImpl: async (_url, options) => { sent.push(JSON.parse(options.body)); return new Response(JSON.stringify({ status: 'ok' })); },
+  });
+  const ctx = { sessionManager: { getSessionId: () => 'actual' } };
+  for (const to of ['task-b', 'peers']) await client(ctx, { action: 'send', requestId: 'memo-' + to,
+    to, kind: 'decision', summary: 'Verified result is ready', evidence: ['results/checked.json'] });
+  assert.deepEqual(sent.map(row => row.to), ['task-b', 'peers']);
+  assert.ok(sent.every(row => row.sessionId === 'actual'));
+});
+
 test('recovery wakes unprocessed durable messages after restart/turn end and stops bounded reminders', async () => {
   const inbox = { status: 'ok', sessionId: 'lead', messages: [{ id: 'message-test', processed: false }] };
   const f = toolFixture(async () => inbox);
@@ -24,10 +55,11 @@ test('explicit user abort does not auto-resume messages', async () => {
   await f.hooks.get('agent_end')({ messages: [{ role: 'assistant', stopReason: 'aborted' }] }, {});
   assert.equal(f.wakes.length, 0);
 });
-test('recovery ignores routine progress and partial results even from an older host', async () => {
+test('recovery leaves routine checkpoints and settled peer requests available without waking the session', async () => {
   const f = toolFixture(async () => ({ sessionId: 'lead', messages: [
     { id: 'progress', kind: 'progress', processed: false },
     { id: 'checkpoint', kind: 'result', status: 'partial', processed: false },
+    { id: 'closed-peer', kind: 'request', edgeKind: 'peer', peerSettled: true, resolved: false },
   ] }));
   await f.hooks.get('session_start')({}, {});
   await f.hooks.get('agent_end')({}, {});
@@ -79,6 +111,97 @@ test('lead confirms initial plan once; authorized branch decomposition needs no 
   context.sessionId = 'branch'; context.researchSession = { parentSessionId: 'lead' };
   await execute({ ...plan, planId: 'branch-next' }); assert.equal(confirmed, 1);
   assert.equal(calls.filter(row => row.action === 'plan').length, 4);
+});
+
+function initialDispatchFixture(answers) {
+  const dialogs = [], entries = [], requests = [];
+  const ctx = { cwd: '/work', hasUI: true,
+    ui: { confirm: (title, message) => { dialogs.push({ title, message }); return answers.shift(); } },
+    sessionManager: { getSessionId: () => 'lead', getEntries: () => entries } };
+  let tool;
+  registerWorkbenchDispatchTool({ registerTool: value => { tool = value; },
+    appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }) }, {
+    readContext: () => ({ cwd: ctx.cwd, ownerKey: 'owner', sessionId: 'lead', adoptionId: 'adopt', charterHash: 'hash-goal' }),
+    request: (_ctx, body) => { requests.push(body); return { status: 'ok' }; },
+  });
+  return { dialogs, entries, requests, execute: params => tool.execute('test', params, undefined, undefined, ctx) };
+}
+
+test('initial plan shows responsibilities and dependencies and accepts a revision after rejection', async () => {
+  const f = initialDispatchFixture([false, false, true]);
+  const plan = { action: 'plan', planId: 'first', concurrency: 2, tasks: [
+    { id: 'collect', role: 'analyst', stage: '1-idea', task: '整理已有证据' },
+    { id: 'review', role: 'reviewer', stage: '3-review', dependsOn: ['collect'], task: '复核证据' },
+  ] };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const declined = await f.execute(plan);
+    assert.equal(declined.details.error, 'research-dispatch-initial-plan-declined');
+    assert.match(declined.details.hint, /反馈.*修改.*重新提交/);
+    assert.equal(f.entries.length, 0);
+    assert.equal(f.requests.length, 0);
+  }
+  const { title, message } = f.dialogs[0];
+  assert.equal(title, '确认首次科研分工');
+  for (const expected of ['并行任务分工 plan', 'first', '任务数：2', '并发上限：2', 'hash-goal',
+    '1. [collect] analyst · 1-idea', '前置依赖：无', '整理已有证据',
+    '2. [review] reviewer · 3-review', '前置依赖：collect', '复核证据', '滚动补位', '分支', '拒绝']) {
+    assert.ok(message.includes(expected), expected);
+  }
+  assert.doesNotMatch(message, /"tasks"\s*:|"action"\s*:/);
+  const revised = { ...plan, tasks: [plan.tasks[0]] };
+  assert.equal((await f.execute(revised)).details.status, 'ok');
+  await f.execute({ ...revised, planId: 'refill' });
+  assert.equal(f.dialogs.length, 3);
+  assert.match(f.dialogs[2].message, /任务数：1/);
+  assert.deepEqual(f.requests[0], revised);
+  assert.deepEqual(f.entries.map(e => e.customType), ['research-dispatch-scope-approval']);
+});
+
+test('initial delegation names the coordinator, stage and objective', async () => {
+  const f = initialDispatchFixture([true]);
+  const body = { action: 'delegate', planId: 'coord', stage: '3-review', task: '统筹证据复核' };
+  await f.execute(body);
+  const [{ title, message }] = f.dialogs;
+  assert.equal(title, '确认首次科研分工');
+  for (const value of ['委派协调员统筹 delegate', 'coord', '3-review', 'research-coordinator', 'hash-goal', '统筹证据复核']) {
+    assert.ok(message.includes(value), value);
+  }
+  assert.doesNotMatch(message, /"task"\s*:|"action"\s*:/);
+  assert.deepEqual(f.requests, [body]);
+});
+
+test('the bounded preview includes all 64 task rows and sends the original full briefs', async () => {
+  const f = initialDispatchFixture([true]);
+  const tasks = Array.from({ length: 64 }, (_, i) => ({
+    id: String(i).padEnd(128, 'x'), role: 'reviewer', stage: '3-review', task: '证据'.repeat(2000),
+    dependsOn: Array.from({ length: Math.min(i, 12) }, (_, j) => String(j).padEnd(128, 'x')),
+  }));
+  await f.execute({ action: 'plan', tasks });
+  const preview = f.dialogs[0].message;
+  assert.ok(preview.length <= 32768 && Buffer.byteLength(preview) <= 65536);
+  for (const [i, task] of tasks.entries()) assert.ok(preview.includes(`${i + 1}. [${task.id}]`));
+  assert.deepEqual(f.requests[0].tasks, tasks);
+});
+
+test('overlapping first submissions share one approval bound to the verified owner and charter', async t => {
+  const f = charterBindingFixture(t, { revise: false });
+  const approvals = [], requests = [], dialogs = [];
+  let tool, answer;
+  const pendingAnswer = new Promise(resolve => { answer = resolve; });
+  registerWorkbenchDispatchTool({ registerTool: value => { tool = value; }, appendEntry: (_type, data) => approvals.push(data) }, {
+    contextOptions: { privateDir: f.privateDir },
+    confirmInitialPlan: preview => { dialogs.push(preview); return pendingAnswer; },
+    request: (_ctx, body) => { requests.push(body.planId); return { status: 'ok' }; },
+  });
+  const submissions = ['first', 'second'].map(planId => tool.execute('test', { action: 'plan', planId }, undefined, undefined, f.ctx));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(dialogs.length, 1);
+  assert.deepEqual(requests, []);
+  answer(true);
+  await Promise.all(submissions);
+  assert.equal(approvals.length, 1);
+  assert.deepEqual(JSON.parse(approvals[0].scope), [f.cwd, f.ownerKey, f.sessionId, f.adoptionId, f.receipt.charterHash]);
+  assert.deepEqual(requests, ['first', 'second']);
 });
 
 test('goal approval survives extension reload and changes with the charter or adoption', async () => {

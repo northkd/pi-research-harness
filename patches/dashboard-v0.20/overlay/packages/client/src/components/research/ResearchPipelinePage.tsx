@@ -31,6 +31,8 @@ import {
   ResearchCollaborationPanel,
   ResearchDispatchQueueDrawer,
 } from "./ResearchCollaborationPanel.js";
+import { summarizePlansForScope } from "./research-plan-topology.js";
+import { ResearchMainPlanProgress } from "./ResearchPlanProgressBar.js";
 import { useResearchCollaboration } from "./use-research-collaboration.js";
 import { ResearchAccessControls } from "./ResearchAccessControls.js";
 import { ResearchClaimPanels } from "./ResearchClaimPanels.js";
@@ -105,6 +107,19 @@ export function ResearchPipelinePage({
   const objective = state?.charter?.objective?.trim() || null;
   const [viewStage, setViewStage] = useState<StageId | null>(null);
   const [selected, setSelection] = useState<{ scope: string; role: ConfiguredRole; execution?: ResearchExecution; stage: StageId | null } | null>(null);
+  const [highlightedPlanId, setHighlightedPlanId] = useState<string | null>(null);
+  const currentTenure = collaboration.snapshot?.tenures.find(row => row.id === collaboration.snapshot?.currentTenureId);
+  const mainPlanSummary = useMemo(
+    () =>
+      collaboration.snapshot && (currentTenure || collaboration.snapshot.plans.length > 0)
+        ? summarizePlansForScope(collaboration.snapshot.plans, {
+            tenureId: currentTenure?.id,
+            mainSessionId: collaboration.snapshot.currentMainSessionId,
+            sessionIds: currentTenure?.sessionIds,
+          })
+        : null,
+    [collaboration.snapshot, currentTenure],
+  );
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [workspaceWidth, setWorkspaceWidth] = useState(0);
   const overviewStorageKey = `res_workflow_task_overview:${JSON.stringify([apiBase, cwd])}`;
@@ -165,7 +180,12 @@ export function ResearchPipelinePage({
 
   const scope = JSON.stringify([apiBase, cwd, connectionGeneration, adoption?.id, state?.charter]);
   const selection = selected?.scope === scope ? selected : null;
-  useEffect(() => { setViewStage(null); setSelection(null); setIntakeOpen(false); setIntakeVisited(false); setShowAllAttempts(false); setShowAllActions(false); }, [scope]);
+  useEffect(() => { setViewStage(null); setSelection(null); setHighlightedPlanId(null); setIntakeOpen(false); setIntakeVisited(false); setShowAllAttempts(false); setShowAllActions(false); }, [scope]);
+  const handleSelectPlan = (planId: string) => {
+    setHighlightedPlanId(prev => (prev === planId ? null : planId));
+    if (surface === "legacy" && !shows("teams")) handleTabChange("teams");
+    if (surface === "workbench" && !shows("teams")) onOpenAgents?.();
+  };
   useEffect(() => { setIntakeOpen(false); }, [surface]);
   const selectedStage = viewStage ?? projection.stage;
   const currentStage = STAGES.find(stage => stage.id === projection.stage);
@@ -436,6 +456,15 @@ export function ResearchPipelinePage({
                 />
               ) : undefined
             }
+            planSlot={
+              mainPlanSummary ? (
+                <ResearchMainPlanProgress
+                  summary={mainPlanSummary}
+                  selectedPlanId={highlightedPlanId}
+                  onSelectPlan={handleSelectPlan}
+                />
+              ) : undefined
+            }
           />
         </div>
         <ResearchDispatchQueueDrawer controller={collaboration} queueOpen={queueOpen} />
@@ -450,6 +479,7 @@ export function ResearchPipelinePage({
               projection={projection}
               stale={observationStale}
               hideInlineToolbar
+              highlightedPlanId={highlightedPlanId}
               onAgent={(role, execution) => setSelection({ scope, role, execution, stage: null })}
             />
           </div>

@@ -15,7 +15,7 @@ PATTERNS = {
     'private-session-id': re.compile(r'\b01a12[a-f0-9]{3}-[a-f0-9-]{20,}\b'),
 }
 FORBIDDEN_NAMES = {'auth.json', 'providers.json', 'models.json', 'settings.json', '.env', 'id_rsa', 'id_ed25519'}
-ALLOWED_TOP = {'.github', '.gitignore', 'LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md', 'package.json', 'bin', 'scripts', 'config', 'agents', 'extensions', 'skills', 'integration', 'docs', 'patches', 'vendor', 'tests'}
+ALLOWED_TOP = {'.github', '.gitignore', 'LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md', 'package.json', 'bin', 'scripts', 'config', 'agents', 'extensions', 'skills', 'integration', 'doc', 'docs', 'patches', 'vendor', 'tests'}
 findings = []
 count = 0
 size = 0

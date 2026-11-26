@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   DEFAULT_BULK_THRESHOLD,
   DELEGATION_NUDGE_TYPE,
@@ -42,6 +43,7 @@ const startEvent = (prompt, selectedTools) => ({
 });
 const readEnd = (overrides = {}) => ({ toolName: 'read', isError: false, ...overrides });
 const joined = () => true;
+const modelPolicy = JSON.parse(readFileSync(new URL('../extensions/research-loop/model-policy.json', import.meta.url), 'utf8'));
 
 test('pi-subagents capability is detected only from the active subagent tool', () => {
   const caps = detectDelegationTools(['read', 'subagent']);
@@ -50,10 +52,58 @@ test('pi-subagents capability is detected only from the active subagent tool', (
   assert.deepEqual(caps.families, ['pi-subagents']);
   assert.equal(caps.piSubagents, true);
   const text = buildDelegationGuidance({ selectedTools: ['read', 'subagent'] });
-  assert.match(text, /subagent\(\{ agent: "research-literature", task: .*async: true, options: \{ context: "fresh" \} \}\)/);
+  assert.match(text, /subagent\(\{ agent: "scout", task: .*model: "cliproxy\/ark-deepseek-v4\.1-flash\[1m\]", async: true, options: \{ context: "fresh" \} \}\)/);
   assert.match(text, /do not use the old `subagent\(agentName, prompt\)` form/);
   assert.doesNotMatch(text, /Agent\(\{ subagent_type/);
   assert.doesNotMatch(text, /SubagentWorkflow\(\{/);
+});
+
+test('rendered tier chains and utility example match the release model policy in both routing modes', () => {
+  for (const selectedTools of [['subagent'], ['subagent', 'research_dispatch']]) {
+    const text = buildDelegationGuidance({ selectedTools });
+    for (const [tier, label] of [['worker', 'Worker'], ['commander', 'Commander'], ['intelligence', 'Intelligence']]) {
+      const config = modelPolicy.tiers[tier];
+      const order = [...config.models, ...(config.fallbackChain ?? [])].join(' -> ');
+      const line = text.split('\n').find(value => value.startsWith(`- ${label} order: `));
+      assert.ok(line.startsWith(`- ${label} order: ${order}. `), `${tier} must preserve every policy model in order`);
+    }
+    assert.ok(text.includes(`model: ${JSON.stringify(modelPolicy.tiers.worker.models[0])}, async: true`));
+  }
+});
+
+test('standalone routing selects utility roles before bulk work and passes tier models dynamically', () => {
+  const text = buildDelegationGuidance({ selectedTools: ['read', 'subagent'] });
+  assert.match(text, /Standalone \/ non-research routing/);
+  assert.match(text, /scout, researcher, reviewer, evidence-auditor, worker, oracle and delegate/);
+  assert.match(text, /research-\* scientific roles only when explicitly requested/);
+  assert.match(text, /unknown multi-directory or log searches go to parallel scout tasks/);
+  assert.match(text, /post-edit diff\/compliance checks to reviewer/);
+  assert.match(text, /isolated build\/fix work to worker/);
+  assert.match(text, /Read or grep one known file directly/);
+  assert.match(text, /explicit top-level model dynamically/);
+  const worker = text.split('\n').find(line => line.startsWith('- Worker order:'));
+  const ordered = ['ark-deepseek-v4.1-flash', 'ark-glm-5.3-flash', 'bailian-qwen3.8-flash', 'bailian-deepseek-flash-1017', 'sqface-deepseek-flash-1017', 'cliproxy/deepseek-flash', 'gpt-6.1-terra(max)', 'gpt-6.1-terra-max', 'bailian-deepseek-pro-0813'];
+  for (let index = 1; index < ordered.length; index++) assert.ok(worker.indexOf(ordered[index - 1]) < worker.indexOf(ordered[index]));
+  const commander = text.split('\n').find(line => line.startsWith('- Commander order:'));
+  assert.match(commander, /gpt-6\.2-sol\(max\)\[1m\] -> cliproxy\/bailian-glm-5\.3/);
+  assert.doesNotMatch(commander, /6\.1-sol/);
+  assert.match(text, /gpt-6\.2-astra\(high\)\[1m\].*gpt-6\.2-astra\(xhigh\)\[1m\]/);
+  assert.match(text, /confirmation of the exact model \+ effort before executing agy or agy-subagent/);
+  assert.match(text, /contact_supervisor.*ask_user/);
+});
+
+test('either active research tool selects full catalog routing and preserves subordinate slots', () => {
+  for (const tool of ['research_session', 'research_dispatch']) {
+    const text = buildDelegationGuidance({ selectedTools: ['subagent', tool] });
+    assert.match(text, /Joined res-workflow routing/);
+    assert.match(text, /full catalog of research-\* roles, utility pi-subagents and agy-advisor/);
+    assert.match(text, /scientific hypotheses, theory, literature synthesis and critic work/);
+    assert.match(text, /research_dispatch action=plan when available/);
+    assert.match(text, /normally three child slots per collaborator/);
+    assert.doesNotMatch(text, /Standalone \/ non-research routing/);
+    assert.match(buildDelegationNudge(6, { selectedTools: ['subagent', tool] }), /reserving research-\* and formal plans for scientific work/);
+  }
+  assert.match(buildDelegationNudge(6, { selectedTools: ['subagent'] }), /Prefer scout.*reviewer.*worker/);
 });
 
 test('@tintinweb Agent and SubagentWorkflow schemas are emitted only when active', () => {
@@ -211,6 +261,19 @@ test('unknown selectedTools stays safe and never nudges', () => {
   pi.emit('tool_execution_end', readEnd());
   pi.emit('tool_execution_end', readEnd());
   assert.equal(pi.emit('context', { messages: [] }), undefined);
+});
+
+test('standalone tool selection keeps guidance and fallback nudges in utility routing', () => {
+  const pi = mockPi();
+  registerDelegationPolicy(pi, {
+    bulkThreshold: 1, env: {}, isJoined: joined,
+    getSelectedTools: event => event.systemPromptOptions.selectedTools.filter(name => name !== 'research_dispatch'),
+  });
+  pi.emit('before_agent_start', startEvent('Analyze this repository', ['read', 'subagent', 'research_dispatch']));
+  pi.emit('tool_execution_end', readEnd());
+  const text = pi.emit('context', { messages: [] }).messages[0].content;
+  assert.match(text, /Prefer scout.*reviewer.*worker/);
+  assert.doesNotMatch(text, /reserving research-\*/);
 });
 
 test('user opt-out prevents nudges even after repeated bulk reads', () => {

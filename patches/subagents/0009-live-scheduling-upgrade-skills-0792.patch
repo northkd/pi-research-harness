@@ -70,3 +70,15 @@
 +  if (typeof bridge.scheduleResearchSubagent !== 'function') throw new Error('research-subagent-scheduler-unavailable');
 +  return bridge.scheduleResearchSubagent(launch, create, metadata);
 +}
+--- a/src/agents/advertised-agent-prompt.js
++++ b/src/agents/advertised-agent-prompt.js
+@@ -1,7 +1,7 @@
+ import { Buffer } from "node:buffer";
+ import { isAgentAllowedByCapabilityCeiling } from "../runs/shared/capability-ceiling.js";
+-const MAX_ADVERTISED_AGENTS = 16;
+-const MAX_CATALOG_BYTES = 12_288;
++const MAX_ADVERTISED_AGENTS = 25;
++const MAX_CATALOG_BYTES = 20_480;
+ const MAX_DESCRIPTION_BYTES = 512;
+ function escapeXml(value) {
+     return value
