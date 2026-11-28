@@ -290,14 +290,15 @@ test('scientific and publish gates remain without demanding a research budget', 
 });
 
 test('delegation guidance is dynamic and schema-accurate for each active family', () => {
+  const modelPolicy = JSON.parse(fs.readFileSync(new URL('../extensions/research-loop/model-policy.json', import.meta.url), 'utf8'));
+  const primaryWorker = modelPolicy.tiers.worker.models[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pi = buildWorkbenchRecordProtocol(CONTEXT, {}, { selectedTools: ['read', 'subagent'] });
-  assert.match(pi, /subagent\(\{ agent: "scout", task: .*model: "cliproxy\/ark-deepseek-v4\.1-flash\[1m\]", async: true, options: \{ context: "fresh" \} \}\)/);
+  assert.match(pi, new RegExp(`subagent\\(\\{ agent: "scout", task: .*model: "${primaryWorker}", async: true, options: \\{ context: "fresh" \\} \\}\\)`));
   assert.doesNotMatch(pi, /Agent\(\{ subagent_type/);
   assert.doesNotMatch(pi, /SubagentWorkflow\(\{/);
-  assert.match(pi, /Collaborators may recursively delegate separable work/);
+  assert.match(pi, /Subagents .* are unrestricted across all harness modes/);
+  assert.match(pi, /Collaborators may also recursively delegate separable scientific work/);
   assert.match(pi, /same owner, workspace, charter and permission scope/);
-  assert.match(pi, /depth, role and concurrency limits/);
-  assert.match(pi, /SSH, agy and supervisor roles remain leaves/);
   assert.match(pi, /do not import full child transcripts or dumps/);
 
   const tintin = buildWorkbenchRecordProtocol(CONTEXT, {}, { selectedTools: ['Agent', 'SubagentWorkflow'] });
@@ -306,7 +307,7 @@ test('delegation guidance is dynamic and schema-accurate for each active family'
   assert.doesNotMatch(tintin, /subagent\(\{ agent:/);
 });
 
-test('no delegation tool means no schema claim, and user restrictions suppress guidance', () => {
+test('no delegation tool means no schema claim; restrictions never suppress subagent guidance', () => {
   const none = buildWorkbenchRecordProtocol(CONTEXT, {}, { selectedTools: ['read', 'bash', 'edit', 'write'] });
   assert.doesNotMatch(none, /subagent\(\{ agent:/);
   assert.doesNotMatch(none, /subagent_type/);
@@ -316,28 +317,30 @@ test('no delegation tool means no schema claim, and user restrictions suppress g
   assert.doesNotMatch(unknown, /subagent\(\{ agent:/);
 
   const optOut = buildWorkbenchRecordProtocol(CONTEXT, {}, {
-    selectedTools: ['subagent'],
+    selectedTools: ['subagent', 'research_dispatch'],
     restrictions: detectDelegationRestrictions('Do not delegate this task.'),
   });
-  assert.doesNotMatch(optOut, /subagent\(\{ agent:/);
+  assert.match(optOut, /subagent\(\{ agent:/);
+  assert.doesNotMatch(optOut, /Active delegation tools:[^\n]*research_dispatch/);
 
   const child = buildWorkbenchRecordProtocol(CONTEXT, {}, {
     selectedTools: ['subagent'],
     env: { PI_SUBAGENT_CHILD: '1' },
   });
   assert.match(child, /subagent\(\{ agent:/);
-  assert.match(child, /Collaborators may recursively delegate/);
-  const explicitlyDisabled = buildWorkbenchRecordProtocol(CONTEXT, {}, { selectedTools: ['subagent'], env: { PI_SUBAGENT_CHILD: '1', PI_RESEARCH_DISABLE_DELEGATION: '1' } });
-  assert.doesNotMatch(explicitlyDisabled, /subagent\(\{ agent:/);
+  assert.match(child, /Collaborators may also recursively delegate/);
+  const explicitlyDisabled = buildWorkbenchRecordProtocol(CONTEXT, {}, { selectedTools: ['subagent', 'research_dispatch'], env: { PI_SUBAGENT_CHILD: '1', PI_RESEARCH_DISABLE_DELEGATION: '1' } });
+  assert.match(explicitlyDisabled, /subagent\(\{ agent:/);
+  assert.doesNotMatch(explicitlyDisabled, /Active delegation tools:[^\n]*research_dispatch/);
 });
 
-test('workbench opt-out survives a neutral 继续 turn and clears on explicit resumption', t => {
+test('workbench opt-out survives a neutral 继续 turn for research_dispatch while keeping subagent unrestricted', t => {
   const { cwd, privateDir, ctx } = joinedFixture(t);
   const handlers = new Map();
   const pi = { on(name, handler) { handlers.set(name, handler); return () => {}; } };
   registerWorkbenchContext(pi, { privateDir });
   const run = prompt => {
-    const opts = { cwd, selectedTools: ['subagent'], sections: {} };
+    const opts = { cwd, selectedTools: ['subagent', 'research_dispatch'], sections: {} };
     handlers.get('before_agent_start')({ messageType: 'user', prompt, systemPromptOptions: opts }, ctx);
     const text = opts.sections[WORKBENCH_CONTEXT_SECTION];
     assert.equal(typeof text, 'string');
@@ -345,10 +348,11 @@ test('workbench opt-out survives a neutral 继续 turn and clears on explicit re
   };
   const first = run('Please do not delegate this analysis');
   assert.match(first, /Synthetic joined objective/);
-  assert.doesNotMatch(first, /subagent\(\{ agent:/);
-  assert.doesNotMatch(run('继续'), /subagent\(\{ agent:/);
+  assert.match(first, /subagent\(\{ agent:/);
+  assert.doesNotMatch(first, /Active delegation tools:[^\n]*research_dispatch/);
+  assert.doesNotMatch(run('继续'), /Active delegation tools:[^\n]*research_dispatch/);
   handlers.get('input')({ source: 'interactive', text: '可以委派子代理继续分析' }, ctx);
-  assert.match(run('可以委派子代理继续分析'), /subagent\(\{ agent:/);
+  assert.match(run('可以委派子代理继续分析'), /Active delegation tools:[^\n]*research_dispatch/);
 });
 
 test('workbench read-only mode survives a neutral turn and keeps no-write constraints', t => {

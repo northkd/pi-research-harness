@@ -514,6 +514,17 @@ export interface ChatViewHandle {
   scrollToTurn: (turnIndex: number) => void;
 }
 
+const INTERNAL_RESEARCH_HARNESS_USER_RE =
+  /^\[(?:research_dispatch (?:receipt|lead-completion-guard|completion contract|reopen)|research_communication (?:receipt|peer|recovery))\b/;
+
+export function isInternalResearchHarnessMessage(msg: { role?: string; content?: string }): boolean {
+  return (
+    msg.role === "user" &&
+    typeof msg.content === "string" &&
+    INTERNAL_RESEARCH_HARNESS_USER_RE.test(msg.content.trimStart())
+  );
+}
+
 const ChatViewInner = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, state, toolContext: suppliedToolContext, onRespondToUi, onPromptResync, onAbort, onForceKill, onForkFromMessage, onUndoLast, onClearUndoPending, onRetryPendingPrompt, onForkPendingPrompt, onCloseInlineTerminal, pendingSteering, loadingHistory, retainedTranscript, replayInFlight, historyGap, onLoadEarlier, historySpliceRev, onCollapseStreamingThinking, historyPhase, historyStartedAt, onRetryHistory }, ref) {
   // `ToolContext` is a published surface (re-exported from `chat-embed`), so an
   // external embedder builds one by hand and would carry no `fileLink` —
@@ -1047,7 +1058,11 @@ const ChatViewInner = forwardRef<ChatViewHandle, Props>(function ChatView({ sess
   const filteredMessages = useMemo(() => {
     const base = showDebugTools
       ? state.messages
-      : state.messages.filter((m) => m.role !== "toolResult" || !isDebugTool(m.toolName ?? ""));
+      : state.messages.filter(
+          (m) =>
+            (m.role !== "toolResult" || !isDebugTool(m.toolName ?? "")) &&
+            !isInternalResearchHarnessMessage(m),
+        );
     return base.filter((m) => !m.retriedFrom);
   }, [state.messages, showDebugTools]);
   const [undoPendingTarget, setUndoPendingTarget] = useState<{

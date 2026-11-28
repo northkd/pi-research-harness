@@ -6,8 +6,9 @@ import { projectDispatchContext } from './dispatch-context.mjs';
 
 const SAFE_READS = new Set(['read', 'grep', 'find', 'ls', 'web_search', 'fetch_content']);
 const COORDINATION = new Set(['ask_user', 'ask_user_question', 'research_communication']);
+const SUBAGENT_TOOLS = new Set(['subagent', 'subagent_supervisor', 'subagents_enable', 'Agent', 'SubagentWorkflow']);
 const LOOP_COORDINATION = new Set(['status', 'log', 'report']);
-// Status contains bounded per-plan tasks plus one prerequisite receipt set.
+// Status contains bounded task lists plus one prerequisite receipt set.
 // Keep a finite cap that includes worst-case JSON escaping as well as UTF-8.
 export const RESEARCH_DISPATCH_RESPONSE_BYTES = 8 * 1024 * 1024;
 const TERMINAL = new Set(['completed', 'failed', 'blocked']);
@@ -102,8 +103,39 @@ export function isDirectResearchWorker(joined, snapshot, sessionId = joined?.ses
     && Array.isArray(snapshot.plans) && snapshot.plans.length === 0 && snapshot.atomicReason == null;
 }
 
+const TRANSIENT_RETRY_DELAYS_MS = [400, 1200];
+const sleepMs = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) { reject(new Error('research-dispatch-aborted')); return; }
+  const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+  const onAbort = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(new Error('research-dispatch-aborted')); };
+  signal?.addEventListener('abort', onAbort, { once: true });
+});
+
+function turnAskedUser(messages) {
+  if (!Array.isArray(messages)) return false;
+  return messages.some(msg => msg?.role === 'assistant' && Array.isArray(msg.content)
+    && msg.content.some(part => part?.type === 'toolCall' && (part.name === 'ask_user' || part.name === 'ask_user_question')));
+}
+
+function userExplicitlyAcceptedStop(text) {
+  if (typeof text !== 'string') return false;
+  return /(?:不用|无需|不必|不要|别再?)\s*(?:继续|重派|补派|补跑|重试|再跑)|(?:到此为止|先停下|先这样|就按现有|接受部分|保持现状)|\b(?:stop here|do not retry|don't retry|keep as is|accept partial)\b/i.test(text);
+}
+
+function latestUnresolvedPlan(plans) {
+  if (!Array.isArray(plans) || !plans.length) return null;
+  const sorted = [...plans].sort((a, b) => Date.parse(b?.updatedAt ?? b?.createdAt ?? 0) - Date.parse(a?.updatedAt ?? a?.createdAt ?? 0));
+  const latest = sorted[0];
+  if (!latest || !['blocked', 'failed'].includes(latest.status)) return null;
+  const incomplete = (latest.tasks ?? []).filter(task => task?.status === 'blocked' || task?.status === 'failed');
+  return incomplete.length > 0 ? { plan: latest, incomplete } : null;
+}
+
 export function createResearchDispatchClient(options = {}) {
   const readContext = options.readContext ?? (ctx => requireWorkbenchRecordContext(ctx, options.contextOptions, 'research-dispatch-session-not-joined'));
+  const maxRetries = Number.isInteger(options.maxTransientRetries) && options.maxTransientRetries >= 0 ? options.maxTransientRetries : TRANSIENT_RETRY_DELAYS_MS.length;
+  const retryDelays = Array.isArray(options.retryDelaysMs) ? options.retryDelaysMs : TRANSIENT_RETRY_DELAYS_MS;
+  const wait = options.sleep ?? sleepMs;
   return async (ctx, params, signal, expectedScope) => {
     const sessionId = ctx?.sessionManager?.getSessionId?.();
     const joined = await readContext(ctx);
@@ -113,16 +145,33 @@ export function createResearchDispatchClient(options = {}) {
     const auth = await (options.resolveAuth ?? (() => readDashboardLocalAuth(options.authOptions)))();
     const target = new URL('/api/res-workflow/dispatch', auth.baseUrl);
     if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(target.hostname)) throw new Error('research-dispatch-destination-not-loopback');
-    const timeout = AbortSignal.timeout(options.timeoutMs ?? 30_000);
-    const response = await (options.fetchImpl ?? globalThis.fetch)(target, {
-      method: 'POST', redirect: 'error',
-      headers: { 'content-type': 'application/json', 'x-pi-local-token': auth.token },
-      body: JSON.stringify({ ...params, sessionId }),
-      signal: signal && AbortSignal.any ? AbortSignal.any([signal, timeout]) : timeout,
-    });
-    const reply = await readBoundedJson(response, RESEARCH_DISPATCH_RESPONSE_BYTES);
-    if (!response.ok || !object(reply) || reply.status !== 'ok') {
-      throw new Error(typeof reply?.code === 'string' && /^[a-z0-9-]{1,100}$/.test(reply.code) ? reply.code : 'research-dispatch-unavailable');
+    let reply;
+    for (let attempt = 0; ; attempt += 1) {
+      const timeout = AbortSignal.timeout(options.timeoutMs ?? 30_000);
+      let response;
+      try {
+        response = await (options.fetchImpl ?? globalThis.fetch)(target, {
+          method: 'POST', redirect: 'error',
+          headers: { 'content-type': 'application/json', 'x-pi-local-token': auth.token },
+          body: JSON.stringify({ ...params, sessionId }),
+          signal: signal && AbortSignal.any ? AbortSignal.any([signal, timeout]) : timeout,
+        });
+      } catch (error) {
+        if (!signal?.aborted && attempt < maxRetries) {
+          await wait(retryDelays[Math.min(attempt, retryDelays.length - 1)] ?? 400, signal);
+          continue;
+        }
+        throw error;
+      }
+      reply = await readBoundedJson(response, RESEARCH_DISPATCH_RESPONSE_BYTES);
+      if (response.ok && object(reply) && reply.status === 'ok') break;
+      const code = typeof reply?.code === 'string' && /^[a-z0-9-]{1,100}$/.test(reply.code) ? reply.code : 'research-dispatch-unavailable';
+      const transient = (response.status >= 500 || response.status === 429) && code === 'research-dispatch-unavailable';
+      if (transient && !signal?.aborted && attempt < maxRetries) {
+        await wait(retryDelays[Math.min(attempt, retryDelays.length - 1)] ?? 400, signal);
+        continue;
+      }
+      throw new Error(code);
     }
     const current = await readContext(ctx);
     if (reply.sessionId !== sessionId || ctx.sessionManager.getSessionId() !== sessionId || !current
@@ -191,29 +240,29 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
       'Branch owners choose subsequent decomposition and roles within their inherited task and permissions; do not send each ordinary child launch back to the user or lead for approval.',
       'The initial decomposition names branch responsibilities and outputs. Leave later in-scope decomposition to each branch; reserve no-nesting instructions for genuinely indivisible leaves instead of applying them to every branch.',
       'For a collaborator with several separable jobs, call plan before bulk implementation. Use stable planId for retries.',
-      'Prepare every task and dependency before submitting the plan, including work beyond current concurrency. The server persists the full queue first, launches only eligible tasks within live Main/Multi limits, and advances it without another model turn. Do not issue a burst of direct research_session calls: refused direct calls are not queued.',
       'For one indivisible assignment, call atomic with a concrete reason; do not create artificial empty subtasks.',
       'Call status before work. Detailed task/receipt data is paged: use view:detail with planId and taskId, a direct dependency taskId, or taskId:self for the original assignment; continue at nextOffset with the same recordHash until complete when the full brief is required.',
       'Dispatch runs autonomously. Wait for task/plan completion or actionable exception notifications instead of repeated status/resource polling or duplicate exploration. Verify the referenced evidence before scientific acceptance. The lead decides scope and unresolved questions; branch owners handle their detailed execution and evidence review.',
       'Default replies contain bounded summaries and evidence references, never whole child transcripts. Unchanged status is acknowledged briefly; refresh:true returns the current summary after compaction if needed.',
-      'Report completed/failed/blocked only for your own assignment with an accurate summary and relative evidence paths. Child failures cannot be hidden behind completed.',
+      'Report completed/failed/blocked only for your own assignment with an accurate summary and relative evidence paths. Child failures cannot be hidden behind completed. HARD RULE: when blocked by missing permissions, coordination questions, or temporary/recoverable resource issues, send research_communication (action="send", kind="request", to="parent") and wait in active state for parent reply — do NOT prematurely submit report(status="blocked").',
+      'To resume or supplement any non-active task (blocked, failed, completed, or recovery-required) inside the original child session instead of creating a new agent, call research_dispatch action="reopen" with planId and taskId (or send a downward request/reply/decision to that child via research_communication). You may still set concurrency:1 when conserving memory.',
       'Respect the original user scope, explicit no-delegate/no-export restrictions and inherited permissions.',
     ],
     parameters: {
       type: 'object', additionalProperties: false, required: ['action'],
       properties: {
-        action: { type: 'string', enum: ['delegate', 'plan', 'status', 'atomic', 'report', 'cancel', 'pause', 'resume'] },
+        action: { type: 'string', enum: ['delegate', 'plan', 'status', 'atomic', 'report', 'cancel', 'pause', 'resume', 'reopen'] },
         planId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$', description: 'Stable client plan key; reuse exactly on a retry.' },
         task: { type: 'string', minLength: 1, maxLength: 4000, description: 'For delegate: the goal, mandatory constraints, acceptance criteria and relevant file references. Do not copy the whole conversation.' },
         stage: { type: 'string', enum: RESEARCH_SESSION_STAGES },
         tasks: { type: 'array', minItems: 1, maxItems: 64, items: RESEARCH_DISPATCH_TASK_SCHEMA },
-        concurrency: { type: 'integer', minimum: 1, maximum: 64, description: 'Legacy fallback concurrency (default 2). A managed workbench uses its current live Main/Multi concurrency settings; this field cannot override them.' },
-        reason: { type: 'string', minLength: 1, maxLength: 1000, description: 'For atomic: why the assignment is indivisible. For cancel: why to stop scheduling the named plan; running processes are not killed.' },
+        concurrency: { type: 'integer', minimum: 1, maximum: process.env.PI_RESEARCH_HOST_DIR ? 64 : 4, description: 'Requested concurrency (default 2). Managed host scheduling and capacity limits govern admission.' },
+        reason: { type: 'string', minLength: 1, maxLength: 1000, description: 'For atomic: why the assignment is indivisible. For cancel: why to stop scheduling the named plan. For reopen: follow-up instruction or reason to resume the non-active task in its original session.' },
         status: { type: 'string', enum: ['completed', 'failed', 'blocked'] },
         summary: { type: 'string', minLength: 1, maxLength: 4000 },
         evidence: { type: 'array', maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 1024 }, description: 'Relative files containing the evidence; no absolute paths or parent traversal.' },
         view: { type: 'string', enum: ['summary', 'detail'], description: 'Default summary is at most 8 KiB; explicit detail is paged at most 16 KiB per reply.' },
-        taskId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$', description: 'Detail target within planId, a direct prerequisite task ID, or self for your original assignment.' },
+        taskId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$', description: 'Target task ID for status detail (or self), or the non-active task ID to reopen within planId.' },
         offset: { type: 'integer', minimum: 0, description: 'For detail: use the preceding page nextOffset. UTF-16 character offset in the serialized record.' },
         recordHash: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'For continuation: copy the preceding detail page recordHash. A changed record is rejected rather than mixing evidence pages.' },
         refresh: { type: 'boolean', description: 'Return the current summary even if unchanged, for example after context compaction.' },
@@ -221,10 +270,11 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
     },
     executionMode: 'sequential', annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     async execute(_id, params, signal, _update, ctx) {
-      if (['plan', 'delegate', 'resume'].includes(params?.action) && state(ctx)?.restrictions?.blocked) return blocked('research-dispatch-user-restricted');
+      if (['plan', 'delegate', 'resume', 'reopen'].includes(params?.action) && state(ctx)?.restrictions?.blocked) return blocked('research-dispatch-user-restricted');
       // Only schema fields are forwarded; runtime identity always wins.
       const body = {};
       const fields = params?.action === 'delegate' ? ['action', 'planId', 'task', 'stage']
+        : params?.action === 'reopen' ? ['action', 'planId', 'taskId', 'reason', 'summary']
         : ['action', 'planId', 'tasks', 'concurrency', 'reason', 'status', 'summary', 'evidence'];
       for (const key of fields) if (params?.[key] !== undefined) body[key] = params[key];
       try {
@@ -295,6 +345,9 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
   pi.on('input', async (event, ctx) => {
     const local = state(ctx);
     if (!local) return;
+    if (event?.source === 'interactive' && userExplicitlyAcceptedStop(event?.text)) {
+      local.userAcceptedStopAt = Date.now();
+    }
     const previouslyBlocked = local.restrictions?.blocked === true;
     local.restrictions = mergeDelegationEventRestrictions(local.restrictions, event, true);
     if (!previouslyBlocked && local.restrictions?.blocked) {
@@ -304,7 +357,7 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
     }
   });
   pi.on('tool_call', async (event, ctx) => {
-    if (!event?.toolName || event.toolName === 'research_dispatch' || event.toolName === 'research_communication') return;
+    if (!event?.toolName || event.toolName === 'research_dispatch' || event.toolName === 'research_communication' || SUBAGENT_TOOLS.has(event.toolName)) return;
     if (!options.readContext) {
       const inspection = inspectWorkbenchRecordContext(ctx, options.contextOptions);
       if (inspection.membership === true && inspection.status !== 'ready' && !SAFE_READS.has(event.toolName) && !COORDINATION.has(event.toolName) && !(event.toolName === 'research_loop' && event.input?.action === 'status')) {
@@ -321,7 +374,7 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
     }
     local.joinedOnce = true;
     if (joined.researchSession) local.managed = true;
-    if (local.restrictions?.blocked && ['research_session', 'subagent', 'Agent', 'SubagentWorkflow'].includes(event.toolName)) {
+    if (local.restrictions?.blocked && event.toolName === 'research_session') {
       return { block: true, reason: 'The user explicitly restricted delegation or external export. Work within that restriction.' };
     }
     if (local.restrictions?.readOnly || joined.researchSession?.readOnly === true) {
@@ -372,7 +425,27 @@ export function registerWorkbenchDispatchTool(pi, options = {}) {
       const rechecked = await readContext(ctx);
       if (snapshot.status !== 'ok' || snapshot.sessionId !== sessionId || ctx?.sessionManager?.getSessionId?.() !== sessionId
           || approvalScope(ctx, rechecked) !== identity) return;
-      if (!snapshot.assignment || TERMINAL.has(snapshot.assignment.status) || snapshot.childrenPending) return;
+      if (!snapshot.assignment) {
+        // Lead completion guard: prevent the Main Agent from unilaterally giving
+        // up in plain prose when its latest dispatched plan still has blocked or
+        // failed tasks, unless the user explicitly asked it to stop or the lead
+        // already asked the user for a decision via ask_user.
+        if (snapshot.collaborator || snapshot.childrenPending || local.restrictions?.blocked || ctx?.hasPendingMessages?.()) return;
+        const unresolved = latestUnresolvedPlan(snapshot.plans);
+        if (!unresolved) return;
+        if (turnAskedUser(event?.messages)) return;
+        const planTs = Date.parse(unresolved.plan.updatedAt ?? unresolved.plan.createdAt ?? '') || 0;
+        if (local.userAcceptedStopAt && local.userAcceptedStopAt >= planTs) return;
+        const sig = `${unresolved.plan.id}:${unresolved.plan.updatedAt ?? unresolved.plan.status}:${unresolved.incomplete.map(t => `${t.id}=${t.status}`).join(',')}`;
+        const prev = local.leadGuard;
+        const count = prev?.sig === sig ? prev.count : 0;
+        if (count >= 2 || typeof pi.sendUserMessage !== 'function') return;
+        local.leadGuard = { sig, count: count + 1 };
+        const names = unresolved.incomplete.map(t => `${t.id}(${t.status}${t.error ? ':' + t.error : ''})`).join('、');
+        pi.sendUserMessage(`[research_dispatch lead-completion-guard] 派发计划 "${unresolved.plan.clientPlanId || unresolved.plan.id}" 仍有 ${unresolved.incomplete.length}/${(unresolved.plan.tasks ?? []).length} 项任务处于受阻/失败未完成状态（${names}）。禁止主 Agent 擅自决定放弃未完成目标并停下。请立即履行主控职责：(1) 逐项核查受阻原因（内存/资源门禁、权限缺失或调度异常）；(2) 若属临时资源或调度受阻且现已恢复，或可在已有授权内解决，优先使用 research_dispatch action="reopen"（或向原孩子发送 research_communication 指令）在原 Agent 中重开并续完未完成任务，不得直接以“不再重派”收口；(3) 若确需人工授予权限、调整范围或确认是否放弃剩余项，必须调用 ask_user 向用户请示。`, { deliverAs: 'followUp' });
+        return;
+      }
+      if (TERMINAL.has(snapshot.assignment.status) || snapshot.childrenPending || snapshot.awaitingParentReply) return;
       if ((local.reportReminders ?? 0) < 2 && typeof pi.sendUserMessage === 'function') {
         local.reportReminders = (local.reportReminders ?? 0) + 1;
         pi.sendUserMessage('[research_dispatch completion contract] This assignment has no authenticated result receipt yet. If separable work remains, declare its plan; otherwise report completed, failed or blocked with the actual findings and relative evidence paths. Natural-language final text alone does not complete the task.', { deliverAs: 'followUp' });

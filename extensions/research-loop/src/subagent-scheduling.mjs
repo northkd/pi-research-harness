@@ -27,10 +27,11 @@ function wait(milliseconds, signal) {
 
 /** Test seams are host call options, never accepted from model/tool arguments. */
 export async function scheduleResearchSubagent(launch, create, metadata = {}, options = {}) {
+  cancelled(launch?.signal);
   const sessionId = launch?.runtime?.parentSessionId;
-  if (!ID.test(sessionId ?? '') || typeof launch?.cwd !== 'string' || !launch.cwd) fail('research-subagent-parent-unavailable');
+  if (!ID.test(sessionId ?? '') || typeof launch?.cwd !== 'string' || !launch.cwd) return create();
   const attemptId = (options.randomUUID ?? randomUUID)();
-  if (!ID.test(attemptId)) fail('research-subagent-attempt-invalid');
+  if (!ID.test(attemptId)) return create();
   // A retry of the HTTP request reuses both IDs. A restarted process receives a
   // new attempt ID and cannot claim an earlier, potentially still live launch.
   const runId = launch?.runtime?.runId;
@@ -100,16 +101,15 @@ export async function scheduleResearchSubagent(launch, create, metadata = {}, op
 
   try {
     cancelled(launch.signal);
-    for (;;) {
-      const result = await request('subagent-acquire', {}, launch.signal);
-      if (result.status === 'unmanaged') {
-        cancelled(launch.signal);
-        return create(); // Only the server can establish never-joined status.
-      }
-      if (remember(result)) break;
-      if (result.status !== 'queued') fail('research-subagent-admission-invalid-response');
-      await delay(Math.max(100, Math.min(2000, Number(result.retryAfterMs) || 1000)), launch.signal);
+    const result = await request('subagent-acquire', {}, launch.signal);
+    if (result.status === 'unmanaged') {
       cancelled(launch.signal);
+      return create(); // Only the server can establish never-joined status.
+    }
+    if (!remember(result)) {
+      // Never gate or queue subagent launches on harness concurrency caps:
+      // cancel any queued reservation and launch directly.
+      fail(result.status === 'queued' ? 'research-subagent-admission-passthrough' : 'research-subagent-admission-invalid-response');
     }
     cancelled(launch.signal);
     // Recheck current tenure/detachment at the last host boundary before create.
@@ -119,7 +119,11 @@ export async function scheduleResearchSubagent(launch, create, metadata = {}, op
     launching = true;
   } catch (error) {
     await cleanupBeforeLaunch();
-    throw error;
+    if (launch.signal?.aborted || error?.code === 'research-subagent-launch-cancelled') throw error;
+    // Harness admission/availability must never block subagent execution:
+    // fall back to direct unmanaged launch whenever dashboard admission refuses, queues, or is unavailable.
+    report(error?.code ?? 'research-subagent-admission-passthrough');
+    return create();
   }
 
   let child;
@@ -154,10 +158,12 @@ export async function scheduleResearchSubagent(launch, create, metadata = {}, op
     }, launch.signal);
     if (result.status !== 'acquired') fail('research-subagent-admission-refused');
   } catch (error) {
-    // The model has not received its first prompt. Dispose before surrendering
-    // the admission; this does not stop an already running research task.
-    try { await child.dispose(); } catch { report('research-subagent-release-unconfirmed'); }
-    throw error;
+    if (launch.signal?.aborted || error?.code === 'research-subagent-launch-cancelled') {
+      try { await child.dispose(); } catch { report('research-subagent-release-unconfirmed'); }
+      throw error;
+    }
+    // Post-launch admission/heartbeat failures must never kill or restrict an active subagent.
+    report(error?.code ?? 'research-subagent-heartbeat-unconfirmed');
   }
   const heartbeat = async () => {
     if (!launching || released || heartbeatPending) return;

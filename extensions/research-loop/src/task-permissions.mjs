@@ -159,7 +159,8 @@ export function taskPermissionAllowsOperation(profile, event, depth = 0) {
   if (name === 'parallel' || name === 'multi_tool_use.parallel') return depth < 4 && Array.isArray(input.tool_uses) && input.tool_uses.length > 0 && input.tool_uses.length <= 64
     && input.tool_uses.every(t => typeof t?.recipient_name === 'string' && object(t.parameters) && taskPermissionAllowsOperation(profile, { toolName: t.recipient_name.split('.').at(-1), input: t.parameters }, depth + 1));
   if (name === 'research_dispatch') return ['plan', 'delegate'].includes(input.action) ? profile.capabilities.delegation : ['status', 'report', 'atomic', 'cancel'].includes(input.action);
-  if (name === 'research_session' || name === 'subagent' || /^(bg_delegate|bg_run_pi)$/.test(name)) return profile.capabilities.delegation;
+  if (['subagent', 'subagent_supervisor', 'subagents_enable', 'Agent', 'SubagentWorkflow'].includes(name)) return true;
+  if (name === 'research_session' || /^(bg_delegate|bg_run_pi)$/.test(name)) return profile.capabilities.delegation;
   if (/^(web_search|fetch_content|source_check)$/.test(name)) return profile.capabilities.publicResearch;
   if (name === 'write' || name === 'edit') return profile.capabilities.localExecution && taskPermissionPathDecision(profile, path.resolve(profile.cwd, input.path ?? '')) === 'allow';
   if (!['bash', 'bg_run', 'ctx_execute', 'ctx_batch_execute'].includes(name) || !profile.capabilities.localExecution) return false;

@@ -214,8 +214,8 @@ export function buildResearchSessionInitialPrompt(provenance, taskContext) {
       ? 'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.'
       : 'This is a direct research_session. If verified status has no dispatcher assignment, execute the original bounded task without inventing an assignment or an atomic reason. Declared child tasks, if present, are scheduled automatically; coordinate their receipts.',
     dispatcherAssigned
-      ? 'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access and workspace limits remain unchanged.'
-      : 'Use research_loop to record actual evidence. With no dispatcher assignment, report your actual completed/partial/blocked/failed result using research_communication report with a stable requestId and evidence references. HANDOFF files may remain evidence artifacts; do not rely on project-specific watchers or retry research_dispatch report after assignment-not-found. Wait for your own children and checks. Delivery, scientific acceptance and native process exit are separate. Publication, provider access and workspace limits remain unchanged.',
+      ? 'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. HARD RULE: when encountering missing permissions, coordination questions, or temporary/recoverable blockers (memory/resource/dispatcher hiccups), send research_communication (action="send", kind="request", to="parent") and pause your turn to wait for parent resolution — NEVER prematurely report blocked to settle the assignment while waiting on parent. Publication, provider access and workspace limits remain unchanged.'
+      : 'Use research_loop to record actual evidence. With no dispatcher assignment, report your actual completed/partial/blocked/failed result using research_communication report with a stable requestId and evidence references. HARD RULE: when encountering missing permissions, coordination questions, or temporary/recoverable blockers, send research_communication (action="send", kind="request", to="parent") and remain active awaiting parent reply — do NOT prematurely settle with blocked. HANDOFF files may remain evidence artifacts; do not rely on project-specific watchers or retry research_dispatch report after assignment-not-found. Wait for your own children and checks. Delivery, scientific acceptance and native process exit are separate. Publication, provider access and workspace limits remain unchanged.',
     'Prefer research_communication report for assigned results too; the host forwards terminal reports to the real dispatcher assignment. No result receipt proves scientific acceptance or process exit.',
   ].filter(Boolean).join('\n');
   const task = String(provenance.task ?? '');
@@ -529,36 +529,49 @@ export function createResearchSessionService(deps) {
     }
   }
 
-  async function activate(spawnToken) {
-    const child = sessions().find(row => researchProvenanceOf(row)?.spawnToken === spawnToken);
+  async function activate(spawnToken, options = {}) {
+    const allowExited = options?.allowExited === true;
+    const liveChild = sessions().find(row => researchProvenanceOf(row)?.spawnToken === spawnToken);
+    const historicChild = allowExited
+      ? (options?.session ?? deps.history?.().find(row => researchProvenanceOf(row)?.spawnToken === spawnToken))
+      : undefined;
+    const child = (liveChild && !['ended', 'closed', 'archived'].includes(liveChild.status)) ? liveChild : (historicChild ?? liveChild);
     const p = researchProvenanceOf(child);
-    if (!child || !p || ['ended', 'closed', 'archived'].includes(child.status)) fail(409, 'research-session-resume-unavailable');
+    const isEnded = !child || ['ended', 'closed', 'archived'].includes(child.status);
+    if (!child || !p || (isEnded && !allowExited)) fail(409, 'research-session-resume-unavailable');
     const parent = deps.getSession(p.parentSessionId);
     if (!parent || ['ended', 'closed', 'archived'].includes(parent.status)) fail(409, 'research-session-resume-unavailable');
     const principal = deps.principalForSession ? deps.principalForSession(parent) : parent.principalOwner ?? null;
     const verified = await authorize({ sessionId: parent.id, principal, expiresAt: null });
     if (p.workflowCwd !== verified.cwd || p.charterHash !== verified.charterHash || p.adoptionId !== verified.adoptionId) fail(409, 'research-session-scope-changed');
-    const childVerified = await authorize({ sessionId: child.id, principal, expiresAt: null });
-    await deps.assertDispatchAllowed?.({ parent: child, verified: childVerified });
+    if (!isEnded) {
+      const childVerified = await authorize({ sessionId: child.id, principal, expiresAt: null });
+      await deps.assertDispatchAllowed?.({ parent: child, verified: childVerified });
+    } else if (deps.verifyParent) {
+      const childVerified = await deps.verifyParent({ parent: child, principal, expiresAt: null });
+      if (!object(childVerified) || childVerified.charterHash !== verified.charterHash || childVerified.adoptionId !== verified.adoptionId) {
+        fail(409, 'research-session-scope-changed');
+      }
+    }
     await deps.assertDispatchAllowed?.({ parent, verified });
     const policy = await readResearchSchedulingPolicy(deps, parent, verified);
     if (p.tenureId && policy?.tenureId !== p.tenureId) fail(409, 'research-dispatch-tenure-changed');
     await checkAdmission({ parent, verified, policy, requestId: p.requestId, rootSessionId: p.rootSessionId, ownToken: spawnToken, resuming: true });
     // A trusted internal reactivation is distinct from a duplicate spawn. The
     // shared native/session lease must be reacquired before any model wakeup.
-    await deps.acquireSchedulingReservation?.({ parent, verified, requestId: p.requestId, spawnToken, tenureId: policy?.tenureId, reactivation: true });
+    await deps.acquireSchedulingReservation?.({ parent, verified, requestId: p.requestId, spawnToken, tenureId: policy?.tenureId, reactivation: true, allowExited });
     const key = [...requests].find(([, row]) => row.spawnToken === spawnToken)?.[0]
       ?? JSON.stringify([verified.ownerKey, parent.cwd, verified.adoptionId, verified.charterHash, parent.id, p.requestId, ...(policy?.tenureId ? [policy.tenureId] : [])]);
     const previous = requests.get(key);
     persistRequest(key, { ...previous, fingerprint: previous?.fingerprint ?? JSON.stringify([p.role, p.task, p.stage, p.tasks ?? null, ...(p.readOnly === true ? [true] : [])]),
       spawnToken, requestId: p.requestId, parentSessionId: parent.id, rootSessionId: p.rootSessionId ?? parent.id,
-      phase: 'registered', reactivated: true, unknown: false, createdAt: previous?.createdAt ?? now().toISOString(), result: compactSpawnReceipt(p, 'registered', child.id) });
+      phase: isEnded ? 'launching' : 'registered', reactivated: true, unknown: false, createdAt: previous?.createdAt ?? now().toISOString(), result: compactSpawnReceipt(p, isEnded ? 'pending' : 'registered', child.id) });
     reactivated.add(spawnToken); released.delete(spawnToken); inFlight.delete(spawnToken);
   }
 
   return {
     create: input => serialAdmission(() => create(input)),
-    activate: spawnToken => serialAdmission(() => activate(spawnToken)),
+    activate: (spawnToken, options) => serialAdmission(() => activate(spawnToken, options)),
     authorize,
     release: async spawnToken => {
       // Do not free either process pool until both durable ledgers acknowledge

@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { Icon } from "@mdi/react";
+import { mdiChevronRight, mdiClose } from "@mdi/js";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { DialogPortal } from "@blackbelt-technology/pi-dashboard-client-utils/DialogPortal";
+import { LayerHostProvider } from "@blackbelt-technology/pi-dashboard-client-utils/LayerPortal";
+import { useEscapeDismiss } from "@blackbelt-technology/pi-dashboard-client-utils/escape-stack";
+import { useFocusTrap } from "@blackbelt-technology/pi-dashboard-client-utils/useFocusTrap";
 import { ResearchAgentCanvas, type CanvasSessionCluster } from "./ResearchAgentCanvas.js";
+import { humanPlanTitle, planTaskStatusMeta, summarizePlan } from "./research-plan-topology.js";
 import type { ConfiguredRole, ResearchExecution, ResearchProjection } from "./research-projection.js";
 import { researchStatusLabel } from "./ResearchAgentDetail.js";
 import type {
@@ -19,6 +26,21 @@ function tenurePlans(snapshot: CollaborationSnapshot, tenure: CollaborationTenur
   return snapshot.plans.filter(plan => {
     if (plan.tenureId) return plan.tenureId === tenure.id;
     return members.has(plan.parentSessionId);
+  });
+}
+
+function tenureCommunications(
+  snapshot: CollaborationSnapshot,
+  tenure: CollaborationTenure,
+  plans: ReadonlyArray<CollaborationPlan>,
+) {
+  const all = snapshot.communications ?? [];
+  if (!all.length) return [];
+  const members = new Set(tenure.sessionIds);
+  const planIds = new Set(plans.map(plan => plan.id));
+  return all.filter(item => {
+    if (item.targetPlanId && planIds.has(item.targetPlanId)) return true;
+    return members.has(item.from) || members.has(item.to);
   });
 }
 
@@ -122,61 +144,111 @@ function reorderIds(ids: string[], fromIdx: number, toIdx: number): string[] {
 function DispatchQueueSummary({
   multiCount,
   nativeCount,
+  incompleteCount = 0,
   open,
   onToggle,
 }: {
   multiCount: number;
   nativeCount: number;
+  incompleteCount?: number;
   open: boolean;
   onToggle: () => void;
 }) {
   const total = multiCount + nativeCount;
   return (
     <div className="research-inline-bar min-w-0" aria-label="调度队列">
-      <span className="text-[11px] font-medium text-[var(--text-secondary)] whitespace-nowrap">调度队列</span>
-      <span className="research-queue-pill">Multi-Agent {multiCount}</span>
+      {multiCount > 0 && <span className="research-queue-pill">Multi-Agent {multiCount}</span>}
       {nativeCount > 0 && <span className="research-queue-pill">Subagent {nativeCount}</span>}
-      {total === 0 ? (
-        <span className="text-[11px] text-[var(--text-tertiary)] whitespace-nowrap">空闲</span>
-      ) : (
-        <button
-          type="button"
-          className="research-workspace-action !min-h-[24px] !px-2 !py-0 text-[11px]"
-          aria-expanded={open}
-          onClick={onToggle}
-        >
-          {open ? "收起队列 ▴" : "排队详情 ▾"}
-        </button>
-      )}
+      <button
+        type="button"
+        data-testid="research-open-queue-modal"
+        className={`research-workspace-action !min-h-[24px] !px-2 !py-0 text-[11px] ${
+          total > 0
+            ? "primary"
+            : incompleteCount > 0
+            ? "border-red-500/35 text-[var(--accent-red)]"
+            : ""
+        }`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        {total > 0 ? `排队调度 (${total})` : incompleteCount > 0 ? `未完成 (${incompleteCount})` : "调度队列"}
+      </button>
     </div>
   );
 }
 
-function DispatchQueuePanel({
+function DispatchQueueModal({
+  open,
+  onClose,
   controller,
   snapshot,
   multiPlans,
   nativeQueued,
+  focusedPlanId = null,
+  onClearFocusPlan,
+  onInspectSession,
 }: {
+  open: boolean;
+  onClose: () => void;
   controller: Controller;
   snapshot: CollaborationSnapshot;
   multiPlans: Array<{ plan: CollaborationPlan; queued: CollaborationPlanTask[] }>;
   nativeQueued: CollaborationNativeQueueItem[];
+  focusedPlanId?: string | null;
+  onClearFocusPlan?: () => void;
+  onInspectSession?: (sessionId: string) => void;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [panel, setPanel] = useState<HTMLDivElement | null>(null);
+  const titleId = useId();
+  const ref = useCallback((node: HTMLDivElement | null) => {
+    panelRef.current = node;
+    setPanel(node);
+  }, []);
+  useFocusTrap(panelRef, open);
+  useEscapeDismiss(open, onClose);
+
+  if (!open) return null;
+
   const { pending, queueFeedback, clearQueueFeedback } = controller;
+  const sessionTitleMap: Record<string, string> = {};
+  for (const tenure of snapshot.tenures) {
+    for (const [sid, snap] of Object.entries(tenure.snapshots ?? {})) {
+      if (snap?.title) sessionTitleMap[sid] = snap.title;
+    }
+  }
   const sessionTitle = (sessionId?: string) => {
     if (!sessionId) return "未知会话";
-    for (let i = snapshot.tenures.length - 1; i >= 0; i--) {
-      const tenure = snapshot.tenures[i]!;
-      const snap = tenure.snapshots[sessionId];
-      if (snap?.title) return snap.title;
-    }
-    return sessionId;
+    return sessionTitleMap[sessionId] || sessionId;
   };
+
+  const focusedPlan = focusedPlanId ? snapshot.plans.find(p => p.id === focusedPlanId) ?? null : null;
+  const visibleMultiPlans = focusedPlan
+    ? multiPlans.filter(entry => entry.plan.id === focusedPlan.id)
+    : multiPlans;
+  const visibleNativeQueued = focusedPlan ? [] : nativeQueued;
+
+  // Incomplete terminal tasks (blocked / failed) in the focused plan or current tenure's plans.
+  const currentTenure = snapshot.tenures.find(t => t.id === snapshot.currentTenureId) ?? null;
+  const incompleteSourcePlans = focusedPlan
+    ? [focusedPlan]
+    : currentTenure
+    ? tenurePlans(snapshot, currentTenure)
+    : snapshot.plans;
+  const incompleteTasks = incompleteSourcePlans.flatMap(plan =>
+    plan.tasks
+      .filter(task => {
+        const tone = planTaskStatusMeta(task.status).tone;
+        return tone === "blocked" || tone === "failed";
+      })
+      .map(task => ({ plan, task, meta: planTaskStatusMeta(task.status) })),
+  );
 
   // Group queued native subagents by parentSessionId so native-reorder operates per parent scope.
   const nativeGroups = new Map<string, CollaborationNativeQueueItem[]>();
-  for (const row of nativeQueued) {
+  for (const row of visibleNativeQueued) {
     const key = row.parentSessionId ?? "__unknown__";
     const list = nativeGroups.get(key) ?? [];
     list.push(row);
@@ -190,241 +262,337 @@ function DispatchQueuePanel({
   }
 
   return (
-    <section className="research-collab-queue-panel p-2.5 space-y-2.5" aria-label="调度排队详情">
-      {queueFeedback && (
+    <DialogPortal>
+      <div className="research-queue-modal-layer">
+        <div className="research-queue-modal-backdrop" onClick={onClose} />
         <div
-          role="status"
-          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--accent-primary)]/40 bg-[var(--accent-soft)] px-2.5 py-1.5 text-[11px] text-[var(--accent-text)]"
+          ref={ref}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          tabIndex={-1}
+          data-testid="research-dispatch-queue-modal"
+          className="research-queue-modal"
         >
-          <span>{queueFeedback}</span>
-          <button
-            type="button"
-            className="text-[11px] underline hover:opacity-80"
-            onClick={clearQueueFeedback}
-          >
-            关闭
-          </button>
-        </div>
-      )}
+          <header className="research-queue-modal-header">
+            <div className="min-w-0">
+              <p className="research-eyebrow">调度队列管理</p>
+              <h2 id={titleId} className="truncate text-[15px] font-semibold text-[var(--text-primary)]">
+                {focusedPlan ? humanPlanTitle(focusedPlan, sessionTitleMap) : "排队顺序与优先启动"}
+              </h2>
+              <p className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+                并发配额：Multi-Agent {snapshot.limits.maxMultiAgents} · Subagent {snapshot.limits.maxSubagents}
+                {focusedPlan && onClearFocusPlan && (
+                  <>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="text-[var(--accent-text)] underline hover:opacity-80"
+                      onClick={onClearFocusPlan}
+                    >
+                      查看全部 Plan 队列
+                    </button>
+                  </>
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="关闭调度队列弹窗"
+              className="rounded-md p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+            >
+              <Icon path={mdiClose} size={0.8} />
+            </button>
+          </header>
 
-      {multiPlans.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-[11px] font-medium text-[var(--text-secondary)]">
-            <span>Multi-Agent 排队队列</span>
-            <span className="text-[10.5px] text-[var(--text-tertiary)]">受并发配额与前置依赖约束；插队将在空出槽位时最先启动</span>
-          </div>
-          <ol className="space-y-1.5" data-testid="research-multi-agent-queue">
-            {multiPlans.flatMap(({ plan, queued }) => {
-              const owner = snapshot.tenures.find(tenure => tenure.id === plan.tenureId);
-              const isCurrentTenure = !plan.tenureId || plan.tenureId === snapshot.currentTenureId;
-              const queuedIds = queued.map(item => item.id);
-              const queueRevision = plan.revision ?? 1;
-              return queued.map((task, idx) => {
-                const depsPending = hasPendingDependencies(plan, task);
-                const paused = plan.schedulingPaused === true;
-                const reasonKey = task.waitingReason ?? task.queueReason ?? "";
-                const reasonText = paused
-                  ? "已暂停"
-                  : depsPending
-                    ? "等待前置任务"
-                    : waitReasons[reasonKey] ?? "等待调度";
-                const canStart = isCurrentTenure && snapshot.adopted && !pending && !paused && !depsPending;
-                const startTitle = !isCurrentTenure
-                  ? "历史批次不可操作"
-                  : paused
-                    ? "当前计划调度已暂停"
-                    : depsPending
-                      ? "存在未完成的前置依赖任务"
-                      : "优先插队启动（并发满时排至队首）";
-                return (
-                  <li key={`${plan.id}:${task.id}`} className="win11-card-subtle flex flex-wrap items-start justify-between gap-2 p-2 text-xs">
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-mono text-[10.5px] text-[var(--text-tertiary)]">#{idx + 1}</span>
-                        <strong>{task.role}</strong>
-                        <span className="rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-[var(--accent-orange)]">
-                          Queued
-                        </span>
-                        <span className="text-[11px] text-[var(--text-secondary)]">{reasonText}</span>
-                      </div>
-                      <p className="break-words text-[var(--text-primary)]">{task.task}</p>
-                      <p className="text-[11px] text-[var(--text-tertiary)]">
-                        {owner ? `批次 #${owner.ordinal} · ${title(owner, plan.parentSessionId)}` : plan.parentSessionId}
-                      </p>
-                    </div>
-                    {isCurrentTenure && (
-                      <div className="flex shrink-0 flex-wrap items-center gap-1">
-                        <button
-                          type="button"
-                          className="research-workspace-action primary !min-h-[24px] !px-2 !py-0 text-[11px]"
-                          aria-label={`插队启动 ${task.role}`}
-                          title={startTitle}
-                          disabled={!canStart}
-                          onClick={() => {
-                            void controller.change({
-                              action: "start",
-                              sessionId: plan.parentSessionId,
-                              planId: plan.id,
-                              taskId: task.id,
-                              queueRevision,
-                            });
-                          }}
-                        >
-                          优先启动
-                        </button>
-                        {queued.length > 1 && (
-                          <>
-                            <button
-                              type="button"
-                              className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
-                              aria-label={`置顶 ${task.role}`}
-                              disabled={idx === 0 || pending || !snapshot.adopted}
-                              onClick={() => {
-                                void controller.change({
-                                  action: "reorder",
-                                  sessionId: plan.parentSessionId,
-                                  planId: plan.id,
-                                  taskIds: reorderIds(queuedIds, idx, 0),
-                                  queueRevision,
-                                });
-                              }}
-                            >
-                              置顶
-                            </button>
-                            <button
-                              type="button"
-                              className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
-                              aria-label={`上移 ${task.role}`}
-                              disabled={idx === 0 || pending || !snapshot.adopted}
-                              onClick={() => {
-                                void controller.change({
-                                  action: "reorder",
-                                  sessionId: plan.parentSessionId,
-                                  planId: plan.id,
-                                  taskIds: reorderIds(queuedIds, idx, idx - 1),
-                                  queueRevision,
-                                });
-                              }}
-                            >
-                              ↑
-                            </button>
-                            <button
-                              type="button"
-                              className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
-                              aria-label={`下移 ${task.role}`}
-                              disabled={idx === queued.length - 1 || pending || !snapshot.adopted}
-                              onClick={() => {
-                                void controller.change({
-                                  action: "reorder",
-                                  sessionId: plan.parentSessionId,
-                                  planId: plan.id,
-                                  taskIds: reorderIds(queuedIds, idx, idx + 1),
-                                  queueRevision,
-                                });
-                              }}
-                            >
-                              ↓
-                            </button>
-                          </>
+          <div className="research-queue-modal-body space-y-4">
+            <LayerHostProvider host={panel}>
+              {queueFeedback && (
+                <div
+                  role="status"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--accent-primary)]/40 bg-[var(--accent-soft)] px-2.5 py-1.5 text-[11px] text-[var(--accent-text)]"
+                >
+                  <span>{queueFeedback}</span>
+                  <button
+                    type="button"
+                    className="text-[11px] underline hover:opacity-80"
+                    onClick={clearQueueFeedback}
+                  >
+                    关闭
+                  </button>
+                </div>
+              )}
+
+              <section className="space-y-1.5" aria-label="Multi-Agent 排队队列">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-medium text-[var(--text-secondary)]">
+                  <span>Multi-Agent 排队队列</span>
+                  <span className="text-[10.5px] text-[var(--text-tertiary)]">可调整顺序或插队优先启动（空出并发槽位时立即生效）</span>
+                </div>
+                {visibleMultiPlans.length > 0 ? (
+                  <ol className="space-y-1.5" data-testid="research-multi-agent-queue">
+                    {visibleMultiPlans.flatMap(({ plan, queued }) => {
+                      const owner = snapshot.tenures.find(tenure => tenure.id === plan.tenureId);
+                      const isCurrentTenure = !plan.tenureId || plan.tenureId === snapshot.currentTenureId;
+                      const queuedIds = queued.map(item => item.id);
+                      const queueRevision = plan.revision ?? 1;
+                      return queued.map((task, idx) => {
+                        const depsPending = hasPendingDependencies(plan, task);
+                        const paused = plan.schedulingPaused === true;
+                        const reasonKey = task.waitingReason ?? task.queueReason ?? "";
+                        const reasonText = paused
+                          ? "已暂停"
+                          : depsPending
+                            ? "等待前置任务"
+                            : waitReasons[reasonKey] ?? "等待调度";
+                        const canStart = isCurrentTenure && snapshot.adopted && !pending && !paused && !depsPending;
+                        const startTitle = !isCurrentTenure
+                          ? "历史批次不可操作"
+                          : paused
+                            ? "当前计划调度已暂停"
+                            : depsPending
+                              ? "存在未完成的前置依赖任务"
+                              : "优先插队启动（并发满时排至队首）";
+                        return (
+                          <li key={`${plan.id}:${task.id}`} className="win11-card-subtle flex flex-wrap items-start justify-between gap-2 p-2.5 text-xs">
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-mono text-[10.5px] text-[var(--text-tertiary)]">#{idx + 1}</span>
+                                <strong>{task.role}</strong>
+                                <span className="rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-[var(--accent-orange)]">
+                                  Queued
+                                </span>
+                                <span className="text-[11px] text-[var(--text-secondary)]">{reasonText}</span>
+                              </div>
+                              <p className="break-words text-[var(--text-primary)]">{task.task}</p>
+                              <p className="text-[11px] text-[var(--text-tertiary)]">
+                                {humanPlanTitle(plan, sessionTitleMap)} · {owner ? `批次 #${owner.ordinal} · ${title(owner, plan.parentSessionId)}` : plan.parentSessionId}
+                              </p>
+                            </div>
+                            {isCurrentTenure && (
+                              <div className="flex shrink-0 flex-wrap items-center gap-1">
+                                <button
+                                  type="button"
+                                  className="research-workspace-action primary !min-h-[24px] !px-2 !py-0 text-[11px]"
+                                  aria-label={`插队启动 ${task.role}`}
+                                  title={startTitle}
+                                  disabled={!canStart}
+                                  onClick={() => {
+                                    void controller.change({
+                                      action: "start",
+                                      sessionId: plan.parentSessionId,
+                                      planId: plan.id,
+                                      taskId: task.id,
+                                      queueRevision,
+                                    });
+                                  }}
+                                >
+                                  优先启动
+                                </button>
+                                {queued.length > 1 && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
+                                      aria-label={`置顶 ${task.role}`}
+                                      disabled={idx === 0 || pending || !snapshot.adopted}
+                                      onClick={() => {
+                                        void controller.change({
+                                          action: "reorder",
+                                          sessionId: plan.parentSessionId,
+                                          planId: plan.id,
+                                          taskIds: reorderIds(queuedIds, idx, 0),
+                                          queueRevision,
+                                        });
+                                      }}
+                                    >
+                                      置顶
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
+                                      aria-label={`上移 ${task.role}`}
+                                      disabled={idx === 0 || pending || !snapshot.adopted}
+                                      onClick={() => {
+                                        void controller.change({
+                                          action: "reorder",
+                                          sessionId: plan.parentSessionId,
+                                          planId: plan.id,
+                                          taskIds: reorderIds(queuedIds, idx, idx - 1),
+                                          queueRevision,
+                                        });
+                                      }}
+                                    >
+                                      ↑
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
+                                      aria-label={`下移 ${task.role}`}
+                                      disabled={idx === queued.length - 1 || pending || !snapshot.adopted}
+                                      onClick={() => {
+                                        void controller.change({
+                                          action: "reorder",
+                                          sessionId: plan.parentSessionId,
+                                          planId: plan.id,
+                                          taskIds: reorderIds(queuedIds, idx, idx + 1),
+                                          queueRevision,
+                                        });
+                                      }}
+                                    >
+                                      ↓
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </li>
+                        );
+                      });
+                    })}
+                  </ol>
+                ) : (
+                  <p className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2.5 text-xs text-[var(--text-tertiary)]">
+                    {focusedPlan ? "该 Plan 当前没有排队中的 Multi-Agent 任务。" : "当前没有排队中的 Multi-Agent 任务。"}
+                  </p>
+                )}
+              </section>
+
+              {visibleNativeQueued.length > 0 && (
+                <section className="space-y-1.5" aria-label="Subagent 排队队列">
+                  <div className="text-[11px] font-medium text-[var(--text-secondary)]">Subagent 排队队列</div>
+                  <ol className="space-y-1.5" data-testid="research-subagent-queue">
+                    {[...nativeGroups.entries()].flatMap(([parentKey, group]) => {
+                      const reorderableIds = group.map(item => item.id).filter((id): id is string => Boolean(id));
+                      const canReorderGroup = parentKey !== "__unknown__"
+                        && reorderableIds.length === group.length
+                        && group.length > 1
+                        && (!group[0]?.tenureId || group[0].tenureId === snapshot.currentTenureId)
+                        && snapshot.adopted;
+                      return group.map((row, idx) => {
+                        const roleName = row.role ?? "Subagent";
+                        const reasonText = waitReasons[row.queueReason ?? ""] ?? "等待 Subagent 槽位";
+                        return (
+                          <li key={row.id ?? row.requestId ?? `${parentKey}-${idx}`} className="win11-card-subtle flex flex-wrap items-start justify-between gap-2 p-2.5 text-xs">
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-mono text-[10.5px] text-[var(--text-tertiary)]">#{idx + 1}</span>
+                                <strong>{roleName}</strong>
+                                <span className="rounded border border-purple-500/35 bg-purple-500/10 px-1.5 py-0 text-[10px] font-medium text-[var(--accent-purple-text)]">
+                                  Queued
+                                </span>
+                                <span className="text-[11px] text-[var(--text-secondary)]">{reasonText}</span>
+                                {row.model && <span className="font-mono text-[10.5px] text-[var(--text-tertiary)]">{row.model}</span>}
+                              </div>
+                              {row.task && <p className="break-words text-[var(--text-primary)]">{row.task}</p>}
+                              {row.parentSessionId && (
+                                <p className="text-[11px] text-[var(--text-tertiary)]">父会话：{sessionTitle(row.parentSessionId)}</p>
+                              )}
+                            </div>
+                            {canReorderGroup && (
+                              <div className="flex shrink-0 items-center gap-1">
+                                <button
+                                  type="button"
+                                  className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
+                                  aria-label={`置顶 Subagent ${roleName}`}
+                                  disabled={idx === 0 || pending}
+                                  onClick={() => {
+                                    void controller.change({
+                                      action: "native-reorder",
+                                      sessionId: parentKey,
+                                      taskIds: reorderIds(reorderableIds, idx, 0),
+                                    });
+                                  }}
+                                >
+                                  置顶
+                                </button>
+                                <button
+                                  type="button"
+                                  className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
+                                  aria-label={`上移 Subagent ${roleName}`}
+                                  disabled={idx === 0 || pending}
+                                  onClick={() => {
+                                    void controller.change({
+                                      action: "native-reorder",
+                                      sessionId: parentKey,
+                                      taskIds: reorderIds(reorderableIds, idx, idx - 1),
+                                    });
+                                  }}
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  type="button"
+                                  className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
+                                  aria-label={`下移 Subagent ${roleName}`}
+                                  disabled={idx === group.length - 1 || pending}
+                                  onClick={() => {
+                                    void controller.change({
+                                      action: "native-reorder",
+                                      sessionId: parentKey,
+                                      taskIds: reorderIds(reorderableIds, idx, idx + 1),
+                                    });
+                                  }}
+                                >
+                                  ↓
+                                </button>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      });
+                    })}
+                  </ol>
+                </section>
+              )}
+
+              {incompleteTasks.length > 0 && (
+                <section className="space-y-1.5" aria-label="受阻或未完成任务" data-testid="research-incomplete-tasks">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-medium text-[var(--accent-red)]">
+                    <span>受阻 / 失败未完成任务 ({incompleteTasks.length})</span>
+                    <span className="text-[10.5px] font-normal text-[var(--text-tertiary)]">已按受阻/失败终态结算，不在排队队列中</span>
+                  </div>
+                  <ol className="space-y-1.5">
+                    {incompleteTasks.map(({ plan, task, meta }) => (
+                      <li key={`${plan.id}:${task.id}`} className="win11-card-subtle flex flex-wrap items-start justify-between gap-2 border-l-2 border-l-[var(--accent-red)] p-2.5 text-xs">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <strong>{task.role}</strong>
+                            <span className="rounded border border-red-500/35 bg-red-500/15 px-1.5 py-0 text-[10px] font-semibold text-[var(--accent-red)]">
+                              {meta.label}
+                            </span>
+                            <span className="text-[10.5px] text-[var(--text-tertiary)]">
+                              {humanPlanTitle(plan, sessionTitleMap)}
+                            </span>
+                          </div>
+                          {task.sessionId && (
+                            <p className="text-[11px] font-medium text-[var(--text-primary)]">{sessionTitle(task.sessionId)}</p>
+                          )}
+                          {(task.error || task.summary) && (
+                            <p className="break-words text-[11px] text-[var(--text-secondary)]">
+                              {task.error ? `原因：${task.error}` : task.summary}
+                            </p>
+                          )}
+                        </div>
+                        {task.sessionId && onInspectSession && (
+                          <button
+                            type="button"
+                            className="research-workspace-action !min-h-[24px] !px-2 !py-0 text-[11px] text-[var(--accent-text)]"
+                            onClick={() => onInspectSession(task.sessionId!)}
+                          >
+                            查看会话详情
+                          </button>
                         )}
-                      </div>
-                    )}
-                  </li>
-                );
-              });
-            })}
-          </ol>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              )}
+            </LayerHostProvider>
+          </div>
         </div>
-      )}
-
-      {nativeQueued.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="text-[11px] font-medium text-[var(--text-secondary)]">Subagent 排队队列</div>
-          <ol className="space-y-1.5" data-testid="research-subagent-queue">
-            {[...nativeGroups.entries()].flatMap(([parentKey, group]) => {
-              const reorderableIds = group.map(item => item.id).filter((id): id is string => Boolean(id));
-              const canReorderGroup = parentKey !== "__unknown__"
-                && reorderableIds.length === group.length
-                && group.length > 1
-                && (!group[0]?.tenureId || group[0].tenureId === snapshot.currentTenureId)
-                && snapshot.adopted;
-              return group.map((row, idx) => {
-                const roleName = row.role ?? "Subagent";
-                const reasonText = waitReasons[row.queueReason ?? ""] ?? "等待 Subagent 槽位";
-                return (
-                  <li key={row.id ?? row.requestId ?? `${parentKey}-${idx}`} className="win11-card-subtle flex flex-wrap items-start justify-between gap-2 p-2 text-xs">
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-mono text-[10.5px] text-[var(--text-tertiary)]">#{idx + 1}</span>
-                        <strong>{roleName}</strong>
-                        <span className="rounded border border-purple-500/35 bg-purple-500/10 px-1.5 py-0 text-[10px] font-medium text-[var(--accent-purple-text)]">
-                          Queued
-                        </span>
-                        <span className="text-[11px] text-[var(--text-secondary)]">{reasonText}</span>
-                        {row.model && <span className="font-mono text-[10.5px] text-[var(--text-tertiary)]">{row.model}</span>}
-                      </div>
-                      {row.task && <p className="break-words text-[var(--text-primary)]">{row.task}</p>}
-                      {row.parentSessionId && (
-                        <p className="text-[11px] text-[var(--text-tertiary)]">父会话：{sessionTitle(row.parentSessionId)}</p>
-                      )}
-                    </div>
-                    {canReorderGroup && (
-                      <div className="flex shrink-0 items-center gap-1">
-                        <button
-                          type="button"
-                          className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
-                          aria-label={`置顶 Subagent ${roleName}`}
-                          disabled={idx === 0 || pending}
-                          onClick={() => {
-                            void controller.change({
-                              action: "native-reorder",
-                              sessionId: parentKey,
-                              taskIds: reorderIds(reorderableIds, idx, 0),
-                            });
-                          }}
-                        >
-                          置顶
-                        </button>
-                        <button
-                          type="button"
-                          className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
-                          aria-label={`上移 Subagent ${roleName}`}
-                          disabled={idx === 0 || pending}
-                          onClick={() => {
-                            void controller.change({
-                              action: "native-reorder",
-                              sessionId: parentKey,
-                              taskIds: reorderIds(reorderableIds, idx, idx - 1),
-                            });
-                          }}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="research-workspace-action !min-h-[24px] !px-1.5 !py-0 text-[11px]"
-                          aria-label={`下移 Subagent ${roleName}`}
-                          disabled={idx === group.length - 1 || pending}
-                          onClick={() => {
-                            void controller.change({
-                              action: "native-reorder",
-                              sessionId: parentKey,
-                              taskIds: reorderIds(reorderableIds, idx, idx + 1),
-                            });
-                          }}
-                        >
-                          ↓
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                );
-              });
-            })}
-          </ol>
-        </div>
-      )}
-    </section>
+      </div>
+    </DialogPortal>
   );
 }
 
@@ -624,6 +792,7 @@ export function getCollaborationQueueData(snapshot: CollaborationSnapshot | null
       multiQueuedCount: 0,
       nativeQueued: [] as CollaborationNativeQueueItem[],
       totalQueued: 0,
+      incompleteCount: 0,
     };
   }
   const multiPlans = snapshot.plans
@@ -631,11 +800,18 @@ export function getCollaborationQueueData(snapshot: CollaborationSnapshot | null
     .filter(({ queued }) => queued.length > 0);
   const multiQueuedCount = multiPlans.reduce((sum, entry) => sum + entry.queued.length, 0);
   const nativeQueued = snapshot.nativeQueue.filter(row => row.status === "queued");
+  const currentTenure = snapshot.tenures.find(t => t.id === snapshot.currentTenureId) ?? null;
+  const activePlans = currentTenure ? tenurePlans(snapshot, currentTenure) : [];
+  const incompleteCount = activePlans.reduce(
+    (sum, plan) => sum + plan.tasks.filter(task => ["blocked", "failed"].includes(planTaskStatusMeta(task.status).tone)).length,
+    0,
+  );
   return {
     multiPlans,
     multiQueuedCount,
     nativeQueued,
     totalQueued: multiQueuedCount + nativeQueued.length,
+    incompleteCount,
   };
 }
 
@@ -650,7 +826,7 @@ export function ResearchCollaborationMetaControls({
 }) {
   const { snapshot } = controller;
   if (!snapshot) return null;
-  const { multiQueuedCount, nativeQueued } = getCollaborationQueueData(snapshot);
+  const { multiQueuedCount, nativeQueued, incompleteCount } = getCollaborationQueueData(snapshot);
   return (
     <>
       <Limits key={controller.scope} controller={controller} snapshot={snapshot} />
@@ -658,6 +834,7 @@ export function ResearchCollaborationMetaControls({
       <DispatchQueueSummary
         multiCount={multiQueuedCount}
         nativeCount={nativeQueued.length}
+        incompleteCount={incompleteCount}
         open={queueOpen}
         onToggle={onToggleQueue}
       />
@@ -668,40 +845,85 @@ export function ResearchCollaborationMetaControls({
 export function ResearchDispatchQueueDrawer({
   controller,
   queueOpen,
+  onClose,
+  focusedPlanId = null,
+  onClearFocusPlan,
+  onInspectSession,
 }: {
   controller: Controller;
   queueOpen: boolean;
+  onClose: () => void;
+  focusedPlanId?: string | null;
+  onClearFocusPlan?: () => void;
+  onInspectSession?: (sessionId: string) => void;
 }) {
   const { snapshot } = controller;
   if (!snapshot) return null;
-  const { multiPlans, nativeQueued, totalQueued } = getCollaborationQueueData(snapshot);
-  if (!((totalQueued > 0 && queueOpen) || Boolean(controller.queueFeedback))) return null;
+  const { multiPlans, nativeQueued } = getCollaborationQueueData(snapshot);
   return (
-    <DispatchQueuePanel
+    <DispatchQueueModal
+      open={queueOpen}
+      onClose={onClose}
       controller={controller}
       snapshot={snapshot}
       multiPlans={multiPlans}
       nativeQueued={nativeQueued}
+      focusedPlanId={focusedPlanId}
+      onClearFocusPlan={onClearFocusPlan}
+      onInspectSession={onInspectSession}
     />
   );
 }
 
-export function ResearchCollaborationPanel({ controller, projection, stale, visible, hideInlineToolbar = false, highlightedPlanId = null, onAgent }: {
-  controller: Controller; projection: ResearchProjection; stale: boolean; visible: boolean; hideInlineToolbar?: boolean; highlightedPlanId?: string | null;
+export function ResearchCollaborationPanel({
+  controller,
+  projection,
+  stale,
+  visible,
+  hideInlineToolbar = false,
+  highlightedPlanId = null,
+  onOpenQueue,
+  onAgent,
+}: {
+  controller: Controller;
+  projection: ResearchProjection;
+  stale: boolean;
+  visible: boolean;
+  hideInlineToolbar?: boolean;
+  highlightedPlanId?: string | null;
+  onOpenQueue?: (planId?: string) => void;
   onAgent(role: ConfiguredRole, execution?: ResearchExecution): void;
 }) {
   const { snapshot, pending, error } = controller;
   const [removing, setRemoving] = useState<{ tenureId: string; sessionId: string; name: string } | null>(null);
-  const { multiPlans, multiQueuedCount, nativeQueued, totalQueued } = getCollaborationQueueData(snapshot);
+  const { multiPlans, multiQueuedCount, nativeQueued, incompleteCount } = getCollaborationQueueData(snapshot);
+  const [localQueueOpen, setLocalQueueOpen] = useState(false);
+  const [localFocusedPlanId, setLocalFocusedPlanId] = useState<string | null>(null);
+  const [expandedHistoricalIds, setExpandedHistoricalIds] = useState<Set<string>>(() => new Set());
 
-  const [queueOpen, setQueueOpen] = useState(totalQueued > 0);
-  const prevTotalQueuedRef = useRef(totalQueued);
   useEffect(() => {
-    if (prevTotalQueuedRef.current === 0 && totalQueued > 0) setQueueOpen(true);
-    prevTotalQueuedRef.current = totalQueued;
-  }, [totalQueued]);
+    setRemoving(null);
+    setExpandedHistoricalIds(new Set());
+  }, [controller.scope]);
 
-  useEffect(() => { setRemoving(null); }, [controller.scope]);
+  const handleOpenQueue = (planId?: string) => {
+    if (onOpenQueue) {
+      onOpenQueue(planId);
+      return;
+    }
+    setLocalFocusedPlanId(planId ?? null);
+    setLocalQueueOpen(true);
+  };
+
+  const toggleHistoricalTenure = (tenureId: string) => {
+    setExpandedHistoricalIds(prev => {
+      const next = new Set(prev);
+      if (next.has(tenureId)) next.delete(tenureId);
+      else next.add(tenureId);
+      return next;
+    });
+  };
+
   return <section className="space-y-2.5" data-testid="research-agent-topology">
     {error && <p role="alert" className="research-warning text-xs">状态异常 · {error}</p>}
     {!snapshot ? <p className="text-xs text-[var(--text-secondary)]">{error ? "等待同步协作状态。" : "加载协作状态…"}</p> : <>
@@ -712,18 +934,24 @@ export function ResearchCollaborationPanel({ controller, projection, stale, visi
             <DispatchQueueSummary
               multiCount={multiQueuedCount}
               nativeCount={nativeQueued.length}
-              open={queueOpen}
-              onToggle={() => setQueueOpen(value => !value)}
+              incompleteCount={incompleteCount}
+              open={localQueueOpen}
+              onToggle={() => {
+                setLocalFocusedPlanId(null);
+                setLocalQueueOpen(value => !value);
+              }}
             />
           </div>
-          {((totalQueued > 0 && queueOpen) || Boolean(controller.queueFeedback)) && (
-            <DispatchQueuePanel
-              controller={controller}
-              snapshot={snapshot}
-              multiPlans={multiPlans}
-              nativeQueued={nativeQueued}
-            />
-          )}
+          <DispatchQueueModal
+            open={localQueueOpen}
+            onClose={() => setLocalQueueOpen(false)}
+            controller={controller}
+            snapshot={snapshot}
+            multiPlans={multiPlans}
+            nativeQueued={nativeQueued}
+            focusedPlanId={localFocusedPlanId}
+            onClearFocusPlan={() => setLocalFocusedPlanId(null)}
+          />
         </>
       )}
       {removing && <div role="group" aria-label="确认移除节点" className="win11-card-subtle flex flex-wrap items-center gap-2 p-2.5 text-xs">
@@ -736,35 +964,91 @@ export function ResearchCollaborationPanel({ controller, projection, stale, visi
       {!snapshot.currentTenureId && <p className="text-xs text-[var(--text-secondary)]">请先在上方选定主会话以建立协作拓扑。</p>}
       {[...snapshot.tenures].reverse().filter(tenure => tenure.status !== "removed").map(tenure => {
         const plans = tenurePlans(snapshot, tenure);
+        const communications = tenureCommunications(snapshot, tenure, plans);
+        const sessionTitles: Record<string, string> = {};
+        for (const [sid, snap] of Object.entries(tenure.snapshots ?? {})) {
+          if (snap?.title) sessionTitles[sid] = snap.title;
+        }
+        const isHistorical = tenure.status === "historical";
+        const isExpanded = !isHistorical || expandedHistoricalIds.has(tenure.id);
+        const activeMembers = tenure.sessionIds.filter(id => !tenure.detachedSessionIds?.includes(id));
+        const tenureIncompleteCount = plans.reduce((sum, p) => {
+          const s = summarizePlan(p, tenure.mainSessionId);
+          return sum + s.blocked + s.failed;
+        }, 0);
+
         return (
         <section key={tenure.id} data-testid="research-collaboration-tenure" aria-label={`批次 #${tenure.ordinal}`}>
-          <ResearchAgentCanvas
-            clusters={tenureClusters(tenure, projection, plans)}
-            plans={plans}
-            mainSessionId={tenure.mainSessionId}
-            showPlanGate={tenure.status === "current"}
-            highlightedPlanId={highlightedPlanId}
-            stale={tenure.status === "current" && stale}
-            overviewTitle="调度拓扑"
-            tenureTitle={`批次 #${tenure.ordinal} · ${title(tenure, tenure.mainSessionId)}`}
-            tenureBadge={tenure.status === "current" ? "当前" : "历史"}
-            layout="tree"
-            visible={visible}
-            onAgent={onAgent}
-            statusLabel={researchStatusLabel}
-            roleLabel={role => role}
-            onRemoveSession={(sessionId, name) => setRemoving({ tenureId: tenure.id, sessionId, name })}
-            removalPending={pending}
-            onJumpPlanTask={tenure.status === "current" ? (planId, taskId, queueRevision) => {
-              void controller.change({
-                action: "start",
-                sessionId: tenure.mainSessionId,
-                planId,
-                taskId,
-                queueRevision: queueRevision ?? 0,
-              });
-            } : undefined}
-          />
+          {!isExpanded ? (
+            <div
+              data-testid="historical-tenure-collapsed"
+              className="research-historical-tenure-collapsed"
+            >
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                aria-expanded="false"
+                aria-label={`展开历史批次 #${tenure.ordinal} 拓扑图`}
+                onClick={() => toggleHistoricalTenure(tenure.id)}
+              >
+                <Icon path={mdiChevronRight} size={0.65} className="shrink-0 text-[var(--text-tertiary)]" />
+                <span className="truncate text-xs font-semibold text-[var(--text-primary)]">
+                  批次 #{tenure.ordinal} · {title(tenure, tenure.mainSessionId)}
+                </span>
+                <span className="shrink-0 rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-0 text-[10.5px] font-medium text-[var(--text-secondary)]">
+                  历史
+                </span>
+                <span className="shrink-0 rounded-full bg-[var(--bg-tertiary)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">
+                  {plans.length > 0 ? `Plan ${plans.length} · ` : ""}Multi-Agent {activeMembers.length}
+                </span>
+                {tenureIncompleteCount > 0 && (
+                  <span className="shrink-0 rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0 text-[10px] font-medium text-[var(--accent-red)]">
+                    未完成 {tenureIncompleteCount}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className="win11-btn shrink-0 px-2.5 py-1 text-[11px]"
+                aria-expanded="false"
+                onClick={() => toggleHistoricalTenure(tenure.id)}
+              >
+                展开拓扑
+              </button>
+            </div>
+          ) : (
+            <ResearchAgentCanvas
+              clusters={tenureClusters(tenure, projection, plans)}
+              plans={plans}
+              communications={communications}
+              sessionTitles={sessionTitles}
+              mainSessionId={tenure.mainSessionId}
+              showPlanGate={tenure.status === "current"}
+              highlightedPlanId={highlightedPlanId}
+              stale={tenure.status === "current" && stale}
+              overviewTitle="调度拓扑"
+              tenureTitle={`批次 #${tenure.ordinal} · ${title(tenure, tenure.mainSessionId)}`}
+              tenureBadge={tenure.status === "current" ? "当前" : "历史"}
+              layout="tree"
+              visible={visible}
+              onAgent={onAgent}
+              statusLabel={researchStatusLabel}
+              roleLabel={role => role}
+              onRemoveSession={(sessionId, name) => setRemoving({ tenureId: tenure.id, sessionId, name })}
+              removalPending={pending}
+              onOpenQueue={handleOpenQueue}
+              onCollapse={isHistorical ? () => toggleHistoricalTenure(tenure.id) : undefined}
+              onJumpPlanTask={tenure.status === "current" ? (planId, taskId, queueRevision) => {
+                void controller.change({
+                  action: "start",
+                  sessionId: tenure.mainSessionId,
+                  planId,
+                  taskId,
+                  queueRevision: queueRevision ?? 0,
+                });
+              } : undefined}
+            />
+          )}
         </section>
         );
       })}

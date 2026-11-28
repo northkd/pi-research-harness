@@ -131,17 +131,17 @@ export function ResearchCharterBindingControls({ cwd, sessionId, visible = true,
   return <div className="research-charter-binding" data-testid="research-charter-binding">
     <div className="research-charter-binding-row">
       <p data-testid="research-charter-binding-status" aria-live="polite" className={value?.status === 'stale' || value?.session?.status === 'assignment-stale' ? 'research-warning' : undefined}>{bindingLabel(value, sessionId)}</p>
-      <button type="button" className="research-workspace-action" data-testid="research-charter-binding-refresh" disabled={current.reading || current.saving} onClick={() => void refresh()} aria-label="刷新目标绑定">{current.reading ? '核对中…' : '刷新'}</button>
+      <button type="button" className="text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] underline-offset-2 hover:underline disabled:opacity-50" data-testid="research-charter-binding-refresh" disabled={current.reading || current.saving} onClick={() => void refresh()} aria-label="刷新目标绑定">{current.reading ? '核对中…' : '刷新'}</button>
       {canRebind && <button type="button" className="research-workspace-action" data-testid="research-charter-binding-rebind" disabled={current.saving} onClick={() => void rebind()}>{current.saving ? '更新中…' : `更新至 v${value?.currentCharterRevision}`}</button>}
+      {charter && <details className="research-charter-binding-preview !mt-0" data-testid="research-charter-binding-preview">
+        <summary>目标与约束</summary>
+        <p>v{charter.revision}：{charter.objective}</p>
+        {([
+          ['完成标准', charter.successCriteria], ['约束', charter.constraints], ['范围之外', charter.nonGoals],
+        ] as const).map(([label, items]) => items?.length ? <div key={label}><strong>{label}</strong><ul>{items.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null)}
+      </details>}
     </div>
     {current.error && <p role="alert" className="research-warning" data-testid="research-charter-binding-error">{current.error}</p>}
     {hint && <p className="research-main-agent-caption">{hint}</p>}
-    {charter && <details className="research-charter-binding-preview" data-testid="research-charter-binding-preview">
-      <summary>目标与约束</summary>
-      <p>v{charter.revision}：{charter.objective}</p>
-      {([
-        ['完成标准', charter.successCriteria], ['约束', charter.constraints], ['范围之外', charter.nonGoals],
-      ] as const).map(([label, items]) => items?.length ? <div key={label}><strong>{label}</strong><ul>{items.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null)}
-    </details>}
   </div>;
 }

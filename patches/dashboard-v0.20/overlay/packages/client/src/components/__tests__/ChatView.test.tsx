@@ -722,4 +722,44 @@ describe("ChatView", () => {
       expect(bubbles.length).toBe(1);
     });
   });
+
+  describe("internal research harness receipts", () => {
+    it("hides research_dispatch and research_communication internal receipts from the chat view while keeping real user messages", () => {
+      const state = stateWithMessages([
+        { id: "u1", role: "user", content: "请继续补齐三个氟化物的逐离子分析" },
+        {
+          id: "r1",
+          role: "user",
+          content: "[research_dispatch receipt research-dispatch-receipt-dispatch-0e69998e746312e88f96c5545ff209a1de8bcd80] Plan dispatch-8aa4c536cdf13bc8649c0a5434e419464a2ff143 has a completed task delivery. Read research_dispatch status for the saved task summary and evidence, then verify that evidence before acceptance. Other tasks continue autonomously. Do not repeat completed work.",
+        },
+        {
+          id: "r2",
+          role: "user",
+          content: "[research_communication receipt research-message-abc] decision from child-1. Call research_communication pending.",
+        },
+        {
+          id: "r3",
+          role: "user",
+          content: "[research_communication recovery] Durable research messages remain unprocessed.",
+        },
+        {
+          id: "r4",
+          role: "user",
+          content: "[research_dispatch lead-completion-guard] 派发计划仍有未完成项。",
+        },
+        { id: "a1", role: "assistant", content: "已核验并整理结果。" },
+      ]);
+      const { container } = render(
+        <ThemeProvider>
+          <ChatView state={state} toolContext={defaultToolContext} />
+        </ThemeProvider>,
+      );
+      expect(container.textContent).toContain("请继续补齐三个氟化物的逐离子分析");
+      expect(container.textContent).toContain("已核验并整理结果。");
+      expect(container.textContent).not.toContain("research_dispatch receipt");
+      expect(container.textContent).not.toContain("research_communication receipt");
+      expect(container.textContent).not.toContain("research_communication recovery");
+      expect(container.textContent).not.toContain("lead-completion-guard");
+    });
+  });
 });

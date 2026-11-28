@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTopologyGraph,
+  humanPlanTitle,
   layoutTopologyTree,
   normalizeWorkState,
+  planTaskStatusMeta,
   summarizePlan,
   summarizePlansForScope,
   type TopologySessionCluster,
@@ -47,6 +49,8 @@ describe("research-plan-topology", () => {
     expect(normalizeWorkState("queued")).toBe("queued");
     expect(normalizeWorkState("completed")).toBe("ended");
     expect(normalizeWorkState("failed")).toBe("ended");
+    expect(normalizeWorkState("blocked")).toBe("ended");
+    expect(planTaskStatusMeta("blocked")).toMatchObject({ tone: "blocked", incomplete: true });
 
     const plans: CollaborationPlan[] = [
       {
@@ -81,6 +85,51 @@ describe("research-plan-topology", () => {
     expect(agg.inProgressTasks).toBe(1);
     expect(agg.queuedTasks).toBe(1);
     expect(agg.progressPercent).toBe(50);
+
+    const blockedPlan: CollaborationPlan = {
+      id: "plan-blocked",
+      clientPlanId: "three-check",
+      tenureId: "t1",
+      parentSessionId: "s-main",
+      status: "blocked",
+      tasks: [
+        { id: "sn", role: "audit-sn", task: "Check Sn", status: "blocked", sessionId: "s-sn", error: "research-dispatch-unavailable" },
+        { id: "sb", role: "audit-sb", task: "Check Sb", status: "completed", sessionId: "s-sb" },
+        { id: "sb5", role: "audit-sb-five", task: "Check Sb5", status: "completed", sessionId: "s-sb5" },
+      ],
+    };
+    const blockedSummary = summarizePlan(blockedPlan, "s-main");
+    expect(blockedSummary.state).toBe("ended");
+    expect(blockedSummary.completed).toBe(2);
+    expect(blockedSummary.blocked).toBe(1);
+    expect(blockedSummary.queued).toBe(0);
+    expect(blockedSummary.ended).toBe(3);
+    expect(blockedSummary.progressPercent).toBe(67);
+
+    // Human-readable plan titles replace raw kebab-case slugs.
+    expect(
+      humanPlanTitle(
+        {
+          id: "dispatch-1",
+          clientPlanId: "session06-three-fluorides-ppt-check",
+          tasks: [
+            { id: "sn", role: "audit-sn", task: "Na₄Sn₃F₁₀｜06 末版 AIMD 验收。详述", status: "blocked", sessionId: "s-sn" },
+            { id: "sb", role: "audit-sb", task: "NaSbF₄｜06 末版 AIMD 验收。详述", status: "completed", sessionId: "s-sb" },
+          ],
+        },
+        { "s-sn": "Na₄Sn₃F₁₀｜06 末版 AIMD 验收", "s-sb": "NaSbF₄｜06 末版 AIMD 验收" },
+      ),
+    ).toBe("06 末版 AIMD 验收（Na₄Sn₃F₁₀ 等）");
+    expect(
+      humanPlanTitle(
+        {
+          id: "dispatch-2",
+          clientPlanId: "session06-sn-finish",
+          tasks: [{ id: "sn-check", role: "sn-check", task: "补验", status: "completed", sessionId: "s-check" }],
+        },
+        { "s-check": "Na₄Sn₃F₁₀｜原始轨迹抽核补验" },
+      ),
+    ).toBe("Na₄Sn₃F₁₀｜原始轨迹抽核补验");
   });
 
   it("builds collision-free 4-layer coordinates across L0 Captain -> L1 Plan -> L2 Multi-Agent -> L3 Subagent -> L4 Runs", () => {

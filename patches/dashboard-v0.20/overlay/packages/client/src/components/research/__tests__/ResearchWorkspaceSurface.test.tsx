@@ -156,24 +156,40 @@ describe("research workspace surfaces", () => {
     await waitFor(() => expect(screen.getAllByTestId("research-collaboration-tenure")).toHaveLength(2));
     const oldTree = screen.getByRole("region", { name: "批次 #1" });
     const newTree = screen.getByRole("region", { name: "批次 #2" });
-    expect(within(oldTree).getByText("调度拓扑")).toBeTruthy();
+    // Historical tenure is collapsed by default; current tenure is expanded.
+    expect(within(oldTree).getByTestId("historical-tenure-collapsed")).toBeTruthy();
+    expect(within(oldTree).queryByTestId("research-canvas-viewport")).toBeNull();
     expect(within(newTree).getByText("调度拓扑")).toBeTruthy();
-    expect(within(oldTree).getAllByTestId("canvas-parent-edge")).toHaveLength(1);
     expect(within(newTree).getAllByTestId("canvas-parent-edge")).toHaveLength(4);
-    expect(within(newTree).getByTestId("canvas-plan-node").textContent).toContain("queued-plan");
+    expect(within(newTree).getByTestId("canvas-plan-node").textContent).toContain("排队中的真实计划任务");
     expect(within(newTree).getByTestId("canvas-captain-plan-progress").textContent).toContain("Plan 进度 0/1");
     const mainProgress = screen.getByTestId("research-main-plan-progress");
     expect(mainProgress.textContent).toContain("主 Agent Plan 进度：0/1 个 Plan 已结束");
     expect(mainProgress.textContent).toContain("排队中 1");
     expect(mainProgress.textContent).toContain("已结束 1");
-    fireEvent.click(within(mainProgress).getByRole("button", { name: /queued-plan/ }));
-    expect(within(newTree).getByTestId("canvas-plan-node").className).toContain("ring-2");
+    fireEvent.click(within(mainProgress).getByRole("button", { name: /排队中的真实计划任务/ }));
+    expect(within(newTree).getByTestId("canvas-plan-node").closest(".research-fleet-card")?.className).toContain("ring-2");
+    expect(screen.getByTestId("research-plan-todo-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "关闭 Plan Todolist" }));
+    expect(screen.queryByTestId("research-plan-todo-panel")).toBeNull();
+
+    // Expand historical tenure on demand and verify its isolated tree.
+    fireEvent.click(within(oldTree).getByRole("button", { name: "展开历史批次 #1 拓扑图" }));
+    expect(within(oldTree).getByText("调度拓扑")).toBeTruthy();
+    expect(within(oldTree).getAllByTestId("canvas-parent-edge")).toHaveLength(1);
     expect(within(oldTree).queryByText("当前协作者")).toBeNull();
     expect(screen.getAllByRole("button", { name: /^从当前批次移除 / })).toHaveLength(4);
+
+    // Queue modal opens on demand from the toolbar button and hides completed tasks.
     expect(screen.getByText("Multi-Agent 1")).toBeTruthy();
-    expect(screen.getByText("排队中的真实计划任务")).toBeTruthy();
-    expect(screen.getByText("等待并发槽位")).toBeTruthy();
-    expect(screen.queryByText("已完成任务")).toBeNull();
+    expect(screen.queryByTestId("research-dispatch-queue-modal")).toBeNull();
+    fireEvent.click(screen.getByTestId("research-open-queue-modal"));
+    const modal = screen.getByTestId("research-dispatch-queue-modal");
+    expect(within(modal).getByText("排队中的真实计划任务")).toBeTruthy();
+    expect(within(modal).getByText("等待并发槽位")).toBeTruthy();
+    expect(within(modal).queryByText("已完成任务")).toBeNull();
+    fireEvent.click(within(modal).getByRole("button", { name: "关闭调度队列弹窗" }));
+    expect(screen.queryByTestId("research-dispatch-queue-modal")).toBeNull();
 
     const multiInput = screen.getByLabelText("Multi-Agent 并发数") as HTMLInputElement;
     const subInput = screen.getByLabelText("Subagent 并发数") as HTMLInputElement;
@@ -210,6 +226,7 @@ describe("research workspace surfaces", () => {
     };
     vi.stubGlobal("fetch", vi.fn(async url => response(String(url).includes("/collaboration") ? state : { data: [] })));
     render(<ResearchPipelinePage cwd={state.cwd} surface="agents" />);
+    fireEvent.click(await screen.findByRole("button", { name: "展开历史批次 #1 拓扑图" }));
     fireEvent.click(await screen.findByRole("button", { name: "查看 原实验会话 会话详情" }));
     expect(screen.getByTestId("research-correction-target").textContent).toContain("发送到会话 old-worker");
   });
@@ -278,10 +295,13 @@ describe("research workspace surfaces", () => {
     }));
 
     render(<ResearchPipelinePage cwd="/test/project" surface="agents" />);
-    await waitFor(() => expect(screen.getByTestId("research-multi-agent-queue")).toBeTruthy());
-    expect(screen.getByTestId("research-subagent-queue")).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId("research-open-queue-modal")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("research-open-queue-modal"));
+    const modal = screen.getByTestId("research-dispatch-queue-modal");
+    expect(within(modal).getByTestId("research-multi-agent-queue")).toBeTruthy();
+    expect(within(modal).getByTestId("research-subagent-queue")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "插队启动 experiment" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "插队启动 experiment" }));
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toEqual({
       cwd: "/test/project",
@@ -292,9 +312,9 @@ describe("research workspace surfaces", () => {
       taskId: "t-second",
       queueRevision: 3,
     });
-    expect(screen.getByText(/已插队并立即启动/)).toBeTruthy();
+    expect(within(modal).getByText(/已插队并立即启动/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "置顶 experiment" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "置顶 experiment" }));
     await waitFor(() => expect(posts).toHaveLength(2));
     expect(posts[1]).toEqual({
       cwd: "/test/project",
@@ -306,7 +326,7 @@ describe("research workspace surfaces", () => {
       queueRevision: 3,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "置顶 Subagent worker-b" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "置顶 Subagent worker-b" }));
     await waitFor(() => expect(posts).toHaveLength(3));
     expect(posts[2]).toEqual({
       cwd: "/test/project",
@@ -315,5 +335,71 @@ describe("research workspace surfaces", () => {
       sessionId: "main-1",
       taskIds: ["n-2", "n-1"],
     });
+  });
+
+  it("opens the floating Plan Todolist popup from the top Plan progress bar, filters tasks, maximizes, and jumps to session detail", async () => {
+    const state = emptyCollaboration();
+    state.currentTenureId = "tenure-2";
+    state.currentMainSessionId = "main-2";
+    state.tenures = [{
+      id: "tenure-2",
+      ordinal: 2,
+      mainSessionId: "main-2",
+      status: "current",
+      startedAt: "2026-11-27T01:00:00.000Z",
+      sessionIds: ["main-2", "s-sn", "s-sb", "s-sb5"],
+      snapshots: {
+        "main-2": { title: "07-数据分析后处理" },
+        "s-sn": { title: "Na4Sn3F10｜验收", role: "audit-sn", status: "idle", parentSessionId: "main-2" },
+        "s-sb": { title: "NaSbF4｜验收", role: "audit-sb", status: "idle", parentSessionId: "main-2" },
+        "s-sb5": { title: "Na3Sb5F18｜验收", role: "audit-sb-five", status: "idle", parentSessionId: "main-2" },
+      },
+    }];
+    state.plans = [{
+      id: "plan-three",
+      clientPlanId: "session06-three-fluorides",
+      tenureId: "tenure-2",
+      parentSessionId: "main-2",
+      status: "blocked",
+      tasks: [
+        { id: "sn", role: "audit-sn", task: "Sn audit", status: "blocked", sessionId: "s-sn", summary: "抽核脚本执行被拦截" },
+        { id: "sb", role: "audit-sb", task: "Sb audit", status: "completed", sessionId: "s-sb" },
+        { id: "sb5", role: "audit-sb-five", task: "Sb5 audit", status: "completed", sessionId: "s-sb5" },
+      ],
+    }];
+    vi.stubGlobal("fetch", vi.fn(async url => response(String(url).includes("/collaboration") ? state : { data: [] })));
+    render(<ResearchPipelinePage cwd="/test/project" surface="agents" />);
+    await waitFor(() => expect(screen.getByTestId("research-main-plan-progress")).toBeTruthy());
+    expect(screen.queryByTestId("canvas-plan-open-todo")).toBeNull();
+    fireEvent.click(within(screen.getByTestId("research-main-plan-progress")).getByTestId("plan-progress-open-todo"));
+
+    const panel = screen.getByTestId("research-plan-todo-panel");
+    expect(within(panel).getAllByTestId("research-plan-todo-item")).toHaveLength(3);
+    // Compact one-line checklist by default: full task prompt stays collapsed until clicked.
+    expect(panel.textContent).toContain("Na4Sn3F10｜验收");
+    expect(panel.textContent).toContain("受阻");
+    expect(panel.textContent).toContain("抽核脚本执行被拦截");
+    expect(within(panel).queryByTestId("research-plan-todo-detail")).toBeNull();
+
+    // Expand one item to inspect full instruction, role and summary.
+    fireEvent.click(within(panel).getByRole("button", { name: /Na4Sn3F10｜验收/ }));
+    const detail = within(panel).getByTestId("research-plan-todo-detail");
+    expect(detail.textContent).toContain("audit-sn");
+    expect(detail.textContent).toContain("Sn audit");
+
+    // Maximize toggle works just like Speed & Billing floating panel
+    expect(panel.getAttribute("data-maximized")).toBe("false");
+    fireEvent.click(within(panel).getByRole("button", { name: "最大化 Plan Todolist" }));
+    expect(panel.getAttribute("data-maximized")).toBe("true");
+
+    // Filter tab isolates unfinished tasks
+    fireEvent.click(within(panel).getByRole("tab", { name: /未完成/ }));
+    expect(within(panel).getAllByTestId("research-plan-todo-item")).toHaveLength(1);
+    expect(within(panel).getByTestId("research-plan-todo-item").textContent).toContain("Na4Sn3F10｜验收");
+
+    // Jump straight from Todolist item to session detail
+    fireEvent.click(within(panel).getByRole("button", { name: "查看会话详情" }));
+    expect(screen.queryByTestId("research-plan-todo-panel")).toBeNull();
+    expect(screen.getByTestId("research-correction-target").textContent).toContain("发送到会话 s-sn");
   });
 });

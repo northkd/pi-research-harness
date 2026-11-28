@@ -2,7 +2,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { MainlineStore, CHECKPOINT_KINDS, MODEL } from './core.mjs';
 import { prepareCapture, capturePreview, publishCapture } from './capture.mjs';
 import { autoApproveDefault, autoApproveExplicitlyDisabled, readAutoApproveState, writeAutoApproveState } from './auto-approve.mjs';
-import { REVIEW_SCHEMA, validReview, operationDecision, humanChannel, validateLocalOperation, digest, operationLeaves, permissionSnapshot, needsResource, observationTool, coordinationTool } from './policy.mjs';
+import { REVIEW_SCHEMA, validReview, operationDecision, humanChannel, validateLocalOperation, digest, operationLeaves, permissionSnapshot, needsResource, observationTool, coordinationTool, isSubagentTool } from './policy.mjs';
 import { prepareExactInput, consumeExactInput } from './exact-input.mjs';
 export { REVIEW_SCHEMA, validReview } from './policy.mjs';
 import { readResearchAccessModeContext, researchAccessModeGuidance } from '../../research-loop/src/access-mode.mjs';
@@ -443,6 +443,42 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
     update(); // Restore only; opening a project is not new evidence or a model-call trigger.
     detach(reconcile);
   });
+  const resourceWaitTimeoutMs = typeof options.resourceWaitTimeoutMs === 'number'
+    ? Math.max(0, options.resourceWaitTimeoutMs)
+    : (options.Store ? 0 : 180_000);
+  const resourceWaitPollMs = typeof options.resourceWaitPollMs === 'number' && options.resourceWaitPollMs > 0
+    ? options.resourceWaitPollMs
+    : 3_000;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const clockNow = options.now ?? Date.now;
+
+  async function waitForResourceGate(callCtx: any, callGeneration: number) {
+    let gate = store.resourceGate();
+    if (gate.ok || resourceWaitTimeoutMs <= 0) return { ...gate, waitedMs: 0 };
+    const startedAt = clockNow();
+    const deadline = startedAt + resourceWaitTimeoutMs;
+    const ui = callCtx?.ui ?? ctx?.ui;
+    while (!disposed && callGeneration === generation && clockNow() < deadline) {
+      const avail = typeof gate.memAvailableMiB === 'number' ? `${Math.round(gate.memAvailableMiB)} MiB` : '未知';
+      ui?.setStatus?.('mainline-supervision', `主线监督：可用内存不足（当前 ${avail} < 1024 MiB），等待内存恢复后自动继续执行…`);
+      await sleep(Math.min(resourceWaitPollMs, Math.max(1, deadline - clockNow())));
+      if (disposed || callGeneration !== generation) break;
+      gate = store.resourceGate();
+      if (gate.ok) {
+        update();
+        return { ...gate, waitedMs: clockNow() - startedAt };
+      }
+    }
+    update();
+    return { ...gate, waitedMs: clockNow() - startedAt };
+  }
+
+  function resourceDenyMessage(base: string, gate: any): string {
+    const avail = typeof gate?.memAvailableMiB === 'number' ? `（当前可用 ${Math.round(gate.memAvailableMiB)} MiB < 1024 MiB）` : '';
+    const waited = gate?.waitedMs > 0 ? `已等待 ${Math.round(gate.waitedMs / 1000)} 秒后` : '';
+    return `${waited}${base}${avail}`;
+  }
+
   pi.on('tool_call', (event: any, callCtx: any) => {
     ctx = callCtx;
     if (humanChannel(event.toolName)) return; // Never load damaged state or capture before permitting human input.
@@ -457,86 +493,125 @@ export function createMainlineAdapter(pi: ExtensionAPI, options: any = {}) {
       capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input, isError: true, gateDenied: true });
       return { block: true, reason };
     };
-    if (!store) return observationTool(event.toolName, event.input) || coordinationTool(event.toolName, event.input) ? undefined : deny('当前项目监督状态无法初始化；观察、研究通信与人工通道仍可用，未默许新执行。');
-    const decision = operationDecision(store, s, event);
-    if (!decision.allow && decision.confirmable) {
-      const targetUI = callCtx?.ui ?? ctx?.ui;
-      if (decision.directHumanRequired) {
-        // The operator's native full-access choice already covers ordinary local
-        // command execution; the opaque-inline UI must not repeat it. This reads
-        // the live mode each call: it creates no grant and records no consent.
-        if (decision.commandInputConfirmation) {
-          let liveAccess: any;
-          try { liveAccess = (options.readResearchAccessModeContext ?? readResearchAccessModeContext)(callCtx ?? ctx); }
-          catch { liveAccess = undefined; }
-          if (liveAccess?.unavailable !== true && liveAccess?.profile?.mode === 'full-access') {
-            if (!store.resourceGate().ok) return deny('当前资源门槛不满足，未启动新执行。');
-            capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
-            return undefined;
+    if (!store) return observationTool(event.toolName, event.input) || coordinationTool(event.toolName, event.input) || isSubagentTool(event.toolName) ? undefined : deny('当前项目监督状态无法初始化；观察、研究通信、子代理与人工通道仍可用，未默许新执行。');
+
+    const runDecision = (currentState: any, decision: any): any => {
+      if (!decision.allow && decision.confirmable) {
+        const targetUI = callCtx?.ui ?? ctx?.ui;
+        if (decision.directHumanRequired) {
+          // The operator's native full-access choice already covers ordinary local
+          // command execution; the opaque-inline UI must not repeat it. This reads
+          // the live mode each call: it creates no grant and records no consent.
+          if (decision.commandInputConfirmation) {
+            let liveAccess: any;
+            try { liveAccess = (options.readResearchAccessModeContext ?? readResearchAccessModeContext)(callCtx ?? ctx); }
+            catch { liveAccess = undefined; }
+            if (liveAccess?.unavailable !== true && liveAccess?.profile?.mode === 'full-access') {
+              const gate = store.resourceGate();
+              if (!gate.ok) {
+                if (resourceWaitTimeoutMs <= 0) return deny('当前资源门槛不满足，未启动新执行。');
+                const callGeneration = generation;
+                return waitForResourceGate(callCtx, callGeneration).then((recovered: any) => {
+                  if (!recovered.ok || disposed || callGeneration !== generation) return deny(resourceDenyMessage('当前资源门槛不满足，未启动新执行。', recovered));
+                  capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+                  return undefined;
+                });
+              }
+              capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+              return undefined;
+            }
           }
+          if (!callCtx?.hasUI || typeof targetUI?.confirm !== 'function') return deny('精确输入操作必须有真实人工UI；无UI不默许。');
+          const initialSessionId = sessionId(), inputDigest = digest(event.input ?? {}), callGeneration = generation;
+          let snapshot: any, preview: string;
+          try {
+            snapshot = permissionSnapshot(store, currentState, event);
+            preview = `${decision.reason}\n工具：${event.toolName}\n完整精确输入：${JSON.stringify(event.input)}\n${decision.commandInputConfirmation ? '可识别文件与核心版本' : '精确文件与输出'}：${JSON.stringify(decision.commandInputConfirmation ? snapshot : decision.exactInput)}\n这不是OS沙箱；内联代码、脚本或依赖可能有其他行为，未识别的依赖未获版本认证。原数据、外发、OS权限仍独立。仅本次调用，拒绝后不自动重试。是否允许？`;
+            if (preview.length > 65536) return deny('完整授权预览过大，拒绝而非截断。');
+          } catch { return deny('无法固定精确许可预览，未请求执行。'); }
+          return Promise.resolve().then(() => targetUI.confirm('人工确认精确本地执行（一次）', preview)).then(async (confirmed: boolean) => {
+            if (confirmed !== true || callGeneration !== generation || disposed || sessionId() !== initialSessionId ||
+                digest(event.input ?? {}) !== inputDigest) return deny('精确操作未获本次人工确认或会话/输入已变化。');
+            try {
+              const latest = state();
+              if (JSON.stringify(snapshot) !== JSON.stringify(permissionSnapshot(store, latest, event))) return deny('确认期间核心/范围/开发文件变化，旧精确确认失效。');
+              const rechecked = operationDecision(store, latest, event);
+              if (decision.commandInputConfirmation) {
+                if (!rechecked.directHumanRequired || !rechecked.commandInputConfirmation || rechecked.allow)
+                  return deny('确认期间命令分类或分支权限变化，旧确认失效。');
+              } else if (!rechecked.directHumanRequired || JSON.stringify(rechecked.exactInput) !== JSON.stringify(decision.exactInput) ||
+                  JSON.stringify(prepareExactInput(store, latest, event)) !== JSON.stringify(decision.exactInput)) {
+                return deny('确认期间精确许可、文件或输出变化，拒绝执行。');
+              }
+              const gate = await waitForResourceGate(callCtx, callGeneration);
+              if (!gate.ok || disposed || callGeneration !== generation) return deny(resourceDenyMessage('确认后资源不足，未执行精确操作。', gate));
+              // Inline confirmation authorizes this call only; it never creates a reusable/file-input permit.
+              if (!decision.commandInputConfirmation) consumeExactInput(store, latest, event, decision.exactInput, initialSessionId);
+            } catch { return deny('精确许可重核或一次消费失败，未执行。'); }
+            capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input,
+              ...(decision.commandInputConfirmation ? { executionConsent: { source: 'direct-human-ui', singleInvocation: true,
+                inputDigest, coreRevision: snapshot.coreRevision, files: snapshot.files, executionProof: false } } : {}) });
+            return undefined;
+          }).catch(() => deny('精确人工UI失败或取消，未执行。'));
         }
-        if (!callCtx?.hasUI || typeof targetUI?.confirm !== 'function') return deny('精确输入操作必须有真实人工UI；无UI不默许。');
-        const initialSessionId = sessionId(), inputDigest = digest(event.input ?? {}), callGeneration = generation;
-        let snapshot: any, preview: string;
-        try {
-          snapshot = permissionSnapshot(store, s, event);
-          preview = `${decision.reason}\n工具：${event.toolName}\n完整精确输入：${JSON.stringify(event.input)}\n${decision.commandInputConfirmation ? '可识别文件与核心版本' : '精确文件与输出'}：${JSON.stringify(decision.commandInputConfirmation ? snapshot : decision.exactInput)}\n这不是OS沙箱；内联代码、脚本或依赖可能有其他行为，未识别的依赖未获版本认证。原数据、外发、OS权限仍独立。仅本次调用，拒绝后不自动重试。是否允许？`;
-          if (preview.length > 65536) return deny('完整授权预览过大，拒绝而非截断。');
-        } catch { return deny('无法固定精确许可预览，未请求执行。'); }
-        return Promise.resolve().then(() => targetUI.confirm('人工确认精确本地执行（一次）', preview)).then((confirmed: boolean) => {
-          if (confirmed !== true || callGeneration !== generation || disposed || sessionId() !== initialSessionId ||
-              digest(event.input ?? {}) !== inputDigest) return deny('精确操作未获本次人工确认或会话/输入已变化。');
+        // The operator's live workspace choice replaces the retired task/expiry
+        // form. Hard policy decisions and the host memory floor still apply.
+        const accessContext = (options.readResearchAccessModeContext ?? readResearchAccessModeContext)(callCtx ?? ctx);
+        const fullAccess = accessContext?.profile?.mode === 'full-access';
+        const explicitDefault = accessContext?.profile?.mode === 'default' && accessContext.profile.revision !== null;
+        if (fullAccess || !accessContext?.unavailable && !explicitDefault && autoApprove) {
+          if (operationLeaves(event).some(needsResource) && !store.resourceGate().ok) {
+            if (resourceWaitTimeoutMs <= 0) return deny('当前资源门槛不满足，未启动新执行。');
+            const callGeneration = generation;
+            return waitForResourceGate(callCtx, callGeneration).then((recovered: any) => {
+              if (!recovered.ok || disposed || callGeneration !== generation) return deny(resourceDenyMessage('当前资源门槛不满足，未启动新执行。', recovered));
+              capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+              if (!fullAccess) targetUI?.notify?.(`主线监督：已自动放宽并批准执行 [${event.toolName}]`, 'info');
+              return undefined;
+            });
+          }
+          capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+          if (!fullAccess) targetUI?.notify?.(`主线监督：已自动放宽并批准执行 [${event.toolName}]`, 'info');
+          return undefined;
+        }
+        if (!targetUI || (!callCtx?.hasUI && !ctx?.hasUI)) return deny(decision.reason + '（无UI，不默许；可由用户在正式通道处理。）');
+        const inputDigest = digest(event.input ?? {}), callGeneration = generation;
+        let snapshot: any;
+        try { snapshot = permissionSnapshot(store, currentState, event); } catch { return deny('无法固定本次权限范围；可用人工单项通道，不冻结其他开发。'); }
+        return targetUI.confirm('确认本次执行权限（不是科学验收）', `${decision.reason}\n工具：${event.toolName}\n精确输入：${JSON.stringify(event.input ?? {}).slice(0, 6000)}\n输入hash：${inputDigest}\n可识别本地文件版本：${JSON.stringify(snapshot.files)}\n不分析任意脚本行为；这不是exact-file沙箱授权。只确认这次调用，原任务资源/原数据/外发权限仍适用；不把缺失证据变成许可。是否允许？`).then(async (confirmed: boolean) => {
+          if (!confirmed || callGeneration !== generation || digest(event.input ?? {}) !== inputDigest) return deny('本次执行未获人工确认或会话/输入已变化；人工提问仍可用。');
           try {
             const latest = state();
-            if (JSON.stringify(snapshot) !== JSON.stringify(permissionSnapshot(store, latest, event))) return deny('确认期间核心/范围/开发文件变化，旧精确确认失效。');
+            if (JSON.stringify(snapshot) !== JSON.stringify(permissionSnapshot(store, latest, event))) return deny('确认期间核心/范围/可识别文件版本变化，旧确认不适用；其他开发不冻结。');
             const rechecked = operationDecision(store, latest, event);
-            if (decision.commandInputConfirmation) {
-              if (!rechecked.directHumanRequired || !rechecked.commandInputConfirmation || rechecked.allow)
-                return deny('确认期间命令分类或分支权限变化，旧确认失效。');
-            } else if (!rechecked.directHumanRequired || JSON.stringify(rechecked.exactInput) !== JSON.stringify(decision.exactInput) ||
-                JSON.stringify(prepareExactInput(store, latest, event)) !== JSON.stringify(decision.exactInput)) {
-              return deny('确认期间精确许可、文件或输出变化，拒绝执行。');
+            if (!rechecked.allow && !rechecked.confirmable) return deny(rechecked.reason);
+            if (operationLeaves(event).some(needsResource)) {
+              const gate = await waitForResourceGate(callCtx, callGeneration);
+              if (!gate.ok || disposed || callGeneration !== generation) return deny(resourceDenyMessage('当前资源门槛不满足，未启动新执行。', gate));
             }
-            if (!store.resourceGate().ok) return deny('确认后资源不足，未执行精确操作。');
-            // Inline confirmation authorizes this call only; it never creates a reusable/file-input permit.
-            if (!decision.commandInputConfirmation) consumeExactInput(store, latest, event, decision.exactInput, initialSessionId);
-          } catch { return deny('精确许可重核或一次消费失败，未执行。'); }
-          capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input,
-            ...(decision.commandInputConfirmation ? { executionConsent: { source: 'direct-human-ui', singleInvocation: true,
-              inputDigest, coreRevision: snapshot.coreRevision, files: snapshot.files, executionProof: false } } : {}) });
+          } catch { return deny('确认期间状态/依赖无法核实，未授权该次执行；人工提问与安全开发仍可用。'); }
+          capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
           return undefined;
-        }).catch(() => deny('精确人工UI失败或取消，未执行。'));
+        });
       }
-      // The operator's live workspace choice replaces the retired task/expiry
-      // form. Hard policy decisions and the host memory floor still apply.
-      const accessContext = (options.readResearchAccessModeContext ?? readResearchAccessModeContext)(callCtx ?? ctx);
-      const fullAccess = accessContext?.profile?.mode === 'full-access';
-      const explicitDefault = accessContext?.profile?.mode === 'default' && accessContext.profile.revision !== null;
-      if (fullAccess || !accessContext?.unavailable && !explicitDefault && autoApprove) {
-        if (operationLeaves(event).some(needsResource) && !store.resourceGate().ok) return deny('当前资源门槛不满足，未启动新执行。');
-        capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
-        if (!fullAccess) targetUI?.notify?.(`主线监督：已自动放宽并批准执行 [${event.toolName}]`, 'info');
-        return undefined;
-      }
-      if (!targetUI || (!callCtx?.hasUI && !ctx?.hasUI)) return deny(decision.reason + '（无UI，不默许；可由用户在正式通道处理。）');
-      const inputDigest = digest(event.input ?? {}), callGeneration = generation;
-      let snapshot: any;
-      try { snapshot = permissionSnapshot(store, s, event); } catch { return deny('无法固定本次权限范围；可用人工单项通道，不冻结其他开发。'); }
-      return targetUI.confirm('确认本次执行权限（不是科学验收）', `${decision.reason}\n工具：${event.toolName}\n精确输入：${JSON.stringify(event.input ?? {}).slice(0, 6000)}\n输入hash：${inputDigest}\n可识别本地文件版本：${JSON.stringify(snapshot.files)}\n不分析任意脚本行为；这不是exact-file沙箱授权。只确认这次调用，原任务资源/原数据/外发权限仍适用；不把缺失证据变成许可。是否允许？`).then((confirmed: boolean) => {
-        if (!confirmed || callGeneration !== generation || digest(event.input ?? {}) !== inputDigest) return deny('本次执行未获人工确认或会话/输入已变化；人工提问仍可用。');
-        try {
-          const latest = state();
-          if (JSON.stringify(snapshot) !== JSON.stringify(permissionSnapshot(store, latest, event))) return deny('确认期间核心/范围/可识别文件版本变化，旧确认不适用；其他开发不冻结。');
-          const rechecked = operationDecision(store, latest, event);
-          if (!rechecked.allow && !rechecked.confirmable) return deny(rechecked.reason);
-          if (operationLeaves(event).some(needsResource) && !store.resourceGate().ok) return deny('当前资源门槛不满足，未启动新执行。');
-        } catch { return deny('确认期间状态/依赖无法核实，未授权该次执行；人工提问与安全开发仍可用。'); }
-        capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
-        return undefined;
+      if (!decision.allow) return deny(decision.reason);
+      capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+      return undefined;
+    };
+
+    const decision = operationDecision(store, s, event);
+    if (!decision.allow && decision.resourceBlocked === true && resourceWaitTimeoutMs > 0) {
+      const callGeneration = generation;
+      return waitForResourceGate(callCtx, callGeneration).then((recovered: any) => {
+        if (!recovered.ok || disposed || callGeneration !== generation) {
+          return deny(resourceDenyMessage(decision.reason, recovered));
+        }
+        let latest: any;
+        try { latest = state(); } catch { return deny(decision.reason); }
+        return runDecision(latest, operationDecision(store, latest, event));
       });
     }
-    if (!decision.allow) return deny(decision.reason);
-    capture({ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, input: event.input });
+    return runDecision(s, decision);
   });
   pi.on('tool_result', (event: any, resultCtx: any) => {
     ctx = resultCtx;

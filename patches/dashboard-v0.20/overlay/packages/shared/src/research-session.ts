@@ -53,6 +53,7 @@ export interface ResearchSessionProvenance {
   tasks?: ResearchDispatchTask[];
   /** Narrowing inherited by every descendant; absence never clears a parent constraint. */
   readOnly?: true;
+  tenureId?: string;
   dispatchId?: string;
   taskId?: string;
   createdAt: string;
@@ -81,6 +82,7 @@ export function isResearchSessionProvenance(value: unknown): value is ResearchSe
     (row.requestId === undefined || TOKEN.test(row.requestId)) &&
     (row.rootSessionId === undefined || ID.test(row.rootSessionId)) &&
     (row.depth === undefined || (Number.isSafeInteger(row.depth) && row.depth >= 1 && row.depth <= 3)) &&
+    (row.tenureId === undefined || typeof row.tenureId === "string" && ID.test(row.tenureId)) &&
     (row.dispatchId === undefined || ID.test(row.dispatchId)) && (row.taskId === undefined || ID.test(row.taskId)) &&
     (row.tasks === undefined || (Array.isArray(row.tasks) && row.tasks.length >= 2 && row.tasks.length <= 12 && row.tasks.every(task =>
       object(task) && ID.test(task.id ?? "") && ROLE.test(task.role ?? "") && text(task.task, 4000) && RESEARCH_SESSION_STAGES.includes(task.stage) &&
@@ -98,6 +100,7 @@ export function normalizeResearchSessionProvenance(value: unknown): ResearchSess
     ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
     ...(value.rootSessionId === undefined ? {} : { rootSessionId: value.rootSessionId }),
     ...(value.depth === undefined ? {} : { depth: value.depth }),
+    ...(value.tenureId === undefined ? {} : { tenureId: value.tenureId }),
     ...(value.dispatchId === undefined ? {} : { dispatchId: value.dispatchId }),
     ...(value.taskId === undefined ? {} : { taskId: value.taskId }),
     ...(value.tasks === undefined ? {} : { tasks: value.tasks.map(task => ({ id: task.id, role: task.role, task: task.task, stage: task.stage, dependsOn: [...(task.dependsOn ?? [])] })) }),
@@ -217,8 +220,8 @@ export function buildResearchSessionInitialPrompt(provenance: ResearchSessionPro
       ? 'Declared structured tasks are automatically scheduled. Coordinate their receipts instead of redoing the work. For several separable items submit a plan; for one indivisible item record atomic with a concrete reason. Leaf roles cannot delegate.'
       : 'This is a direct research_session. If verified status has no dispatcher assignment, execute the original bounded task without inventing an assignment or an atomic reason. Declared child tasks, if present, are scheduled automatically; coordinate their receipts.',
     dispatcherAssigned
-      ? 'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. Publication, provider access and workspace limits remain unchanged.'
-      : 'Use research_loop to record actual evidence. With no dispatcher assignment, report your actual completed/partial/blocked/failed result using research_communication report with a stable requestId and evidence references. HANDOFF files may remain evidence artifacts; do not rely on project-specific watchers or retry research_dispatch report after assignment-not-found. Wait for your own children and checks. Delivery, scientific acceptance and native process exit are separate. Publication, provider access and workspace limits remain unchanged.',
+      ? 'Use research_loop to record actual evidence. Finish an assigned task with research_dispatch report (completed, failed or blocked), a short summary and relative evidence paths. Wait for your own children and independent checks before claiming completion. HARD RULE: when encountering missing permissions, coordination questions, or temporary/recoverable blockers (memory/resource/dispatcher hiccups), send research_communication (action="send", kind="request", to="parent") and pause your turn to wait for parent resolution — NEVER prematurely report blocked to settle the assignment while waiting on parent. Publication, provider access and workspace limits remain unchanged.'
+      : 'Use research_loop to record actual evidence. With no dispatcher assignment, report your actual completed/partial/blocked/failed result using research_communication report with a stable requestId and evidence references. HARD RULE: when encountering missing permissions, coordination questions, or temporary/recoverable blockers, send research_communication (action="send", kind="request", to="parent") and remain active awaiting parent reply — do NOT prematurely settle with blocked. HANDOFF files may remain evidence artifacts; do not rely on project-specific watchers or retry research_dispatch report after assignment-not-found. Wait for your own children and checks. Delivery, scientific acceptance and native process exit are separate. Publication, provider access and workspace limits remain unchanged.',
     'Prefer research_communication report for assigned results too; the host forwards terminal reports to the real dispatcher assignment. No result receipt proves scientific acceptance or process exit.',
   ].filter(Boolean).join('\n');
   const task = String(row.task ?? '');

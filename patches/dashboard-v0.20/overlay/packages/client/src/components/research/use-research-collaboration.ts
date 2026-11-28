@@ -24,6 +24,7 @@ export interface CollaborationPlanTask {
   rank?: number;
   dependsOn?: string[];
   error?: string;
+  summary?: string;
 }
 export interface CollaborationPlan {
   id: string;
@@ -56,12 +57,32 @@ export interface CollaborationNativeQueueItem {
   queueReason?: string;
   createdAt?: string;
 }
+export interface CollaborationCommunicationItem {
+  id: string;
+  from: string;
+  to: string;
+  kind: "request" | "reply" | "decision" | "progress" | "result" | string;
+  status?: "completed" | "partial" | "blocked" | "failed" | string | null;
+  edgeKind?: "peer" | "parent-child" | string;
+  broadcast?: boolean;
+  sourceTaskId?: string | null;
+  targetTaskId?: string | null;
+  sourceRole?: string | null;
+  targetPlanId?: string | null;
+  summary: string;
+  evidence?: string[];
+  resolved?: boolean;
+  peerSettled?: boolean;
+  replyTo?: string | null;
+  createdAt: string;
+}
 export interface CollaborationSnapshot {
   schema: "pi-research-collaboration.v1"; cwd: string; adopted: boolean; revision: number;
   currentTenureId: string | null; currentMainSessionId: string | null;
   limits: CollaborationLimits; limitMaximums: CollaborationLimits;
   tenures: CollaborationTenure[]; plans: CollaborationPlan[];
   nativeQueue: CollaborationNativeQueueItem[];
+  communications?: CollaborationCommunicationItem[];
 }
 type Change = { action: "select-main"; sessionId: string }
   | { action: "detach"; sessionId: string; tenureId: string }

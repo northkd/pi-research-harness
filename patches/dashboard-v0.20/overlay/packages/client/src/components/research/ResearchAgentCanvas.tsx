@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Icon } from "@mdi/react";
-import { mdiAccountGroup, mdiArrowExpandAll, mdiChevronDown, mdiChevronRight, mdiFitToPageOutline, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew } from "@mdi/js";
+import { mdiAccountGroup, mdiArrowExpandAll, mdiChevronDown, mdiChevronRight, mdiFitToPageOutline, mdiForumOutline, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiOpenInNew } from "@mdi/js";
 import { useSpeedStats } from "@blackbelt-technology/pi-dashboard-speed-plugin";
 import type { ResearchWorkbenchRelation } from "@blackbelt-technology/pi-dashboard-shared/research-workbench.js";
 import type { ConfiguredRole, ResearchExecution, ResearchExecutionOriginKind } from "./research-projection.js";
@@ -9,12 +9,16 @@ import {
   buildTopologyGraph,
   layoutTopologyTree,
   normalizeWorkState,
+  planTaskStatusMeta,
   summarizePlansForScope,
   triStateLabel,
+  type PlanTaskProgressSummary,
+  type PlanTaskStatusTone,
   type TopologyItem,
 } from "./research-plan-topology.js";
 import { ResearchMainPlanProgress } from "./ResearchPlanProgressBar.js";
-import type { CollaborationPlan } from "./use-research-collaboration.js";
+import { ResearchCommunicationFeed } from "./ResearchCommunicationFeed.js";
+import type { CollaborationCommunicationItem, CollaborationPlan } from "./use-research-collaboration.js";
 
 export interface CanvasRoleGroup {
   roleName: string;
@@ -43,6 +47,8 @@ export interface CanvasSessionCluster {
 interface Props {
   clusters: CanvasSessionCluster[];
   plans?: CollaborationPlan[];
+  communications?: CollaborationCommunicationItem[];
+  sessionTitles?: Record<string, string>;
   mainSessionId?: string | null;
   showPlanGate?: boolean;
   highlightedPlanId?: string | null;
@@ -60,16 +66,10 @@ interface Props {
   onRemoveSession?: (sessionId: string, title: string) => void;
   removalPending?: boolean;
   onJumpPlanTask?: (planId: string, taskId: string, queueRevision?: number) => void;
+  onOpenQueue?: (planId?: string) => void;
+  onCollapse?: () => void;
 }
 
-const originTint = (origin?: ResearchExecutionOriginKind) =>
-  origin === "lead-agent-created"
-    ? "border-purple-500/20 bg-purple-500/10 text-[var(--text-secondary)]"
-    : origin === "workflow-created"
-    ? "border-amber-500/20 bg-amber-500/10 text-[var(--text-secondary)]"
-    : origin === "user-created"
-    ? "border-sky-500/20 bg-sky-500/10 text-[var(--text-secondary)]"
-    : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]";
 const originGlyph = (origin?: ResearchExecutionOriginKind) =>
   origin === "lead-agent-created" ? "Agent 派生" : origin === "workflow-created" ? "工作流创建"
     : origin === "user-created" ? "用户创建" : "来源未记录";
@@ -158,6 +158,20 @@ function canvasStatusTone(status: string, liveNode: boolean, isCaptain: boolean)
   };
 }
 
+function planTaskBadgeClass(tone: PlanTaskStatusTone): string {
+  switch (tone) {
+    case "completed":
+      return "border-emerald-500/30 bg-emerald-500/10 text-[var(--accent-green)]";
+    case "blocked":
+    case "failed":
+      return "border-red-500/35 bg-red-500/15 text-[var(--accent-red)] font-semibold";
+    case "queued":
+      return "border-amber-500/35 bg-amber-500/10 text-[var(--accent-orange)] font-medium";
+    case "in_progress":
+      return "border-sky-500/30 bg-sky-500/10 text-[var(--accent-blue)] font-medium";
+  }
+}
+
 function formatCompactTokens(tokens?: number): string {
   if (!tokens || tokens <= 0) return "0";
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
@@ -168,27 +182,24 @@ function formatCompactTokens(tokens?: number): string {
 function shortModelName(model?: string): string | null {
   if (!model) return null;
   const slash = model.lastIndexOf("/");
-  return slash >= 0 ? model.slice(slash + 1) : model;
+  const base = slash >= 0 ? model.slice(slash + 1) : model;
+  return base.replace(/\[\d+m\]/gi, "").trim() || base;
 }
 
 function SessionFleetStats({ sessionId, status, visible }: { sessionId?: string; status: string; visible: boolean }) {
   const { stats } = useSpeedStats(sessionId, status, visible && Boolean(sessionId));
   const billing = stats?.billing;
-  if (!billing) {
-    return (
-      <span className="research-fleet-stats text-[var(--text-tertiary)]">
-        <span className="text-left whitespace-nowrap">— calls</span>
-        <span className="text-center whitespace-nowrap">· — tok</span>
-        <span className="text-right whitespace-nowrap">¥—</span>
-      </span>
-    );
-  }
+  if (!billing) return null;
   const calls = billing.modelBreakdown.reduce((sum, entry) => sum + entry.callCount, 0);
   return (
-    <span data-testid="canvas-session-stats" className="research-fleet-stats text-[var(--text-secondary)]">
-      <span className="text-left whitespace-nowrap">{calls} calls</span>
-      <span className="text-center whitespace-nowrap">· {formatCompactTokens(billing.totalTokens)} tok</span>
-      <span className="text-right whitespace-nowrap font-semibold text-[var(--text-primary)]">{!billing.complete ? "≥" : ""}¥{billing.sessionTotalCost.toFixed(2)}</span>
+    <span data-testid="canvas-session-stats" className="research-fleet-stats-inline text-[var(--text-tertiary)]">
+      <span className="whitespace-nowrap">{calls}次</span>
+      <span aria-hidden="true">·</span>
+      <span className="whitespace-nowrap">{formatCompactTokens(billing.totalTokens)}</span>
+      <span aria-hidden="true">·</span>
+      <span className="whitespace-nowrap font-semibold text-[var(--text-secondary)]">
+        {!billing.complete ? "≥" : ""}¥{billing.sessionTotalCost.toFixed(2)}
+      </span>
     </span>
   );
 }
@@ -240,6 +251,8 @@ function orthogonalDownPath(parent: CanvasNode, child: CanvasNode): string {
 export function ResearchAgentCanvas({
   clusters,
   plans,
+  communications = [],
+  sessionTitles,
   mainSessionId,
   showPlanGate = false,
   highlightedPlanId = null,
@@ -255,6 +268,8 @@ export function ResearchAgentCanvas({
   onRemoveSession,
   removalPending,
   onJumpPlanTask,
+  onOpenQueue,
+  onCollapse,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const roleButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -269,9 +284,37 @@ export function ResearchAgentCanvas({
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const [hideEnded, setHideEnded] = useState(false);
+  const [commOpenOverride, setCommOpenOverride] = useState<boolean | null>(null);
+  const [highlightedCommSessions, setHighlightedCommSessions] = useState<Set<string>>(() => new Set());
   const [size, setSize] = useState({ width: 800, height: 520 });
   const [view, setView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 });
   const hasInitializedView = useRef(false);
+
+  // Default behavior: auto-expand the live communication sidebar when this tenure
+  // has communications, stay collapsed when empty; manual clicks always win.
+  const commOpen = commOpenOverride ?? communications.length > 0;
+  const unresolvedCommRequests = useMemo(
+    () => communications.filter(item => item.kind === "request" && !item.resolved && !item.peerSettled).length,
+    [communications],
+  );
+  const mergedSessionTitles = useMemo(() => {
+    const map: Record<string, string> = { ...(sessionTitles ?? {}) };
+    for (const cluster of clusters) {
+      const sid = cluster.sessionExec.sessionId ?? cluster.sessionExec.id;
+      if (sid && cluster.title) map[sid] = cluster.title;
+    }
+    return map;
+  }, [clusters, sessionTitles]);
+  const taskLabels = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const plan of plans ?? []) {
+      for (const task of plan.tasks ?? []) {
+        const head = (task.task ?? "").split(/[｜|。\n]/)[0]?.trim();
+        map[task.id] = head || task.role || task.id;
+      }
+    }
+    return map;
+  }, [plans]);
 
   const endedCount = useMemo(
     () => clusters.filter(cluster => !cluster.isCaptain && ENDED_STATUSES.has(cluster.sessionExec.status)).length,
@@ -594,9 +637,12 @@ export function ResearchAgentCanvas({
     }
   };
 
-  const renderSessionCard = (node: CanvasNode, cluster: CanvasSessionCluster, planTaskSummary?: { dependsOn?: string[] }) => {
+  const renderSessionCard = (node: CanvasNode, cluster: CanvasSessionCluster, planTaskSummary?: PlanTaskProgressSummary) => {
     const row = cluster.sessionExec;
     const liveNode = !(stale && row.source === "observation") && isLive(row.status);
+    const taskMeta = planTaskSummary ? planTaskStatusMeta(planTaskSummary.rawStatus) : null;
+    const isTaskIncompleteEnded = taskMeta?.tone === "blocked" || taskMeta?.tone === "failed";
+    const taskReason = planTaskSummary?.error || planTaskSummary?.summary || planTaskSummary?.waitingReason;
     const parentExecId = sessionParents.get(row.id);
     const parentCluster = parentExecId && clusterById.get(parentExecId);
     const directParent = row.parentExecutionId !== row.id ? row.parentExecutionId : undefined;
@@ -636,9 +682,33 @@ export function ResearchAgentCanvas({
     const showUnlinkedCreator = parentConflict || (isAgentCreated && !parentCluster);
     const isExpanded = expandedSessionIds.has(row.id);
 
+    const borderClass = liveNode
+      ? "border-l-[var(--accent-green)]"
+      : isTaskIncompleteEnded || ["failed", "blocked"].includes(row.status)
+      ? "border-l-[var(--accent-red)]"
+      : taskMeta?.tone === "queued" || ["queued", "pending"].includes(row.status)
+      ? "border-l-[var(--accent-orange)]"
+      : cluster.isCaptain
+      ? "border-l-[var(--accent-orange)]"
+      : "border-l-[var(--accent-blue)]";
+
+    const isCommHighlighted =
+      (row.sessionId && highlightedCommSessions.has(row.sessionId)) || highlightedCommSessions.has(row.id);
+
     return (
       <div key={node.id} style={nodeStyle(node)} className="research-canvas-position research-fleet-node-wrap flex items-center">
-        <div className="relative h-full w-full">
+        <div
+          data-comm-highlighted={isCommHighlighted ? "true" : undefined}
+          className={`research-fleet-card research-fleet-card--session h-full w-full ${borderClass} ${
+            isCommHighlighted
+              ? "ring-2 ring-[var(--accent-primary)] shadow-md"
+              : isExpanded
+              ? "ring-1 ring-[var(--accent-primary)]/45"
+              : isTaskIncompleteEnded
+              ? "ring-1 ring-red-500/35"
+              : ""
+          }`}
+        >
           <button
             ref={element => {
               if (element) sessionButtonRefs.current.set(row.id, element);
@@ -653,127 +723,172 @@ export function ResearchAgentCanvas({
             aria-label={`${isExpanded ? "收起" : "展开"} ${cluster.title} 下属节点`}
             onClick={() => toggleSession(row.id)}
             onFocus={() => revealNode(node)}
-            className={`research-fleet-card research-fleet-card--session focus-ring h-full w-full cursor-pointer ${
-              liveNode
-                ? "border-l-[var(--accent-green)]"
-                : ["queued", "pending"].includes(row.status)
-                ? "border-l-[var(--accent-orange)]"
-                : ["failed", "blocked"].includes(row.status)
-                ? "border-l-[var(--accent-red)]"
-                : cluster.isCaptain
-                ? "border-l-[var(--accent-orange)]"
-                : "border-l-[var(--accent-blue)]"
-            } ${isExpanded ? "ring-1 ring-[var(--accent-primary)]/45" : ""}`}
+            className="research-fleet-card-body focus-ring"
           >
+            {/* Row 1: Dot + Readable Title + Single Primary Badge */}
             <span className="flex min-w-0 items-center gap-1.5">
-              <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} />
-              <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[var(--text-primary)]" title={cluster.title}>
+              <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${isTaskIncompleteEnded ? "bg-[var(--accent-red)]" : tone.dot}`} />
+              <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-[var(--text-primary)]" title={cluster.title}>
                 {cluster.title}
               </span>
-              <span
-                className={`shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-semibold ${
-                  cluster.isCaptain
-                    ? "bg-amber-500/15 text-[var(--accent-orange)]"
-                    : "bg-sky-500/15 text-[var(--accent-blue)]"
-                }`}
-              >
-                {cluster.isCaptain ? (sessionDepth ? `主 Agent·L${sessionDepth}` : "主 Agent") : "Multi-Agent"}
-              </span>
-            </span>
-
-            <span className="flex min-w-0 items-center gap-1.5 text-[10px] text-[var(--text-secondary)]">
-              <span className={tone.text}>{statusText}</span>
-              {shortModel && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="min-w-0 truncate font-mono text-[var(--text-tertiary)]" title={row.observedModel}>
-                    {shortModel}
-                  </span>
-                </>
-              )}
-              {cluster.assignedRole && (
+              {taskMeta && !liveNode ? (
                 <span
-                  className="ml-auto max-w-[88px] shrink-0 truncate rounded border border-[color-mix(in_srgb,var(--border-subtle)_70%,transparent)] bg-[var(--bg-primary)] px-1 py-0 text-[9.5px] text-[var(--text-secondary)]"
-                  title={`角色：${roleLabel(cluster.assignedRole)}`}
+                  data-testid="canvas-session-plan-task-status"
+                  data-task-status={planTaskSummary!.rawStatus}
+                  title={taskReason || planTaskSummary?.task}
+                  className={`shrink-0 rounded border px-1.5 py-0 text-[9px] leading-tight ${planTaskBadgeClass(taskMeta.tone)}`}
                 >
-                  {roleLabel(cluster.assignedRole)}
+                  {taskMeta.label}
+                </span>
+              ) : (
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0 text-[9px] font-semibold leading-tight ${
+                    cluster.isCaptain
+                      ? "bg-amber-500/15 text-[var(--accent-orange)]"
+                      : "bg-sky-500/15 text-[var(--accent-blue)]"
+                  }`}
+                >
+                  {cluster.isCaptain ? (sessionDepth ? `主 Agent·L${sessionDepth}` : "主 Agent") : "Multi-Agent"}
                 </span>
               )}
             </span>
 
+            {/* Row 2: Compact Meta Line (no redundant status clash) */}
+            <span className="flex min-w-0 items-center gap-1 text-[9.5px] text-[var(--text-secondary)]">
+              {(!taskMeta || liveNode) && (
+                <>
+                  <span className={`shrink-0 ${tone.text}`}>{statusText}</span>
+                  {(cluster.assignedRole || shortModel || !cluster.isCaptain) && <span aria-hidden="true" className="text-[var(--text-tertiary)]">·</span>}
+                </>
+              )}
+              {taskMeta && liveNode && (
+                <span
+                  data-testid="canvas-session-plan-task-status"
+                  data-task-status={planTaskSummary!.rawStatus}
+                  className={`shrink-0 rounded border px-1 py-0 text-[8.5px] ${planTaskBadgeClass(taskMeta.tone)}`}
+                >
+                  {taskMeta.shortLabel}
+                </span>
+              )}
+              {cluster.assignedRole ? (
+                <span
+                  className="max-w-[92px] shrink-0 truncate font-medium text-[var(--text-secondary)]"
+                  title={`角色：${roleLabel(cluster.assignedRole)}`}
+                >
+                  {roleLabel(cluster.assignedRole)}
+                </span>
+              ) : !cluster.isCaptain ? (
+                <span className="shrink-0 text-[var(--accent-blue)]">Multi-Agent</span>
+              ) : null}
+              {shortModel && (
+                <>
+                  {(cluster.assignedRole || !cluster.isCaptain) && <span aria-hidden="true" className="text-[var(--text-tertiary)]">·</span>}
+                  <span className="min-w-0 flex-1 truncate font-mono text-[var(--text-tertiary)]" title={row.observedModel}>
+                    {shortModel}
+                  </span>
+                </>
+              )}
+              {taskMeta && !liveNode && !cluster.isCaptain && <span className="sr-only">Multi-Agent</span>}
+            </span>
+
+            {/* Row 3: Conditional High-Value Row (Captain progress / Blocked reason / Unlinked parent / Duty) */}
+            {cluster.isCaptain && captainPlanSummary && (
+              <ResearchMainPlanProgress summary={captainPlanSummary} compact />
+            )}
+
+            {!cluster.isCaptain && isTaskIncompleteEnded && taskReason && (
+              <span
+                className="block truncate rounded bg-red-500/10 px-1.5 py-0.5 text-[9.5px] text-[var(--accent-red)]"
+                title={taskReason}
+              >
+                {taskReason}
+              </span>
+            )}
+
             {showUnlinkedCreator && creatorLabel && (
               <span
                 data-testid="canvas-session-creator"
-                className={`truncate text-[10px] font-medium ${parentConflict ? "text-[var(--accent-red)]" : "text-[var(--accent-orange)]"}`}
+                className={`truncate text-[9.5px] font-medium ${parentConflict ? "text-[var(--accent-red)]" : "text-[var(--accent-orange)]"}`}
               >
                 {creatorLabel}
               </span>
             )}
 
-            {cluster.isCaptain && captainPlanSummary && (
-              <ResearchMainPlanProgress summary={captainPlanSummary} compact />
-            )}
-
-            {!cluster.isCaptain && (
-              <SessionFleetStats sessionId={row.sessionId} status={row.status} visible={visible} />
-            )}
-
-            {cluster.workflowDuty && (
-              <div className="research-fleet-box truncate text-[10px] text-[var(--text-secondary)]" title={cluster.workflowDuty}>
+            {!cluster.isCaptain && cluster.workflowDuty && !(isTaskIncompleteEnded && taskReason) && (
+              <span className="block truncate text-[9.5px] text-[var(--text-tertiary)]" title={cluster.workflowDuty}>
                 {cluster.workflowDuty}
-              </div>
+              </span>
             )}
 
-            <div className={`research-fleet-footer text-[9.5px] ${onRemoveSession && row.sessionId ? "pr-24" : "pr-14"}`}>
-              <span data-testid="canvas-session-origin" className={`shrink-0 rounded border px-1 py-0 text-[9px] font-medium ${originTint(origin)}`}>
+            {/* Row 4: Whisper-quiet metadata line (no noisy box borders for zero/routine fields!) */}
+            <div className="research-fleet-footer text-[9px] text-[var(--text-tertiary)]">
+              <span data-testid="canvas-session-origin" className="shrink-0">
                 {originGlyph(origin)}
               </span>
               {delegatedCount > 0 && (
-                <span className="rounded border border-sky-500/20 bg-sky-500/10 px-1.5 py-0 font-medium text-[var(--accent-blue)]">
-                  Multi-Agent ×{delegatedCount}
-                </span>
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="shrink-0 font-medium text-[var(--accent-blue)]">
+                    Multi-Agent ×{delegatedCount}
+                  </span>
+                </>
               )}
-              <span className="inline-flex items-center gap-0.5 rounded border border-purple-500/20 bg-purple-500/10 px-1.5 py-0 font-medium text-[var(--accent-purple-text)]">
+              <span aria-hidden="true">·</span>
+              <span
+                className={`inline-flex shrink-0 items-center gap-0.5 ${
+                  cluster.childSubs.length > 0
+                    ? "rounded border border-purple-500/25 bg-purple-500/10 px-1 py-0 font-medium text-[var(--accent-purple-text)]"
+                    : "text-[var(--text-tertiary)]"
+                }`}
+              >
                 <span>
                   Subagent ×{cluster.childSubs.length}
-                  {liveSubCount > 0 ? ` (${liveSubCount} running)` : ""}
+                  {liveSubCount > 0 ? ` (${liveSubCount})` : ""}
                 </span>
-                <Icon path={isExpanded ? mdiChevronDown : mdiChevronRight} size={0.48} />
+                <Icon path={isExpanded ? mdiChevronDown : mdiChevronRight} size={0.44} />
               </span>
               {planTaskSummary?.dependsOn && planTaskSummary.dependsOn.length > 0 && (
-                <span className="rounded border border-[var(--border-subtle)] px-1 py-0 text-[9px] text-[var(--text-tertiary)]">
-                  依赖 {planTaskSummary.dependsOn.length}
-                </span>
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="shrink-0">依赖 {planTaskSummary.dependsOn.length}</span>
+                </>
               )}
             </div>
           </button>
 
-          <div className="absolute right-1.5 bottom-1.5 z-10 flex items-center gap-1">
-            <button
-              type="button"
-              className="win11-btn px-1.5 py-0.5 text-[9.5px] text-[var(--accent-text)]"
-              aria-label={`查看 ${cluster.title} 会话详情`}
-              onClick={event => {
-                event.stopPropagation();
-                onAgent(cluster.roleObj, row);
-              }}
-            >
-              详情与纠偏
-            </button>
-            {onRemoveSession && row.sessionId && (
+          {/* Dedicated Bottom Bar: Left=Stats, Right=Actions (zero collision!) */}
+          <div className="research-fleet-actionbar">
+            <div className="min-w-0 flex-1 truncate">
+              <SessionFleetStats sessionId={row.sessionId} status={row.status} visible={visible} />
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                className="research-fleet-remove win11-btn px-1.5 py-0.5 text-[9.5px]"
-                disabled={removalPending}
-                aria-label={`从当前批次移除 ${cluster.title}`}
+                className="research-fleet-mini-btn text-[var(--accent-text)]"
+                aria-label={`查看 ${cluster.title} 会话详情`}
+                title="查看会话详情与纠偏"
                 onClick={event => {
                   event.stopPropagation();
-                  onRemoveSession(row.sessionId!, cluster.title);
+                  onAgent(cluster.roleObj, row);
                 }}
               >
-                移除
+                详情
               </button>
-            )}
+              {onRemoveSession && row.sessionId && (
+                <button
+                  type="button"
+                  className="research-fleet-remove"
+                  disabled={removalPending}
+                  aria-label={`从当前批次移除 ${cluster.title}`}
+                  onClick={event => {
+                    event.stopPropagation();
+                    onRemoveSession(row.sessionId!, cluster.title);
+                  }}
+                >
+                  移除
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -784,67 +899,77 @@ export function ResearchAgentCanvas({
     const { plan, rawPlan, multiAgentCount } = item;
     const isExpanded = !collapsedPlanIds.has(rawPlan.id);
     const isHighlighted = highlightedPlanId === rawPlan.id;
+    const incompleteEnded = plan.blocked + plan.failed;
+    const incompletePercent = plan.total > 0 ? Math.min(100 - plan.progressPercent, Math.round((incompleteEnded / plan.total) * 100)) : 0;
     const borderClass =
-      plan.state === "ended"
+      incompleteEnded > 0 && plan.state === "ended"
+        ? "border-l-[var(--accent-red)]"
+        : plan.state === "ended"
         ? "border-l-[var(--accent-green)]"
         : plan.state === "queued"
         ? "border-l-[var(--accent-orange)]"
         : "border-l-[var(--accent-primary)]";
-
+    const statusText =
+      incompleteEnded > 0 && plan.state === "ended"
+        ? `受阻/未完成 ${incompleteEnded}`
+        : plan.completed === plan.total && plan.total > 0
+        ? "全部完成"
+        : plan.queued > 0 && plan.inProgress === 0
+        ? `排队 ${plan.queued}`
+        : triStateLabel(plan.state);
+    const statusClass =
+      incompleteEnded > 0 && plan.state === "ended"
+        ? "font-semibold text-[var(--accent-red)]"
+        : plan.state === "ended"
+        ? "font-medium text-[var(--accent-green)]"
+        : plan.state === "queued"
+        ? "font-medium text-[var(--accent-orange)]"
+        : "font-medium text-[var(--accent-blue)]";
     return (
       <div key={node.id} style={nodeStyle(node)} className="research-canvas-position flex items-center">
-        <button
-          type="button"
-          data-testid="canvas-plan-node"
-          aria-expanded={isExpanded}
-          aria-label={`${isExpanded ? "收起" : "展开"} Plan ${plan.label}`}
-          onClick={() => togglePlan(rawPlan.id)}
-          onFocus={() => revealNode(node)}
-          className={`research-fleet-card research-fleet-card--plan focus-ring h-full w-full cursor-pointer ${borderClass} ${
+        <div
+          className={`research-fleet-card research-fleet-card--plan h-full w-full ${borderClass} ${
             isHighlighted ? "ring-2 ring-[var(--accent-primary)]" : ""
           }`}
         >
-          <span className="flex min-w-0 items-center justify-between gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-[var(--text-primary)]" title={rawPlan.clientPlanId || rawPlan.id}>
-              Plan · {plan.label}
-            </span>
-            <span className="shrink-0 rounded border border-[var(--accent-primary)]/35 bg-[var(--bg-primary)] px-1.5 py-0 text-[9.5px] font-medium text-[var(--accent-text)]">
-              1:{multiAgentCount} Multi-Agent
-            </span>
-          </span>
-
-          <div className="space-y-1">
-            <div className="flex items-center justify-between gap-1.5 text-[10px]">
-              <span
-                className={
-                  plan.state === "ended"
-                    ? "font-medium text-[var(--accent-green)]"
-                    : plan.state === "queued"
-                    ? "font-medium text-[var(--accent-orange)]"
-                    : "font-medium text-[var(--accent-blue)]"
-                }
-              >
-                {triStateLabel(plan.state)}
+          <button
+            type="button"
+            data-testid="canvas-plan-node"
+            aria-expanded={isExpanded}
+            aria-label={`${isExpanded ? "收起" : "展开"} Plan ${plan.label}`}
+            onClick={() => togglePlan(rawPlan.id)}
+            onFocus={() => revealNode(node)}
+            className="research-fleet-card-body focus-ring !justify-between !py-2"
+          >
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-[var(--text-primary)]" title={rawPlan.clientPlanId || rawPlan.id}>
+                Plan · {plan.label}
               </span>
-              <span className="font-mono text-[var(--text-secondary)]">
-                {plan.ended}/{plan.total} ({plan.progressPercent}%)
+              <span className="shrink-0 font-mono text-[9px] text-[var(--text-tertiary)]">
+                1:{multiAgentCount} Multi-Agent
               </span>
-            </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-tertiary)]">
-              <div className="h-full rounded-full bg-[var(--accent-green)] transition-all duration-300" style={{ width: `${plan.progressPercent}%` }} />
-            </div>
-          </div>
+              <Icon path={isExpanded ? mdiChevronDown : mdiChevronRight} size={0.5} className="shrink-0 text-[var(--text-tertiary)]" />
+            </span>
 
-          <span className="flex items-center justify-between gap-1.5 text-[9.5px] text-[var(--text-tertiary)]">
-            <span>
-              进行 {plan.inProgress} · 排队 {plan.queued} · 结束 {plan.ended}
-            </span>
-            <span className="inline-flex items-center gap-0.5 font-medium text-[var(--accent-text)]">
-              {isExpanded ? "收起" : "展开"}
-              <Icon path={isExpanded ? mdiChevronDown : mdiChevronRight} size={0.48} />
-            </span>
-          </span>
-        </button>
+            <div className="space-y-1.5">
+              <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-tertiary)]">
+                <div className="h-full bg-[var(--accent-green)] transition-all duration-300" style={{ width: `${plan.progressPercent}%` }} />
+                {incompletePercent > 0 && (
+                  <div className="h-full bg-[var(--accent-red)] transition-all duration-300" style={{ width: `${incompletePercent}%` }} />
+                )}
+              </div>
+              <div className="flex items-center justify-between gap-1.5 text-[10px]">
+                <span className={statusClass}>
+                  {statusText}
+                  {plan.inProgress > 0 && plan.queued > 0 ? ` · 排队 ${plan.queued}` : ""}
+                </span>
+                <span className="font-mono text-[var(--text-secondary)]">
+                  {plan.completed}/{plan.total} ({plan.progressPercent}%)
+                </span>
+              </div>
+            </div>
+          </button>
+        </div>
       </div>
     );
   };
@@ -854,74 +979,114 @@ export function ResearchAgentCanvas({
     const taskKey = `${planId}:${task.id}`;
     const isExpanded = expandedTaskIds.has(taskKey);
     const parentPlan = filteredPlans.find(plan => plan.id === planId);
-    const waitLabel =
-      task.state === "ended"
-        ? task.rawStatus === "completed"
-          ? "Ended"
-          : "Ended · 终止"
-        : TREE_WAIT_TEXT[task.waitingReason ?? ""] ?? "Queued";
-    const statusChip = task.state === "ended" ? "Ended" : task.state === "queued" ? "Queued" : "Running";
+    const taskMeta = planTaskStatusMeta(task.rawStatus);
+    const isIncompleteEnded = taskMeta.tone === "blocked" || taskMeta.tone === "failed";
+    const waitLabel = isIncompleteEnded
+      ? task.error || task.summary || taskMeta.label
+      : task.state === "ended"
+      ? "Ended"
+      : TREE_WAIT_TEXT[task.waitingReason ?? ""] ?? "Queued";
+    const statusChip =
+      taskMeta.tone === "blocked"
+        ? "Blocked · 未完成"
+        : taskMeta.tone === "failed"
+        ? "Failed · 未完成"
+        : task.state === "ended"
+        ? "Ended"
+        : task.state === "queued"
+        ? "Queued"
+        : "Running";
 
     return (
       <div key={node.id} style={nodeStyle(node)} className="research-canvas-position flex items-center">
-        <div className="relative h-full w-full">
+        <div
+          className={`research-fleet-card research-fleet-card--queued relative h-full w-full ${
+            isIncompleteEnded
+              ? "border-l-[var(--accent-red)] ring-1 ring-red-500/30"
+              : task.state === "queued"
+              ? "border-l-[var(--accent-orange)]"
+              : "border-l-[var(--border-primary)]"
+          }`}
+        >
           <button
             type="button"
             data-testid="canvas-queued-task-node"
             data-work-state={task.state}
+            data-task-status={task.rawStatus}
             aria-expanded={isExpanded}
             aria-label={`Plan 任务 ${task.role}（${statusChip}）`}
-            title={task.task}
+            title={task.error || task.task}
             onClick={() => toggleTask(taskKey)}
             onFocus={() => revealNode(node)}
-            className={`research-fleet-card research-fleet-card--queued focus-ring h-full w-full cursor-pointer ${
-              task.state === "queued" ? "border-l-[var(--accent-orange)]" : "border-l-[var(--border-primary)]"
-            }`}
+            className="research-fleet-card-body focus-ring"
           >
             <span className="flex min-w-0 items-center justify-between gap-1.5">
               <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[var(--text-primary)]">{task.role}</span>
-              <span className="shrink-0 rounded bg-[var(--bg-primary)] px-1.5 py-0 text-[9.5px] font-medium text-[var(--text-secondary)] border border-[var(--border-subtle)]">
-                Multi-Agent
-              </span>
-            </span>
-
-            <span className="flex items-center justify-between gap-1.5 text-[10px]">
-              <span className={task.state === "queued" ? "font-medium text-[var(--accent-orange)]" : "text-[var(--text-secondary)]"}>
+              <span
+                className={`shrink-0 text-[9.5px] ${
+                  isIncompleteEnded
+                    ? "font-semibold text-[var(--accent-red)]"
+                    : task.state === "queued"
+                    ? "font-medium text-[var(--accent-orange)]"
+                    : "text-[var(--text-secondary)]"
+                }`}
+              >
                 {statusChip}
               </span>
-              {task.queueRank ? (
-                <span className="font-mono text-[var(--text-tertiary)]">#{task.queueRank}</span>
-              ) : (
-                <span className="font-mono text-[var(--text-tertiary)]">{task.id}</span>
-              )}
             </span>
 
-            <span className="flex items-center justify-between gap-1 text-[9.5px] text-[var(--text-tertiary)]">
-              <span className="truncate">{waitLabel}</span>
-              {rawTask.dependsOn && rawTask.dependsOn.length > 0 && (
-                <span className="shrink-0">依赖 {rawTask.dependsOn.length}</span>
-              )}
+            <span className="flex items-center justify-between gap-1.5 text-[9.5px] text-[var(--text-tertiary)]">
+              <span className={`min-w-0 truncate ${isIncompleteEnded ? "text-[var(--accent-red)]" : ""}`}>{waitLabel}</span>
+              <span className="shrink-0 font-mono">
+                {task.queueRank ? `#${task.queueRank}` : task.id}
+                {rawTask.dependsOn && rawTask.dependsOn.length > 0 ? ` · 依赖${rawTask.dependsOn.length}` : ""}
+              </span>
             </span>
           </button>
 
-          {task.state === "queued" && onJumpPlanTask && (
-            <button
-              type="button"
-              className="win11-btn absolute right-1.5 bottom-1.5 z-10 px-1.5 py-0.5 text-[9px] text-[var(--accent-text)]"
-              onClick={event => {
-                event.stopPropagation();
-                onJumpPlanTask(planId, task.id, parentPlan?.revision);
-              }}
-            >
-              优先启动
-            </button>
+          {task.state === "queued" && (onJumpPlanTask || onOpenQueue) && (
+            <div className="research-fleet-actionbar">
+              <span className="truncate text-[9px] text-[var(--text-tertiary)]">Multi-Agent</span>
+              <div className="flex shrink-0 items-center gap-1">
+                {onOpenQueue && (
+                  <button
+                    type="button"
+                    className="research-fleet-mini-btn text-[var(--text-secondary)]"
+                    aria-label={`打开 ${task.role} 排队管理`}
+                    onClick={event => {
+                      event.stopPropagation();
+                      onOpenQueue(planId);
+                    }}
+                  >
+                    调序
+                  </button>
+                )}
+                {onJumpPlanTask && (
+                  <button
+                    type="button"
+                    className="research-fleet-mini-btn text-[var(--accent-text)]"
+                    onClick={event => {
+                      event.stopPropagation();
+                      onJumpPlanTask(planId, task.id, parentPlan?.revision);
+                    }}
+                  >
+                    优先启动
+                  </button>
+                )}
+              </div>
+            </div>
           )}
 
           {isExpanded && (
-            <div className="absolute left-0 top-[calc(100%+4px)] z-20 w-56 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 text-[10.5px] text-[var(--text-secondary)] shadow-md">
+            <div className="absolute left-0 top-[calc(100%+4px)] z-popover w-56 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 text-[10.5px] text-[var(--text-secondary)] shadow-md">
               <p className="font-medium text-[var(--text-primary)]">
                 {task.role} · {task.id}
               </p>
+              {isIncompleteEnded && (
+                <p className="mt-1 font-medium text-[var(--accent-red)]">
+                  状态：{taskMeta.label}{task.error ? `（${task.error}）` : ""}
+                </p>
+              )}
               <p className="mt-1 whitespace-pre-wrap break-words">{task.task}</p>
             </div>
           )}
@@ -1086,10 +1251,10 @@ export function ResearchAgentCanvas({
           {tenureTitle && (
             <>
               <span className="truncate">{tenureTitle}</span>
-              <span aria-hidden="true" className="text-[var(--text-tertiary)]">/</span>
+              <span aria-hidden="true" className="text-[var(--text-tertiary)]">·</span>
             </>
           )}
-          <span className="shrink-0">{overviewTitle}</span>
+          <span className={`shrink-0 ${tenureTitle ? "font-normal text-[var(--text-tertiary)]" : ""}`}>{overviewTitle}</span>
           {tenureBadge && (
             <span
               className={`shrink-0 rounded-full border px-2 py-0 text-[10.5px] font-medium ${
@@ -1101,9 +1266,10 @@ export function ResearchAgentCanvas({
               {tenureBadge}
             </span>
           )}
-          <span className="rounded-full bg-[var(--bg-tertiary)] px-2 py-0.5 text-[10px] font-normal text-[var(--text-secondary)]">
+          <span className="text-[10.5px] font-normal text-[var(--text-tertiary)]">
             {totalPlansCount > 0 ? `Plan ${totalPlansCount} · ` : ""}
-            Multi-Agent {query.trim() || hideEndedActive ? `${orderedClusters.length}/${clusters.length}` : clusters.length} · Subagent {totalSubagents}
+            Multi-Agent {query.trim() || hideEndedActive ? `${orderedClusters.length}/${clusters.length}` : clusters.length}
+            {totalSubagents > 0 ? ` · Subagent ${totalSubagents}` : ""}
           </span>
         </div>
 
@@ -1137,6 +1303,25 @@ export function ResearchAgentCanvas({
               展开全部 Plan
             </button>
           )}
+          <button
+            type="button"
+            data-testid="research-toggle-comm-feed"
+            aria-pressed={commOpen}
+            onClick={() => setCommOpenOverride(!commOpen)}
+            className={`win11-btn inline-flex items-center gap-1 px-2 py-1 text-[11px] ${
+              commOpen ? "border-[var(--accent-primary)] bg-[var(--accent-soft)] text-[var(--accent-text)]" : ""
+            }`}
+            title={commOpen ? "收起 Agent 通信动态" : "展开 Agent 通信动态"}
+          >
+            <Icon path={mdiForumOutline} size={0.54} />
+            <span>通信动态{communications.length > 0 ? ` (${communications.length})` : ""}</span>
+            {unresolvedCommRequests > 0 && (
+              <span
+                aria-label={`${unresolvedCommRequests} 条待回复求助`}
+                className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent-orange)]"
+              />
+            )}
+          </button>
           <details className="relative">
             <summary className="win11-btn list-none cursor-pointer px-2 py-1 text-[11px]" aria-label="连线图例">
               图例
@@ -1152,6 +1337,9 @@ export function ResearchAgentCanvas({
                 <span aria-hidden="true" className="w-4 border-t-2 border-dashed border-[var(--accent-green)]" />节点进行中（Running）
               </span>
               <span className="inline-flex items-center gap-2">
+                <span aria-hidden="true" className="w-4 border-t-2 border-[var(--accent-red)]" />任务受阻 / 失败未完成
+              </span>
+              <span className="inline-flex items-center gap-2">
                 <span aria-hidden="true" className="w-4 border-t-2 border-dashed border-[var(--accent-purple)]" />Subagent 子代理与多轮展开
               </span>
               <span className="inline-flex items-center gap-2">
@@ -1159,9 +1347,20 @@ export function ResearchAgentCanvas({
               </span>
             </div>
           </details>
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              className="win11-btn px-2 py-1 text-[11px]"
+              aria-label="收起历史批次拓扑"
+            >
+              收起
+            </button>
+          )}
         </div>
       </div>
 
+      <div className="research-canvas-body">
       <div
         ref={viewportRef}
         data-testid="research-canvas-viewport"
@@ -1175,7 +1374,7 @@ export function ResearchAgentCanvas({
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onLostPointerCapture={endDrag}
-        className={`relative h-[min(64vh,640px)] min-h-[440px] overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)] ${
+        className={`relative h-[min(64vh,640px)] min-h-[440px] flex-1 min-w-0 overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)] ${
           dragging ? "cursor-grabbing" : "cursor-grab"
         }`}
         style={{
@@ -1212,6 +1411,9 @@ export function ResearchAgentCanvas({
               <marker id={`${canvasId}-arrow-orange`} markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
                 <path d="M 0 0.7 L 6.5 3.5 L 0 6.3 Z" fill="var(--accent-orange)" />
               </marker>
+              <marker id={`${canvasId}-arrow-red`} markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+                <path d="M 0 0.7 L 6.5 3.5 L 0 6.3 Z" fill="var(--accent-red)" />
+              </marker>
             </defs>
 
             {scene.nodes
@@ -1225,6 +1427,10 @@ export function ResearchAgentCanvas({
                   (item.kind === "plan" && item.plan.state === "in_progress") ||
                   (item.kind === "subagent-role" && item.group.executions.some(ex => !(stale && ex.source === "observation") && isLive(ex.status))) ||
                   (item.kind === "subagent-run" && !(stale && item.execution.source === "observation") && isLive(item.execution.status));
+                const isIncompleteEdge =
+                  (item.kind === "session" && Boolean(item.planTask) && ["blocked", "failed"].includes(planTaskStatusMeta(item.planTask?.rawStatus).tone)) ||
+                  (item.kind === "plan-task" && ["blocked", "failed"].includes(planTaskStatusMeta(item.task.rawStatus).tone)) ||
+                  (item.kind === "plan" && item.plan.state === "ended" && item.plan.blocked + item.plan.failed > 0);
                 const isQueuedEdge =
                   item.kind === "plan-task"
                     ? item.task.state === "queued"
@@ -1236,6 +1442,8 @@ export function ResearchAgentCanvas({
                     : "var(--accent-purple)"
                   : isLiveEdge
                   ? "var(--accent-green)"
+                  : isIncompleteEdge
+                  ? "var(--accent-red)"
                   : isQueuedEdge
                   ? "var(--accent-orange)"
                   : "var(--accent-blue)";
@@ -1245,6 +1453,8 @@ export function ResearchAgentCanvas({
                     : "arrow-purple"
                   : isLiveEdge
                   ? "arrow-green"
+                  : isIncompleteEdge
+                  ? "arrow-red"
                   : isQueuedEdge
                   ? "arrow-orange"
                   : "arrow-blue";
@@ -1318,7 +1528,7 @@ export function ResearchAgentCanvas({
                   <div key={node.id} style={nodeStyle(node)} className="research-canvas-position flex items-center">
                     <div
                       data-testid="canvas-plan-awaiting-node"
-                      className="research-fleet-card research-fleet-card--queued h-full w-full justify-center border-l-[var(--accent-orange)] text-left"
+                      className="research-fleet-card research-fleet-card--queued h-full w-full justify-center gap-1 px-2.5 py-2 border-l-[var(--accent-orange)] text-left"
                     >
                       <span className="text-[11px] font-semibold text-[var(--text-primary)]">先 Plan 后 Work</span>
                       <span className="text-[10px] text-[var(--text-secondary)]">主 Agent 尚未提交执行 Plan，制定 Plan 后显示与 Multi-Agent 的 1:N 对应关系。</span>
@@ -1418,6 +1628,37 @@ export function ResearchAgentCanvas({
         {filteredClusters.length === 0 && filteredPlans.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--text-tertiary)]">没有匹配的节点</div>
         )}
+      </div>
+
+      {commOpen && (
+        <ResearchCommunicationFeed
+          items={communications}
+          mainSessionId={mainSessionId}
+          sessionTitles={mergedSessionTitles}
+          taskLabels={taskLabels}
+          onClose={() => {
+            setCommOpenOverride(false);
+            setHighlightedCommSessions(new Set());
+          }}
+          onHighlightSessions={ids => setHighlightedCommSessions(new Set(ids))}
+          onLocateSession={targetSessionId => {
+            setHighlightedCommSessions(new Set([targetSessionId]));
+            const match = scene.nodes.find(
+              node =>
+                node.item.kind === "session" &&
+                (node.item.cluster.sessionExec.sessionId === targetSessionId ||
+                  node.item.cluster.sessionExec.id === targetSessionId),
+            );
+            if (match) revealNode(match);
+          }}
+          onOpenSession={targetSessionId => {
+            const cluster = clusters.find(
+              item => item.sessionExec.sessionId === targetSessionId || item.sessionExec.id === targetSessionId,
+            );
+            if (cluster) onAgent(cluster.roleObj, cluster.sessionExec);
+          }}
+        />
+      )}
       </div>
 
       <span className="sr-only" aria-live="polite">

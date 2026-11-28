@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createResearchServices } from '../index.mjs';
+import { createResearchServices, ResearchSessionError } from '../index.mjs';
 
 function fixture(t) {
   const privateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'research-services-composition-'));
@@ -251,4 +251,136 @@ test('dispatcher confirms the child identity only after its native registration'
 test('required host verification and resource hooks are checked before service creation', () => {
   assert.throws(() => createResearchServices({ privateDir: '/tmp/synthetic-private' }), /getSession-required/);
   assert.throws(() => createResearchServices({ privateDir: 'relative' }), /private-directory-required/);
+});
+
+test('parent reply to an already-live child bypasses process-launch memory gate, while resuming a completed direct child still checks it', async t => {
+  const f = fixture(t);
+  await f.selectMain();
+  let memoryLow = false;
+  const origBeforeLaunch = f.deps.beforeLaunch;
+  f.deps.beforeLaunch = async (...args) => {
+    if (memoryLow) throw new ResearchSessionError(409, 'research-session-resource-budget-unavailable');
+    return origBeforeLaunch(...args);
+  };
+  await f.restart();
+
+  // Launch a direct child while memory is healthy.
+  const spawned = await f.services().sessions.create({
+    body: { parentSessionId: 'lead', requestId: 'live-reply-req', role: 'research-worker', task: 'Run check', stage: '2-experiment' },
+    principal: f.principal,
+  });
+  const childId = spawned.sessionId;
+  const childReq = await f.services().communication.handle({
+    body: { sessionId: childId, action: 'send', to: 'parent', kind: 'request', requestId: 'child-asks-help', summary: 'Need guidance' },
+    principal: f.principal,
+  });
+
+  // Memory drops below threshold while child is live and waiting for parent reply.
+  memoryLow = true;
+  const reply = await f.services().communication.handle({
+    body: { sessionId: 'lead', action: 'reply', messageId: childReq.message.id, requestId: 'lead-guides-live-child', summary: 'Wait for memory and proceed' },
+    principal: f.principal,
+  });
+  assert.equal(reply.status, 'ok');
+  assert.equal(reply.persisted, true);
+
+  // Once the direct child reports completion (releasing capacity), actually resuming it still enforces beforeLaunch.
+  await f.services().communication.handle({
+    body: { sessionId: childId, action: 'report', requestId: 'child-done', status: 'completed', summary: 'Finished', evidence: [] },
+    principal: f.principal,
+  });
+  await assert.rejects(
+    f.services().communication.handle({
+      body: { sessionId: 'lead', action: 'send', to: childId, kind: 'decision', requestId: 'resume-while-low-mem', summary: 'Do extra work' },
+      principal: f.principal,
+    }),
+    /resource-budget-unavailable/,
+  );
+});
+
+test('child with an open parent request cannot prematurely report blocked until parent replies', async t => {
+  const f = fixture(t);
+  await f.selectMain();
+  await f.call({ sessionId: 'lead', action: 'plan', planId: 'wait-on-req-plan', concurrency: 1, tasks: tasks.slice(0, 1) });
+  const req = await f.services().communication.handle({
+    body: { sessionId: 'worker-1', action: 'send', to: 'parent', kind: 'request', requestId: 'need-perm-1', summary: 'Need permission to read extra folder' },
+    principal: f.principal,
+  });
+  const childStatus = await f.call({ sessionId: 'worker-1', action: 'status' });
+  assert.equal(childStatus.awaitingParentReply, true);
+
+  await assert.rejects(
+    f.services().communication.handle({
+      body: { sessionId: 'worker-1', action: 'report', requestId: 'premature-block', status: 'blocked', summary: 'Giving up early', evidence: [] },
+      principal: f.principal,
+    }),
+    /awaiting-parent-reply/,
+  );
+  await assert.rejects(
+    f.call({ sessionId: 'worker-1', action: 'report', status: 'blocked', summary: 'Giving up early', evidence: [] }),
+    /awaiting-parent-reply/,
+  );
+
+  // Parent replies -> request resolves -> child may continue and report cleanly.
+  await f.services().communication.handle({
+    body: { sessionId: 'lead', action: 'reply', messageId: req.message.id, requestId: 'parent-reply-1', summary: 'Permission granted; proceed' },
+    principal: f.principal,
+  });
+  const afterReply = await f.call({ sessionId: 'worker-1', action: 'status' });
+  assert.equal(afterReply.awaitingParentReply, false);
+  await f.call({ sessionId: 'worker-1', action: 'report', status: 'completed', summary: 'Completed after parent reply', evidence: [] });
+  assert.equal((await f.call({ sessionId: 'lead', action: 'status' })).plans[0].status, 'completed');
+});
+
+test('parent can reopen blocked, completed, and exited tasks in the original child session via reopen or downward communication', async t => {
+  const f = fixture(t);
+  const resumedSessions = [];
+  f.deps.history = () => f.rows;
+  f.deps.resumeSession = async (session) => {
+    resumedSessions.push(session.id);
+    const row = f.rows.find(item => item.id === session.id);
+    if (row) row.status = 'idle';
+    return { success: true, pid: 9999 };
+  };
+  await f.restart();
+  await f.selectMain();
+
+  // 1. Plan with concurrency: 1 stays allowed; worker-1 reports blocked, then parent reopens it via action="reopen".
+  await f.call({ sessionId: 'lead', action: 'plan', planId: 'reopen-plan', concurrency: 1, tasks: tasks.slice(0, 1) });
+  assert.equal(f.launches(), 1);
+  const workerRow = f.rows.find(row => row.id === 'worker-1');
+  workerRow.sessionFile = '/tmp/synthetic-worker-1.jsonl';
+  await f.call({ sessionId: 'worker-1', action: 'report', status: 'blocked', summary: 'Hit temporary blocker', evidence: [] });
+  assert.equal((await f.call({ sessionId: 'lead', action: 'status' })).plans[0].status, 'blocked');
+
+  // Simulate auto-retire having exited worker-1 before parent reopens it.
+  workerRow.status = 'ended';
+  const reopened = await f.call({ sessionId: 'lead', action: 'reopen', planId: 'reopen-plan', taskId: tasks[0].id, reason: 'Blocker resolved; continue in original agent' });
+  assert.equal(f.launches(), 1, 'must NOT spawn a brand new agent when reopening original session');
+  assert.deepEqual(resumedSessions, ['worker-1']);
+  assert.equal(reopened.plans[0].status, 'running');
+  assert.equal(reopened.plans[0].tasks[0].status, 'running');
+  assert.equal(reopened.plans[0].tasks[0].sessionId, 'worker-1');
+  assert.ok(f.notifications.some(([to, body]) => to === 'worker-1' && body.includes('[research_dispatch reopen')));
+
+  // 2. Worker-1 completes, exits again, and parent reopens the completed task via downward research_communication.
+  await f.call({ sessionId: 'worker-1', action: 'report', status: 'completed', summary: 'First pass done', evidence: [] });
+  assert.equal((await f.call({ sessionId: 'lead', action: 'status' })).plans[0].status, 'completed');
+  workerRow.status = 'ended';
+  const followup = await f.services().communication.handle({
+    body: { sessionId: 'lead', action: 'send', to: 'worker-1', kind: 'decision', requestId: 'reopen-via-comm', summary: 'Add one more verification column' },
+    principal: f.principal,
+  });
+  assert.equal(followup.status, 'ok');
+  assert.equal(f.launches(), 1, 'reopening via communication still reuses original agent');
+  assert.deepEqual(resumedSessions, ['worker-1', 'worker-1']);
+  const afterComm = await f.call({ sessionId: 'lead', action: 'status' });
+  assert.equal(afterComm.plans[0].status, 'running');
+  assert.equal(afterComm.plans[0].tasks[0].status, 'running');
+  assert.equal(f.services().dispatch.isCompleted(workerRow.researchSession.spawnToken), false);
+
+  // Collaboration snapshot exposes compact scoped communications for the topology live sidebar.
+  const collabSnap = await f.services().collaboration.snapshot(f.access);
+  assert.ok(Array.isArray(collabSnap.communications));
+  assert.ok(collabSnap.communications.some(msg => msg.from === 'lead' && msg.to === 'worker-1' && msg.summary.includes('Add one more verification column')));
 });

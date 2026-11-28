@@ -88,17 +88,17 @@
     },
     {
       "path": "src/index.ts",
-      "sha256": "c5c1a0bcdb6afa381dab18eecfd0a540ff3943bfd932e08aa69b8feac13a39db",
+      "sha256": "e278bf78b31012b0cd2b6732094e5f327beeef912f2119665723eb1ec102b914",
       "localSourceSha256": "9f234eb5f932d4d518de7b796a9a2db556dc2bf48ca53df6a8569fa915fc5d5a"
     },
     {
       "path": "src/policy.mjs",
-      "sha256": "609427ae74d3a7cdc71d31b04b53571b18c9f89cd64ec17f4ad60bbe3263a356",
+      "sha256": "7d14e1219c82cc283820fb6f54c08a52d249fc2e16c5793426132f05a9a9bc34",
       "localSourceSha256": "1d463b2f3f7c70054cada527b614d0795c855a8fbeae2e7dc1aebf12d1b6f93b"
     },
     {
       "path": "test/adapter.test.mjs",
-      "sha256": "92eded090305bc7235911990f540cbde17d230e162d17c5f30e3a9f0140735f7",
+      "sha256": "2c1cf1c66a39c49e203c73a0f30043436938d194977c2fa7af580562b2bc2b93",
       "localSourceSha256": "bdec5458ab378c4369648e6ba16f8259ffc1e3bb7f7be0cefabe45025f9016fe"
     },
     {

@@ -9,18 +9,12 @@
 
 import { readFileSync } from 'node:fs';
 
-export const DELEGATION_NUDGE_TYPE = 'research-delegation-nudge';
-export const DEFAULT_BULK_THRESHOLD = 6;
-
 // Load the release policy once so prompt turns share its exact priority chains.
 const MODEL_POLICY = JSON.parse(readFileSync(new URL('../model-policy.json', import.meta.url), 'utf8'));
 const MODEL_ORDERS = Object.fromEntries(['worker', 'commander', 'intelligence'].map(tier => [
   tier,
   [...MODEL_POLICY.tiers[tier].models, ...(MODEL_POLICY.tiers[tier].fallbackChain ?? [])].join(' -> '),
 ]));
-
-/** Read/search tools whose repeated use in the lead context should trigger a nudge. */
-const BULK_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'bash', 'web_search', 'fetch_content']);
 
 const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -220,12 +214,12 @@ function routingGuidance(caps) {
   const lines = research ? [
     'Joined res-workflow routing: use the full catalog of research-* roles, utility pi-subagents and agy-advisor according to the available tools.',
     '- Reserve research-* roles and formal Multi-Agent work for scientific hypotheses, theory, literature synthesis and critic work. Use research_dispatch action=plan when available for the confirmed scientific task graph.',
-    '- Offload engineering, repository search, logs, diff review and verification to utility pi-subagents in subordinate capacity slots. Respect the installed concurrency limit, normally three child slots per collaborator.',
+    '- Offload engineering, repository search, historical table/log lookup, plotting checks, diff review and independent verification to utility pi-subagents freely whenever helpful. Declaring research_dispatch action=atomic only skips nested Multi-Agent plans; an atomic branch should still use utility subagents (`scout`, `worker`, `reviewer`, `evidence-auditor`) directly without waiting or self-restricting.',
   ] : [
     'Standalone / non-research routing: primarily choose the seven utility pi-subagents scout, researcher, reviewer, evidence-auditor, worker, oracle and delegate. Use agy-advisor on demand. Use research-* scientific roles only when explicitly requested.',
   ];
   if (caps.piSubagents) lines.push(
-    '- Judge scope before reading: unknown multi-directory or log searches go to parallel scout tasks, post-edit diff/compliance checks to reviewer, isolated build/fix work to worker, external lookup to researcher, difficult evidence verification to evidence-auditor, plan consistency to oracle and bounded general work to delegate. Read or grep one known file directly.',
+    '- Judge scope proactively: unknown multi-directory or log searches go to parallel scout tasks, post-edit diff/compliance checks to reviewer, isolated build/fix work to worker, external lookup to researcher, difficult evidence verification to evidence-auditor, plan consistency to oracle and bounded general work to delegate. Never hold back subagent calls due to file count or read-count thresholds.',
     '- The parent must pass an explicit top-level model dynamically for every utility role, selected by work form and remaining tier quota. Keep utility roles free of fixed model pins.',
     `- Worker order: ${MODEL_ORDERS.worker}. Exhaust the Flash pool before Terra, then use the policy fallback chain.`,
     `- Commander order: ${MODEL_ORDERS.commander}. When quota is exhausted, switch directly to the next model in this order.`,
@@ -237,30 +231,34 @@ function routingGuidance(caps) {
 
 /**
  * Build compact, schema-accurate guidance for the active delegation tools.
- * Returns '' when no delegation tool is active or the user restricted it.
+ * Subagent guidance is never restricted or gated behind read-count thresholds.
  */
 export function buildDelegationGuidance({ selectedTools, restrictions, env } = {}) {
-  if (delegationPolicyDisabled(env)) return '';
   const restriction = normalizeRestrictions(restrictions);
-  if (restriction.blocked) return '';
-  const caps = detectDelegationTools(selectedTools);
-  if (!caps.known) return '';
+  const rawCaps = detectDelegationTools(selectedTools);
+  if (!rawCaps.known) return '';
+  const hasSubagents = rawCaps.piSubagents || rawCaps.tintinAgent || rawCaps.tintinWorkflow || rawCaps.enableOnly;
+  const restrictResearchDispatch = delegationPolicyDisabled(env) || restriction.blocked;
+  const caps = restrictResearchDispatch
+    ? detectDelegationTools(rawCaps.selectedTools.filter(name => name !== 'research_session' && name !== 'research_dispatch'))
+    : rawCaps;
   if (!caps.available) {
     if (!caps.enableOnly) return '';
     return [
       '【Dynamic delegation policy】',
       '`subagents_enable` is active, so pi-subagents is installed but the `subagent` tool is not in the current tool list.',
-      'If the user authorizes delegation, call `subagents_enable`, then use the `subagent` schema shown in the next prompt. Until then, do the work with direct tools.',
+      'Call `subagents_enable` when subagents are needed, then use the `subagent` schema shown in the next prompt.',
     ].join('\n');
   }
+  if (!hasSubagents && restrictResearchDispatch) return '';
 
   const lines = [
     '【Dynamic delegation policy (verified against the active tool loadout)】',
     `Active delegation tools: ${familySummary(caps)}.`,
-    'Be proactive: when the routing rule below matches, delegate without waiting for a separate instruction.',
+    'Be proactive: call subagents directly whenever parallel search, engineering, verification, or independent review is helpful — never wait for a bulk-read threshold.',
     'Route work deliberately:',
-    '- Delegate bulk or independent work: broad multi-file exploration, long logs or papers, independent batch analysis, multiple source comparisons, or a second independent check.',
-    `- Do the work directly: one known file, one lookup, one trivial check,${restriction.readOnly ? ' or a small read-only inspection.' : ' or a small edit.'}`,
+    '- Delegate bulk or independent work: multi-file exploration, long logs or papers, independent batch analysis, source comparisons, isolated engineering, or a second independent check.',
+    `- Direct work is optional for a trivial single lookup${restriction.readOnly ? ' or a small read-only inspection' : ' or a small edit'}, never a restriction against calling subagents when helpful.`,
     ...routingGuidance(caps),
     'Verified call shapes (use only the tools listed above; omit examples for absent families):',
   ];
@@ -281,7 +279,7 @@ export function buildDelegationGuidance({ selectedTools, restrictions, env } = {
     '- For pi-subagents, put `agent`, `task` and `model` at the top level and other controls under `options`; do not use the old `subagent(agentName, prompt)` form. Check the actual agent/workflow list before naming one.',
     '- Give each child a bounded question, expected output, and evidence paths. Never ask a child to run model training/serving or other unauthorized model work.',
     '- Keep the lead context small: request a short conclusion plus file paths, then verify key claims yourself; do not import full child transcripts or dumps.',
-    '- Collaborators may recursively delegate separable work inside the same owner, workspace, charter and permission scope. Respect installed depth, role and concurrency limits; SSH, agy and supervisor roles remain leaves.',
+    '- Subagents (`subagent`, `Agent`, `SubagentWorkflow`) are unrestricted across all harness modes. Collaborators may also recursively delegate separable scientific work inside the same owner, workspace, charter and permission scope.',
     `- Use read/grep/find/ls for planning and verification. Managed collaborators must declare a plan or an indivisible-task reason before bulk work; coordinators wait for child receipts before completion.${restriction.readOnly ? ' In read-only mode, use only read-only commands and do not modify files.' : ''}`,
   );
   if (caps.researchSession) {
@@ -296,127 +294,11 @@ export function buildDelegationGuidance({ selectedTools, restrictions, env } = {
   return lines.join('\n');
 }
 
-/** Short mid-turn escalation, inserted only after repeated bulk reads. */
-export function buildDelegationNudge(count, { threshold = DEFAULT_BULK_THRESHOLD, selectedTools, restrictions } = {}) {
-  const restriction = normalizeRestrictions(restrictions);
-  if (restriction.blocked) return '';
-  const caps = detectDelegationTools(selectedTools);
-  if (!caps.available || !Number.isSafeInteger(count) || count < threshold) return '';
-  const lines = [
-    `[Delegation nudge] ${count} broad read/search operations have run in this lead context while delegation is available.`,
-    'If the remaining work is still broad or parallel, stop bulk-reading here and dispatch a bounded specialist using the active tool shape; ask for a short conclusion plus evidence paths.',
-    'If this is one known file or a trivial check, continue directly.',
-    caps.researchSession || caps.researchDispatch
-      ? 'Use utility subagents for engineering/search/diff chores within subordinate slots, reserving research-* and formal plans for scientific work.'
-      : 'Prefer scout for unknown multi-directory/log exploration, reviewer for post-edit checks and worker for an isolated build/fix. Choose utility-role models dynamically by the three-tier quota order in the routing guidance.',
-  ];
-  if (restriction.readOnly) {
-    lines.push('Read-only mode: the specialist must not edit or write files, mutate state, install packages, or run state-changing commands; ask for findings and evidence paths only.');
-  }
-  return lines.join(' ');
-}
-
 /**
- * Register the per-turn bulk-work counter and context nudge.
- * Parent wiring: call once from the research-loop extension entry point.
- * Returns a disposer. It never blocks tools and never spawns work itself.
+ * Delegation policy registration hook.
+ * The 6-bulk-read threshold counter and mid-turn nudge have been removed:
+ * subagent invocation is never gated or delayed by read-count thresholds.
  */
-export function registerDelegationPolicy(pi, options = {}) {
-  if (!pi || typeof pi.on !== 'function') return () => {};
-  const threshold = Number.isSafeInteger(options.bulkThreshold) && options.bulkThreshold > 0
-    ? options.bulkThreshold
-    : DEFAULT_BULK_THRESHOLD;
-  const env = options.env ?? process.env;
-  const isJoinedPredicate = typeof options.isJoined === 'function' ? options.isJoined : null;
-  const selectedToolsFor = options.getSelectedTools ?? (event => event?.systemPromptOptions?.selectedTools);
-  const states = new Map();
-
-  // Fail closed: a globally installed extension must not nudge unrelated sessions.
-  const isJoined = ctx => {
-    if (!isJoinedPredicate) return false;
-    try { return Boolean(isJoinedPredicate(ctx)); } catch { return false; }
-  };
-
-  const sessionKey = ctx => {
-    const id = ctx?.sessionManager?.getSessionId?.();
-    return typeof id === 'string' && id ? id : 'default';
-  };
-  const stateFor = ctx => {
-    const key = sessionKey(ctx);
-    let state = states.get(key);
-    if (!state) {
-      if (states.size >= 64) states.delete(states.keys().next().value);
-      state = {
-        joined: false,
-        bulk: 0,
-        nudged: false,
-        nudgePending: false,
-        caps: detectDelegationTools(null),
-        restrictions: restrictionState(false, false, false),
-      };
-      states.set(key, state);
-    }
-    return state;
-  };
-  const disabled = () => delegationPolicyDisabled(env);
-
-  const disposers = [];
-  disposers.push(pi.on('before_agent_start', (event, ctx) => {
-    const state = stateFor(ctx);
-    // Revalidate membership once per run; counting/nudging below use this flag.
-    state.joined = isJoined(ctx);
-    state.bulk = 0;
-    state.nudged = false;
-    state.nudgePending = false;
-    state.caps = detectDelegationTools(selectedToolsFor(event, ctx));
-    if (!state.joined) return undefined;
-    if (event?.messageType === 'user' && typeof event.prompt === 'string') {
-      state.restrictions = mergeDelegationEventRestrictions(state.restrictions, event);
-    }
-    return undefined;
-  }));
-  disposers.push(pi.on('input', (event, ctx) => {
-    const state = stateFor(ctx);
-    state.joined = isJoined(ctx);
-    if (!state.joined) return undefined;
-    if (typeof event?.text === 'string') {
-      state.restrictions = mergeDelegationEventRestrictions(state.restrictions, event, true);
-    }
-    return undefined;
-  }));
-  disposers.push(pi.on('tool_execution_end', (event, ctx) => {
-    const state = stateFor(ctx);
-    if (!state.joined || disabled() || event?.parentToolCallId || event?.isError) return;
-    if (!BULK_TOOLS.has(event?.toolName)) return;
-    state.bulk += 1;
-    if (state.bulk >= threshold) state.nudgePending = true;
-  }));
-  disposers.push(pi.on('context', (event, ctx) => {
-    const state = stateFor(ctx);
-    if (!state.joined || disabled()) return undefined;
-    if (!state.nudgePending || state.nudged) return undefined;
-    if (!state.caps?.available || state.restrictions?.blocked) return undefined;
-    if (!Array.isArray(event?.messages)) return undefined;
-    const content = buildDelegationNudge(state.bulk, {
-      threshold,
-      selectedTools: state.caps.selectedTools,
-      restrictions: state.restrictions,
-    });
-    if (!content) return undefined;
-    state.nudged = true;
-    state.nudgePending = false;
-    return {
-      messages: [
-        ...event.messages,
-        { role: 'custom', customType: DELEGATION_NUDGE_TYPE, content, display: false, timestamp: Date.now() },
-      ],
-    };
-  }));
-
-  return () => {
-    for (const dispose of disposers) {
-      try { dispose?.(); } catch { /* Disposal must not break session shutdown. */ }
-    }
-    states.clear();
-  };
+export function registerDelegationPolicy(_pi, _options = {}) {
+  return () => {};
 }

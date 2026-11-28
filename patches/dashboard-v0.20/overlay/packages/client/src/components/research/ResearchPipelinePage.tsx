@@ -26,13 +26,13 @@ import { ResearchStartGuide } from "./ResearchStartGuide.js";
 import { executionRoleName, ResearchExecutionPanels, type ResearchExecutionPanelsHandle } from "./ResearchExecutionPanels.js";
 import { ResearchMainAgentControls, useResearchMainAgent } from "./ResearchMainAgentControls.js";
 import {
-  getCollaborationQueueData,
   ResearchCollaborationMetaControls,
   ResearchCollaborationPanel,
   ResearchDispatchQueueDrawer,
 } from "./ResearchCollaborationPanel.js";
 import { summarizePlansForScope } from "./research-plan-topology.js";
 import { ResearchMainPlanProgress } from "./ResearchPlanProgressBar.js";
+import { ResearchPlanTodoPanel } from "./ResearchPlanTodoPanel.js";
 import { useResearchCollaboration } from "./use-research-collaboration.js";
 import { ResearchAccessControls } from "./ResearchAccessControls.js";
 import { ResearchClaimPanels } from "./ResearchClaimPanels.js";
@@ -88,13 +88,16 @@ export function ResearchPipelinePage({
   const { t } = useI18n(), apiBase = useApiBase();
   const splitWorkspace = useOptionalSplitWorkspace();
   const collaboration = useResearchCollaboration(cwd, visible, connectionGeneration);
-  const { totalQueued } = getCollaborationQueueData(collaboration.snapshot);
-  const [queueOpen, setQueueOpen] = useState(totalQueued > 0);
-  const prevTotalQueuedRef = useRef(totalQueued);
-  useEffect(() => {
-    if (prevTotalQueuedRef.current === 0 && totalQueued > 0) setQueueOpen(true);
-    prevTotalQueuedRef.current = totalQueued;
-  }, [totalQueued]);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [queuePlanId, setQueuePlanId] = useState<string | null>(null);
+  const [todoPlanId, setTodoPlanId] = useState<string | null>(null);
+  const openQueueModal = (planId?: string) => {
+    setQueuePlanId(planId ?? null);
+    setQueueOpen(true);
+  };
+  const closeQueueModal = () => {
+    setQueueOpen(false);
+  };
   const mainAgent = useResearchMainAgent({ cwd, visible, connectionGeneration, refreshSignal, managed: {
     selectedId: collaboration.snapshot?.currentMainSessionId ?? null, pending: collaboration.pending,
     available: collaboration.snapshot?.adopted === true, error: collaboration.error,
@@ -109,6 +112,15 @@ export function ResearchPipelinePage({
   const [selected, setSelection] = useState<{ scope: string; role: ConfiguredRole; execution?: ResearchExecution; stage: StageId | null } | null>(null);
   const [highlightedPlanId, setHighlightedPlanId] = useState<string | null>(null);
   const currentTenure = collaboration.snapshot?.tenures.find(row => row.id === collaboration.snapshot?.currentTenureId);
+  const collaborationSessionTitles = useMemo(() => {
+    const titles: Record<string, string> = {};
+    for (const tenure of collaboration.snapshot?.tenures ?? []) {
+      for (const [sid, snap] of Object.entries(tenure.snapshots ?? {})) {
+        if (snap?.title) titles[sid] = snap.title;
+      }
+    }
+    return titles;
+  }, [collaboration.snapshot]);
   const mainPlanSummary = useMemo(
     () =>
       collaboration.snapshot && (currentTenure || collaboration.snapshot.plans.length > 0)
@@ -116,9 +128,10 @@ export function ResearchPipelinePage({
             tenureId: currentTenure?.id,
             mainSessionId: collaboration.snapshot.currentMainSessionId,
             sessionIds: currentTenure?.sessionIds,
+            sessionTitles: collaborationSessionTitles,
           })
         : null,
-    [collaboration.snapshot, currentTenure],
+    [collaboration.snapshot, currentTenure, collaborationSessionTitles],
   );
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [workspaceWidth, setWorkspaceWidth] = useState(0);
@@ -180,11 +193,34 @@ export function ResearchPipelinePage({
 
   const scope = JSON.stringify([apiBase, cwd, connectionGeneration, adoption?.id, state?.charter]);
   const selection = selected?.scope === scope ? selected : null;
-  useEffect(() => { setViewStage(null); setSelection(null); setHighlightedPlanId(null); setIntakeOpen(false); setIntakeVisited(false); setShowAllAttempts(false); setShowAllActions(false); }, [scope]);
+  useEffect(() => { setViewStage(null); setSelection(null); setHighlightedPlanId(null); setQueueOpen(false); setQueuePlanId(null); setTodoPlanId(null); setIntakeOpen(false); setIntakeVisited(false); setShowAllAttempts(false); setShowAllActions(false); }, [scope]);
+  const handleInspectQueueSession = (sessionId: string) => {
+    setQueueOpen(false);
+    setTodoPlanId(null);
+    const observed = projection.executions.find(row => row.kind === "pi-session" && row.sessionId === sessionId);
+    let snapMeta: { title?: string; role?: string; model?: string; status?: string } | undefined;
+    for (const tenure of [...(collaboration.snapshot?.tenures ?? [])].reverse()) {
+      if (tenure.snapshots[sessionId]) {
+        snapMeta = tenure.snapshots[sessionId];
+        break;
+      }
+    }
+    const roleName = snapMeta?.role || observed?.role || "Multi-Agent";
+    const execution: ResearchExecution = observed ?? {
+      id: `session-${sessionId}`,
+      sessionId,
+      kind: "pi-session",
+      source: "workflow-record",
+      evidence: [],
+      status: snapMeta?.status ?? "unknown",
+      role: snapMeta?.role,
+      observedModel: snapMeta?.model,
+    };
+    setSelection({ scope, role: { name: roleName, skills: [] }, execution, stage: null });
+  };
   const handleSelectPlan = (planId: string) => {
     setHighlightedPlanId(prev => (prev === planId ? null : planId));
-    if (surface === "legacy" && !shows("teams")) handleTabChange("teams");
-    if (surface === "workbench" && !shows("teams")) onOpenAgents?.();
+    setTodoPlanId(prev => (prev === planId ? null : planId));
   };
   useEffect(() => { setIntakeOpen(false); }, [surface]);
   const selectedStage = viewStage ?? projection.stage;
@@ -452,7 +488,10 @@ export function ResearchPipelinePage({
                 <ResearchCollaborationMetaControls
                   controller={collaboration}
                   queueOpen={queueOpen}
-                  onToggleQueue={() => setQueueOpen(value => !value)}
+                  onToggleQueue={() => {
+                    setQueuePlanId(null);
+                    setQueueOpen(value => !value);
+                  }}
                 />
               ) : undefined
             }
@@ -460,14 +499,32 @@ export function ResearchPipelinePage({
               mainPlanSummary ? (
                 <ResearchMainPlanProgress
                   summary={mainPlanSummary}
-                  selectedPlanId={highlightedPlanId}
+                  selectedPlanId={todoPlanId ?? highlightedPlanId}
                   onSelectPlan={handleSelectPlan}
                 />
               ) : undefined
             }
           />
         </div>
-        <ResearchDispatchQueueDrawer controller={collaboration} queueOpen={queueOpen} />
+        <ResearchDispatchQueueDrawer
+          controller={collaboration}
+          queueOpen={queueOpen}
+          onClose={closeQueueModal}
+          focusedPlanId={queuePlanId}
+          onClearFocusPlan={() => setQueuePlanId(null)}
+          onInspectSession={handleInspectQueueSession}
+        />
+        <ResearchPlanTodoPanel
+          planId={todoPlanId}
+          snapshot={collaboration.snapshot}
+          controller={collaboration}
+          onSelectPlan={planId => {
+            setTodoPlanId(planId);
+            setHighlightedPlanId(planId);
+          }}
+          onClose={() => setTodoPlanId(null)}
+          onInspectSession={handleInspectQueueSession}
+        />
         {surface === "workbench" && !adopted && <div className="research-intake-hint"><div><strong>接入已有研究资料</strong><p>选择目录资料与历史会话，核对来源后确认接入。</p></div><button type="button" className="research-workspace-action" onClick={openIntake}>开始接入</button></div>}
         {surface === "workbench" && (activeTab === "workflow" || activeTab === "all") && <ResearchStageOverview projection={projection} objective={objective} viewStage={viewStage} onSelectStage={setViewStage} onStartStage={stage => stageLauncher.current?.openStage(stage)} onOpenArtifact={onOpenArtifact} />}
         {/* TAB 1: Agent 协作网络 (Teams View) */}
@@ -480,6 +537,7 @@ export function ResearchPipelinePage({
               stale={observationStale}
               hideInlineToolbar
               highlightedPlanId={highlightedPlanId}
+              onOpenQueue={openQueueModal}
               onAgent={(role, execution) => setSelection({ scope, role, execution, stage: null })}
             />
           </div>

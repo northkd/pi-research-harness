@@ -30,6 +30,7 @@ export function createResearchServices(deps) {
     store: createResearchSessionStore(path.join(deps.privateDir, 'session-reservations')),
     getSession: deps.getSession,
     listSessions: deps.listSessions,
+    history: deps.history,
     verifyParent,
     principalForSession,
     prepareSpawn: deps.prepareSpawn,
@@ -78,7 +79,11 @@ export function createResearchServices(deps) {
     history: deps.history,
     authorize: authorizeRetainedReport,
     createSession: sessions.create,
+    activateSession: sessions.activate,
     releaseSession: sessions.release,
+    resumeSession: deps.resumeSession,
+    clearTerminalReport: (token, reopenedById) => communication?.clearTerminalReport?.(token, reopenedById),
+    hasOpenParentRequest: id => communication?.hasOpenParentRequest?.(id) ?? false,
     bindDeferredPeerMessages: input => communication.bindDeferredPeerMessages(input),
     expireDeferredPeerMessages: input => communication.expireDeferredPeerMessages(input),
     notifyParent: deps.notifyParent,
@@ -94,18 +99,30 @@ export function createResearchServices(deps) {
     store: createResearchCommunicationStore(path.join(deps.privateDir, 'communication')),
     getSession: deps.getSession,
     listSessions: deps.listSessions,
+    history: deps.history,
     authorize: sessions.authorize,
+    verifyHistoricalChild: async ({ parent, principal, expiresAt }) => {
+      const verified = await verifyParent({ parent, principal, expiresAt });
+      return { parent, ...verified, cwd: parent.cwd };
+    },
     releaseSession: sessions.release,
     activateSession: sessions.activate,
+    resumeSession: deps.resumeSession,
     authorizeRetainedReport,
-    beforeResume: async ({ parent, verified, child, childVerified }) => {
+    beforeResume: async ({ parent, verified, child, childVerified, resuming }) => {
+      const childEnded = ['ended', 'closed', 'archived'].includes(child?.status);
       if (managed) {
         collaboration.assertDispatchAllowed({ parent, verified });
-        collaboration.assertDispatchAllowed({ parent: child, verified: childVerified });
+        if (!childEnded) collaboration.assertDispatchAllowed({ parent: child, verified: childVerified });
       }
-      await deps.beforeLaunch({ parent: child });
+      // Only enforce the process-launch resource floor when reactivating a
+      // capacity-released or exited child. Replying to or guiding an already-live
+      // child launches no process and must stay available during memory pressure.
+      if (resuming) await deps.beforeLaunch({ parent: child });
     },
     reportAssignment: input => dispatch.handle(input),
+    reopenAssignment: input => dispatch.reopenAssignment(input),
+    isAssignmentNonActive: token => dispatch.isAssignmentNonActive(token),
     getPeerContext: id => dispatch.getPeerContext(id),
     getPeerTask: input => dispatch.getPeerTask(input),
     isAssignmentCompleted: token => dispatch.isCompleted(token),
@@ -122,6 +139,7 @@ export function createResearchServices(deps) {
     join: (access, sessionId) => deps.joinParticipant ? deps.joinParticipant(access, sessionId) : Promise.reject(new ResearchCollaborationError(503, 'research-collaboration-unavailable')),
     detach: (access, sessionId) => deps.detachParticipant ? deps.detachParticipant(access, sessionId) : Promise.reject(new ResearchCollaborationError(503, 'research-collaboration-unavailable')),
     listPlans: scope => dispatch.listForScope(scope),
+    listCommunications: scope => communication.listForScope(scope),
     manageQueue: input => dispatch.manageQueue(input),
     suspendSessions: (ids, reason, tenureId) => dispatch.suspendSessions(ids, reason, tenureId),
     isSessionCompleted: token => dispatch.isCompleted(token) || communication.isCompleted(token),

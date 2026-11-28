@@ -2666,6 +2666,13 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     broadcast: (id, update) => browserGateway.broadcastSessionUpdated(id, update),
   });
   browserGateway.setResWorkflowSpawnSupport({ prepare: resWorkflowParticipants.prepareSpawn, registry: pendingPluginRefRegistry });
+  // ONE terminator behind every unattended kill (reaper, caps, automation stop,
+  // and completed Multi-Agent auto-retirement): strategy-agnostic (keys on
+  // session.pid, not the headless registry). See change: fix-session-reclaim-tmux.
+  const sessionTerminator = createSessionTerminator({
+    sessionManager,
+    headlessPidRegistry: browserGateway.headlessPidRegistry,
+  });
   const researchCollaboration = registerResWorkflowResearchSessionRoutes(fastify, {
     networkGuard, sessionManager,
     history: resWorkflowAccessDeps.history,
@@ -2674,11 +2681,59 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     detachParticipant: (access, id) => resWorkflowParticipants!.detach(access, id),
     notifyParent: (sessionId, text, promptId) => piGateway.sendToSession(sessionId, { type: "send_prompt", sessionId, text, promptId, delivery: "steer" }),
     subscribeReceiptAcks: handler => { dispatchReceiptAcks.add(handler); return () => { dispatchReceiptAcks.delete(handler); }; },
+    terminateSession: (sessionId, opts) => sessionTerminator.terminate(sessionId, opts),
+    sendShutdownHint: (sessionId) => piGateway.sendToSession(sessionId, { type: "shutdown", sessionId }),
+    markManualClose: (sessionId) => {
+      const rec = sessionManager.get(sessionId);
+      if (rec?.sessionFile) {
+        metaPersistence.setLiveness(rec.sessionFile, { live: false, closedReason: "manual" });
+      }
+      if (rec && rec.status !== "ended" && rec.closedReason === undefined) {
+        sessionManager.update(sessionId, { closedReason: "manual" });
+      }
+    },
+    unregisterIfAlive: (sessionId) => {
+      const rec = sessionManager.get(sessionId);
+      if (rec && rec.status !== "ended") {
+        sessionManager.unregister(sessionId, { closedReason: "manual" });
+      }
+    },
+    hasPendingUiRequest: (id) => browserGateway.hasPendingUiRequest(id),
+    hasPendingPromptRequests: (id) => browserGateway.hasPendingPromptRequests(id),
+    hasSubscriber: (id) => browserGateway.getSubscriberCount(id) > 0,
     accessFor: (cwd, identity) => resWorkflowAccess(resWorkflowAccessDeps, identity, cwd),
     prepareSpawn: (cwd, identity, verified) => resWorkflowParticipants!.prepareSpawn(cwd, identity, verified),
     pendingPluginRefRegistry, pendingPrincipalOwnerRegistry,
     initialPrompts: pendingInitialPromptRegistry,
     spawn: (cwd, options) => spawnPiSession(cwd, options),
+    resumeSession: async (session) => {
+      if (!session?.cwd || !session?.sessionFile || !fs.existsSync(session.sessionFile)) {
+        return { success: false, message: "session file unavailable for resume" };
+      }
+      pendingResumeIntents.record(session.id, "front");
+      const strategy = loadConfig().spawnStrategy;
+      const result = await spawnPiSession(session.cwd, {
+        sessionFile: session.sessionFile,
+        mode: "resume",
+        strategy,
+      });
+      if (result.success) {
+        armSpawnWatchdog(session.cwd, strategy, result);
+        if (result.process && result.pid) {
+          browserGateway.headlessPidRegistry.register(
+            result.pid,
+            session.cwd,
+            result.process,
+            result.spawnToken,
+            keeperOptsFromSpawnResult(result),
+          );
+        }
+        if (result.dashboardSpawned) {
+          pendingDashboardSpawns.set(session.cwd, (pendingDashboardSpawns.get(session.cwd) ?? 0) + 1);
+        }
+      }
+      return result;
+    },
     spawnStrategy: () => loadConfig().spawnStrategy,
     isResolverActive: identityEnforced,
     onSpawnResult: (cwd, result) => {
@@ -2774,13 +2829,8 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   // Reclaims the automation-produced ephemeral sessions #383 is about; the
   // acquire registry + caps are shared-layer modules the embed front constructs.
   // See change: add-embed-session-lifecycle.
-  // ONE terminator behind every unattended kill (reaper, caps, automation stop):
-  // strategy-agnostic (keys on session.pid, not the headless registry).
-  // See change: fix-session-reclaim-tmux.
-  const sessionTerminator = createSessionTerminator({
-    sessionManager,
-    headlessPidRegistry: browserGateway.headlessPidRegistry,
-  });
+  // `sessionTerminator` is constructed above so both res-workflow child
+  // retirement and embed-lifecycle share the single terminator instance.
   const abortSpawnedRunImpl = createAbortSpawnedRun({
     terminate: sessionTerminator.terminate,
     sendShutdownHint: (sessionId) => piGateway.sendToSession(sessionId, { type: "shutdown", sessionId }),

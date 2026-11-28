@@ -201,6 +201,10 @@ export function createResearchCollaborationService(deps) {
     });
     const ownerKeys = [...new Set([state.ownerKey, ...state.tenures.map(row => row.dispatchOwnerKey).filter(Boolean)])];
     const scopedPlans = ownerKeys.flatMap(ownerKey => deps.listPlans?.({ cwd: state.cwd, ownerKey }) ?? []);
+    const scopedCommunications = ownerKeys.flatMap(ownerKey => deps.listCommunications?.({ cwd: state.cwd, ownerKey }) ?? []);
+    const communications = [...new Map(scopedCommunications.map(row => [row.id, row])).values()]
+      .sort((a, b) => Date.parse(a.createdAt ?? 0) - Date.parse(b.createdAt ?? 0))
+      .slice(-60);
     const plans = [...new Map(scopedPlans.map(plan => [plan.id, plan])).values()].map(plan => ({
       ...plan,
       tenureId: plan.tenureId ?? null,
@@ -221,7 +225,7 @@ export function createResearchCollaborationService(deps) {
       currentTenureId: current?.id ?? null, currentMainSessionId: current?.mainSessionId ?? null,
       limits: { ...state.limits }, limitMaximums: { ...COLLABORATION_LIMIT_MAXIMUMS },
       operationalLimits: { maxTotal: RESEARCH_SESSION_LIMITS.maxTotal, maxResident: RESEARCH_SESSION_LIMITS.maxResident, minAvailableMemoryBytes: RESEARCH_SESSION_LIMITS.minAvailableMemory },
-      tenures, detachedSessionIds: Object.keys(state.detached), plans,
+      tenures, detachedSessionIds: Object.keys(state.detached), plans, communications,
       nativeQueue: state.nativeQueue.map(({ leaseToken: _token, attemptId: _attempt, lastSeenAt, ...row }) => {
         const unknown = !terminalNative(row) && row.status !== 'queued' && (!lastSeenAt || now().getTime() - Date.parse(lastSeenAt) > 45_000);
         return copy(unknown ? { ...row, status: 'recovery-required', queueReason: 'heartbeat-missing' } : row);
@@ -416,9 +420,9 @@ export function createResearchCollaborationService(deps) {
       if (input.reactivation === true) {
         const child = allSessions().find(row => sameScopeRow(row, state) && provenance(row)?.spawnToken === spawnToken);
         const childProvenance = provenance(child);
-        if (!child || !live(child) || childProvenance?.parentSessionId !== parent.id || childProvenance.requestId !== requestId
+        if (!child || (!input.allowExited && !live(child)) || childProvenance?.parentSessionId !== parent.id || childProvenance.requestId !== requestId
             || childProvenance.tenureId && childProvenance.tenureId !== settings.tenureId) fail(409, 'research-session-resume-unavailable');
-        assertDispatchAllowed({ parent: child, verified });
+        if (live(child)) assertDispatchAllowed({ parent: child, verified });
       }
       const existing = state.sessionReservations.find(row => row.parentSessionId === parent.id && row.requestId === requestId && row.tenureId === settings.tenureId);
       if (existing) {
@@ -524,5 +528,11 @@ export function createResearchCollaborationService(deps) {
       return { status: 'queued', position: position + 1, retryAfterMs: 1000 };
     });
   }
-  return { snapshot, mutate, native, getSchedulingPolicy: policy, assertDispatchAllowed, assertParticipationAllowed, isKnownManaged, retainedBinding, acquireSchedulingReservation, releaseSchedulingReservation };
+  const isCurrentMainSession = sessionId => [...states.values()].some(state => currentOf(state)?.mainSessionId === sessionId);
+  const hasActiveChildren = sessionId => [...states.values()].some(state =>
+    state.nativeQueue.some(row => row.parentSessionId === sessionId && !terminalNative(row))
+    || (state.sessionReservations ?? []).some(row => row.parentSessionId === sessionId && row.status !== 'released'));
+  const hasReactivatedReservation = spawnToken => !!spawnToken && [...states.values()].some(state =>
+    (state.sessionReservations ?? []).some(row => row.spawnToken === spawnToken && row.status !== 'released' && row.reactivated === true));
+  return { snapshot, mutate, native, getSchedulingPolicy: policy, assertDispatchAllowed, assertParticipationAllowed, isKnownManaged, retainedBinding, acquireSchedulingReservation, releaseSchedulingReservation, isCurrentMainSession, hasActiveChildren, hasReactivatedReservation };
 }

@@ -13,7 +13,18 @@ const PEER_ERRORS = {
 };
 const result = (value, error = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...(error ? { isError: true } : {}) });
 
+const TRANSIENT_RETRY_DELAYS_MS = [400, 1200];
+const sleepMs = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) { reject(new Error('research-communication-aborted')); return; }
+  const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+  const onAbort = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(new Error('research-communication-aborted')); };
+  signal?.addEventListener('abort', onAbort, { once: true });
+});
+
 export function createResearchCommunicationClient(options = {}) {
+  const maxRetries = Number.isInteger(options.maxTransientRetries) && options.maxTransientRetries >= 0 ? options.maxTransientRetries : TRANSIENT_RETRY_DELAYS_MS.length;
+  const retryDelays = Array.isArray(options.retryDelaysMs) ? options.retryDelaysMs : TRANSIENT_RETRY_DELAYS_MS;
+  const wait = options.sleep ?? sleepMs;
   return async (ctx, params, signal) => {
     const joined = await (options.readContext ?? requireWorkbenchRecordContext)(ctx);
     const sessionId = ctx?.sessionManager?.getSessionId?.();
@@ -22,15 +33,32 @@ export function createResearchCommunicationClient(options = {}) {
     const auth = await (options.resolveAuth ?? (() => readDashboardLocalAuth(options.authOptions)))();
     const url = new URL('/api/res-workflow/communication', auth.baseUrl);
     if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname)) throw new Error('research-communication-destination-not-loopback');
-    const response = await (options.fetchImpl ?? globalThis.fetch)(url, {
-      method: 'POST', redirect: 'error',
-      headers: { 'content-type': 'application/json', 'x-pi-local-token': auth.token },
-      body: JSON.stringify({ ...params, sessionId }),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-    });
-    const value = await readBoundedJson(response, 24 * 1024);
-    if (!response.ok || value?.status !== 'ok') throw new Error(value?.code ?? 'research-communication-unavailable');
-    return value;
+    for (let attempt = 0; ; attempt += 1) {
+      let response;
+      try {
+        response = await (options.fetchImpl ?? globalThis.fetch)(url, {
+          method: 'POST', redirect: 'error',
+          headers: { 'content-type': 'application/json', 'x-pi-local-token': auth.token },
+          body: JSON.stringify({ ...params, sessionId }),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+        });
+      } catch (error) {
+        if (!signal?.aborted && attempt < maxRetries) {
+          await wait(retryDelays[Math.min(attempt, retryDelays.length - 1)] ?? 400, signal);
+          continue;
+        }
+        throw error;
+      }
+      const value = await readBoundedJson(response, 24 * 1024);
+      if (response.ok && value?.status === 'ok') return value;
+      const code = value?.code ?? 'research-communication-unavailable';
+      const transient = (response.status >= 500 || response.status === 429) && code === 'research-communication-unavailable';
+      if (transient && !signal?.aborted && attempt < maxRetries) {
+        await wait(retryDelays[Math.min(attempt, retryDelays.length - 1)] ?? 400, signal);
+        continue;
+      }
+      throw new Error(code);
+    }
   };
 }
 
@@ -43,7 +71,7 @@ export function registerWorkbenchCommunicationTool(pi, options = {}) {
     description: 'Durable communication between verified direct parents/children and same-plan peers in this research workbench. Send a request/progress/decision, reply to an exact request, explicitly ack handled messages, or report your own result to parent. Peer addressing accepts sessionId or taskId; queued tasks accept deferred progress/decision by taskId. Send progress/decision to peers for a team broadcast. This works for formal research_session collaborators; contact_supervisor belongs to ordinary subagents. The server verifies scope and lineage and retains messages across restarts. Delivery acknowledgements do not mean processing. Messages preserve existing assignment and permission boundaries.',
     promptSnippet: 'Handle parent/child and same-plan peer messages through a durable native channel; use dispatch status peers for discovery and report results to parent.',
     promptGuidelines: [
-      'For formal parent-child help, send kind=request to parent; its reply resolves the exact request. Escalate only what exceeds your existing authority.',
+      'For formal parent-child help, send kind=request to parent; its reply resolves the exact request. HARD RULE: when hitting missing permissions, coordination questions, or temporary/recoverable blockers, send kind=request to parent and pause your turn to stay suspended waiting for parent reply — NEVER prematurely submit report(status="blocked") while awaiting parent resolution.',
       'Use research_dispatch status peers to discover only your own plan teammates. Same-plan peers must share dispatchId, direct parent, tenure and verified workbench scope. Send/reply to in_progress peers by sessionId or taskId. Reports always go to parent.',
       'queued peers accept only progress/decision addressed by taskId as deferred notes. They appear at scheduled startup without waking the task or changing the queue. Requests to queued peers and messages to ended peers are refused; ask parent for urgent or unresolved work.',
       'Broadcast with action=send, to=peers and kind=progress or decision. Each teammate receives an independently acknowledged message; ended teammates are skipped. Request broadcasts, reply broadcasts and report broadcasts are refused.',
@@ -53,7 +81,7 @@ export function registerWorkbenchCommunicationTool(pi, options = {}) {
       'Routine progress and partial checkpoints are saved silently; status includes them. Use request for help or a decision requiring action, and report completed/blocked/failed for a result. These actionable messages notify the recipient automatically.',
       'pending lists actionable unprocessed messages and unanswered requests. Read and act, then reply to requests or ack other messages. An ack alone does not resolve a request. Wait for native notifications instead of repeatedly polling inboxes, dispatch status or resources.',
       'Direct formal collaborators report completed/partial/blocked/failed here, with actual findings. Assigned dispatcher results are forwarded to their real dispatcher assignment.',
-      'A settled dispatcher assignment cannot be reopened by request, reply or decision. On research-communication-assignment-settled, no work was started: create a new supplementary dispatcher task with new planId/taskId within the approved scope; do not retry resuming the old assignment. Unassigned direct collaborators may resume only after current shared-capacity admission.',
+      'A direct parent may reopen and resume any non-active child (blocked, failed, completed, or exited) by sending request/reply/decision to its child sessionId here, or via research_dispatch action="reopen". The host reopens the assignment and wakes the original child session automatically after capacity admission.',
       'Each branch decides its own later decomposition within the approved scope. The lead coordinates cross-branch questions and user decisions; later child tasks do not require repeated user approval.',
       'Preserve user stop/no-delegate, read-only, egress, resource and publication boundaries. Do not treat a reply as a grant or a reason to bypass a denied operation.',
     ],
@@ -78,9 +106,9 @@ export function registerWorkbenchCommunicationTool(pi, options = {}) {
         const code = /^[a-z0-9-]+$/.test(error?.message ?? '') ? error.message : 'research-communication-unavailable';
         return result({ status: 'blocked', tool: 'research_communication', error: code,
           ...(PEER_ERRORS[code] ? { retryable: false, ...PEER_ERRORS[code] } : {}),
-          ...(code === 'research-communication-assignment-settled' ? {
-            started: false, retryable: false, nextAction: 'create-new-dispatch-task',
-            message: '未启动：该子会话的派发任务已结算。请在原有授权范围内使用新的 planId / taskId 建立补充任务，不要重试恢复旧 assignment。',
+          ...(code === 'research-communication-awaiting-parent-reply' || code === 'research-dispatch-awaiting-parent-reply' ? {
+            retryable: false, nextAction: 'wait-for-parent-reply',
+            message: '当前仍有未获父 Agent 回复的 request 正在等待处理。请保持当前会话挂起等待父 Agent 回复并继续完成任务，禁止提前提交 blocked 结单。',
           } : {}),
         }, true);
       }

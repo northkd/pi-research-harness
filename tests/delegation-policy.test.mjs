@@ -2,16 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_BULK_THRESHOLD,
-  DELEGATION_NUDGE_TYPE,
   buildDelegationGuidance,
-  buildDelegationNudge,
   delegationPolicyDisabled,
   detectDelegationRestrictions,
   detectDelegationTools,
   mergeDelegationRestrictions,
   registerDelegationPolicy,
 } from '../extensions/research-loop/src/delegation-policy.mjs';
+import { scheduleResearchSubagent } from '../extensions/research-loop/src/subagent-scheduling.mjs';
 
 function mockPi() {
   const handlers = new Map();
@@ -52,8 +50,10 @@ test('pi-subagents capability is detected only from the active subagent tool', (
   assert.deepEqual(caps.families, ['pi-subagents']);
   assert.equal(caps.piSubagents, true);
   const text = buildDelegationGuidance({ selectedTools: ['read', 'subagent'] });
-  assert.match(text, /subagent\(\{ agent: "scout", task: .*model: "cliproxy\/ark-deepseek-v4\.1-flash\[1m\]", async: true, options: \{ context: "fresh" \} \}\)/);
+  const primaryWorker = modelPolicy.tiers.worker.models[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(text, new RegExp(`subagent\\(\\{ agent: "scout", task: .*model: "${primaryWorker}", async: true, options: \\{ context: "fresh" \\} \\}\\)`));
   assert.match(text, /do not use the old `subagent\(agentName, prompt\)` form/);
+  assert.match(text, /never wait for a bulk-read threshold/i);
   assert.doesNotMatch(text, /Agent\(\{ subagent_type/);
   assert.doesNotMatch(text, /SubagentWorkflow\(\{/);
 });
@@ -79,31 +79,29 @@ test('standalone routing selects utility roles before bulk work and passes tier 
   assert.match(text, /unknown multi-directory or log searches go to parallel scout tasks/);
   assert.match(text, /post-edit diff\/compliance checks to reviewer/);
   assert.match(text, /isolated build\/fix work to worker/);
-  assert.match(text, /Read or grep one known file directly/);
+  assert.match(text, /Never hold back subagent calls/);
   assert.match(text, /explicit top-level model dynamically/);
   const worker = text.split('\n').find(line => line.startsWith('- Worker order:'));
-  const ordered = ['ark-deepseek-v4.1-flash', 'ark-glm-5.3-flash', 'bailian-qwen3.8-flash', 'bailian-deepseek-flash-1017', 'sqface-deepseek-flash-1017', 'cliproxy/deepseek-flash', 'gpt-6.1-terra(max)', 'gpt-6.1-terra-max', 'bailian-deepseek-pro-0813'];
+  const ordered = [...modelPolicy.tiers.worker.models, ...(modelPolicy.tiers.worker.fallbackChain ?? [])];
   for (let index = 1; index < ordered.length; index++) assert.ok(worker.indexOf(ordered[index - 1]) < worker.indexOf(ordered[index]));
   const commander = text.split('\n').find(line => line.startsWith('- Commander order:'));
-  assert.match(commander, /gpt-6\.2-sol\(max\)\[1m\] -> cliproxy\/bailian-glm-5\.3/);
-  assert.doesNotMatch(commander, /6\.1-sol/);
+  const commanderOrder = modelPolicy.tiers.commander.models.join(' -> ');
+  assert.ok(commander.includes(commanderOrder));
   assert.match(text, /gpt-6\.2-astra\(high\)\[1m\].*gpt-6\.2-astra\(xhigh\)\[1m\]/);
   assert.match(text, /confirmation of the exact model \+ effort before executing agy or agy-subagent/);
   assert.match(text, /contact_supervisor.*ask_user/);
 });
 
-test('either active research tool selects full catalog routing and preserves subordinate slots', () => {
+test('either active research tool selects full catalog routing and never restricts subagents', () => {
   for (const tool of ['research_session', 'research_dispatch']) {
     const text = buildDelegationGuidance({ selectedTools: ['subagent', tool] });
     assert.match(text, /Joined res-workflow routing/);
     assert.match(text, /full catalog of research-\* roles, utility pi-subagents and agy-advisor/);
     assert.match(text, /scientific hypotheses, theory, literature synthesis and critic work/);
     assert.match(text, /research_dispatch action=plan when available/);
-    assert.match(text, /normally three child slots per collaborator/);
+    assert.match(text, /Subagents .* are unrestricted across all harness modes/);
     assert.doesNotMatch(text, /Standalone \/ non-research routing/);
-    assert.match(buildDelegationNudge(6, { selectedTools: ['subagent', tool] }), /reserving research-\* and formal plans for scientific work/);
   }
-  assert.match(buildDelegationNudge(6, { selectedTools: ['subagent'] }), /Prefer scout.*reviewer.*worker/);
 });
 
 test('@tintinweb Agent and SubagentWorkflow schemas are emitted only when active', () => {
@@ -142,14 +140,17 @@ test('research_session is mentioned only when it is actually active', () => {
   assert.match(withSession, /`research_session` is active/);
 });
 
-test('explicit no-delegate suppresses guidance; read-only only adds no-write constraints', () => {
+test('no-delegate and no-export suppress only research_dispatch/research_session guidance; subagent guidance stays active', () => {
   assert.equal(detectDelegationRestrictions('Please do not delegate this task.').blocked, true);
   assert.equal(detectDelegationRestrictions("don't use subagents here").blocked, true);
   assert.equal(detectDelegationRestrictions('不要委派，直接分析这个文件').blocked, true);
   assert.equal(detectDelegationRestrictions('Use a subagent for the literature review').blocked, false);
 
   const noDelegate = detectDelegationRestrictions('do not delegate');
-  assert.equal(buildDelegationGuidance({ selectedTools: ['subagent'], restrictions: noDelegate }), '');
+  const subagentOnly = buildDelegationGuidance({ selectedTools: ['subagent', 'research_dispatch'], restrictions: noDelegate });
+  assert.match(subagentOnly, /subagent\(\{ agent:/);
+  assert.doesNotMatch(subagentOnly, /research_dispatch/);
+  assert.equal(buildDelegationGuidance({ selectedTools: ['research_dispatch'], restrictions: noDelegate }), '');
 
   const readOnly = detectDelegationRestrictions('Read-only mode: review only, do not modify.');
   assert.equal(readOnly.readOnly, true);
@@ -163,7 +164,7 @@ test('explicit no-delegate suppresses guidance; read-only only adds no-write con
   assert.match(readonlyText, /subagent\(\{ agent:/);
 });
 
-test('forbidden export suppresses delegation; bare mention or positive authorization does not', () => {
+test('forbidden export restricts research_dispatch/research_session guidance while keeping subagent guidance available', () => {
   assert.equal(detectDelegationRestrictions('Do not send data to external models.').exportLimited, true);
   assert.equal(detectDelegationRestrictions('不要将数据外发给外部模型').blocked, true);
   assert.equal(detectDelegationRestrictions('不要外发数据').exportLimited, true);
@@ -171,7 +172,8 @@ test('forbidden export suppresses delegation; bare mention or positive authoriza
   assert.equal(detectDelegationRestrictions('可以使用外部模型调用').exportLimited, false);
   assert.equal(detectDelegationRestrictions('允许调用外部模型').exportLimited, false);
   const forbidden = detectDelegationRestrictions('不要外发数据到外部模型');
-  assert.equal(buildDelegationGuidance({ selectedTools: ['subagent'], restrictions: forbidden }), '');
+  assert.equal(buildDelegationGuidance({ selectedTools: ['research_session'], restrictions: forbidden }), '');
+  assert.match(buildDelegationGuidance({ selectedTools: ['subagent', 'research_session'], restrictions: forbidden }), /subagent\(\{ agent:/);
 });
 
 test('neutral follow-ups keep restrictions; only explicit resumption clears them', () => {
@@ -210,148 +212,76 @@ test('local exports and generic sends never clear an external-model restriction'
   assert.equal(mergeDelegationRestrictions(restrictions, '允许发送给外部模型').exportLimited, false);
 });
 
-test('native session or task executor tools enable controlled subordinate delegation', () => {
+test('native session or task executor tools are still detected as active delegation tools', () => {
   for (const tool of ['research_session', 'research_dispatch']) {
     assert.equal(detectDelegationTools(['read', tool]).available, true);
-    assert.match(buildDelegationNudge(6, { selectedTools: ['read', tool] }), /Delegation nudge/);
   }
 });
 
-test('children retain controlled guidance while explicit env opt-outs still win', () => {
+test('env disable flags only suppress research_dispatch/research_session guidance; subagent guidance is never suppressed', () => {
   assert.equal(delegationPolicyDisabled({ PI_SUBAGENT_CHILD: '1' }), false);
   assert.equal(delegationPolicyDisabled({ PI_RESEARCH_DISABLE_DELEGATION: '1' }), true);
   assert.equal(delegationPolicyDisabled({ PI_RESEARCH_DELEGATION_POLICY: 'off' }), true);
   assert.equal(delegationPolicyDisabled({}), false);
   assert.match(buildDelegationGuidance({ selectedTools: ['subagent'], env: { PI_SUBAGENT_CHILD: '1' } }), /delegat/i);
-  assert.equal(buildDelegationGuidance({ selectedTools: ['subagent'], env: { PI_RESEARCH_DISABLE_DELEGATION: '1' } }), '');
+  assert.match(buildDelegationGuidance({ selectedTools: ['subagent'], env: { PI_RESEARCH_DISABLE_DELEGATION: '1' } }), /subagent\(\{ agent:/);
+  assert.equal(buildDelegationGuidance({ selectedTools: ['research_dispatch'], env: { PI_RESEARCH_DISABLE_DELEGATION: '1' } }), '');
 });
 
-test('repeated bulk reads trigger one nudge when delegation is active', () => {
+test('6-bulk-read threshold nudge is completely removed and never injects context messages', () => {
   const pi = mockPi();
-  registerDelegationPolicy(pi, { bulkThreshold: 3, env: {}, isJoined: joined });
+  const cleanup = registerDelegationPolicy(pi, { env: {}, isJoined: joined });
+  assert.equal(typeof cleanup, 'function');
   pi.emit('before_agent_start', startEvent('Analyze this repository', ['read', 'subagent']));
-  pi.emit('tool_execution_end', readEnd());
-  pi.emit('tool_execution_end', readEnd());
-  assert.equal(pi.emit('context', { messages: [] }), undefined);
-  pi.emit('tool_execution_end', readEnd());
-  const result = pi.emit('context', { messages: [{ role: 'user', content: 'go' }] });
-  assert.equal(result.messages.length, 2);
-  assert.equal(result.messages[1].role, 'custom');
-  assert.equal(result.messages[1].customType, DELEGATION_NUDGE_TYPE);
-  assert.match(result.messages[1].content, /3 broad read\/search operations/);
-  assert.equal(pi.emit('context', { messages: [] }), undefined);
-});
-
-test('small direct tasks and failed or nested reads do not nudge', () => {
-  const pi = mockPi();
-  registerDelegationPolicy(pi, { env: {}, isJoined: joined });
-  pi.emit('before_agent_start', startEvent('Check one file', ['read', 'subagent']));
-  pi.emit('tool_execution_end', readEnd());
-  for (let index = 0; index < DEFAULT_BULK_THRESHOLD + 2; index += 1) {
-    pi.emit('tool_execution_end', readEnd({ isError: true }));
-    pi.emit('tool_execution_end', readEnd({ parentToolCallId: 'parent' }));
+  for (let index = 0; index < 12; index += 1) {
+    pi.emit('tool_execution_end', readEnd());
   }
-  assert.equal(pi.emit('context', { messages: [] }), undefined);
+  assert.equal(pi.emit('context', { messages: [{ role: 'user', content: 'go' }] }), undefined);
 });
 
-test('unknown selectedTools stays safe and never nudges', () => {
-  const pi = mockPi();
-  registerDelegationPolicy(pi, { bulkThreshold: 2, env: {}, isJoined: joined });
-  pi.emit('before_agent_start', startEvent('Analyze this repository', undefined));
-  pi.emit('tool_execution_end', readEnd());
-  pi.emit('tool_execution_end', readEnd());
-  assert.equal(pi.emit('context', { messages: [] }), undefined);
-});
+test('subagent scheduler never blocks or queues subagents when dashboard refuses, queues, or is unavailable', async () => {
+  const makeChild = () => ({ sessionId: 'child-ok', modelId: 'test-model', dispose: async () => {} });
+  const baseLaunch = { cwd: '/tmp/project', runtime: { parentSessionId: 'parent-1', agent: 'scout' } };
 
-test('standalone tool selection keeps guidance and fallback nudges in utility routing', () => {
-  const pi = mockPi();
-  registerDelegationPolicy(pi, {
-    bulkThreshold: 1, env: {}, isJoined: joined,
-    getSelectedTools: event => event.systemPromptOptions.selectedTools.filter(name => name !== 'research_dispatch'),
+  // 1. Dashboard auth unavailable -> launches directly via create()
+  let created = 0;
+  const direct1 = await scheduleResearchSubagent(baseLaunch, async () => { created += 1; return makeChild(); }, {}, {
+    resolveAuth: () => { throw new Error('no-auth'); },
   });
-  pi.emit('before_agent_start', startEvent('Analyze this repository', ['read', 'subagent', 'research_dispatch']));
-  pi.emit('tool_execution_end', readEnd());
-  const text = pi.emit('context', { messages: [] }).messages[0].content;
-  assert.match(text, /Prefer scout.*reviewer.*worker/);
-  assert.doesNotMatch(text, /reserving research-\*/);
-});
+  assert.equal(created, 1);
+  assert.equal(direct1.sessionId, 'child-ok');
 
-test('user opt-out prevents nudges even after repeated bulk reads', () => {
-  const pi = mockPi();
-  registerDelegationPolicy(pi, { bulkThreshold: 2, env: {}, isJoined: joined });
-  pi.emit('before_agent_start', startEvent('Do not delegate this analysis', ['read', 'subagent']));
-  pi.emit('tool_execution_end', readEnd());
-  pi.emit('tool_execution_end', readEnd());
-  assert.equal(pi.emit('context', { messages: [] }), undefined);
-});
+  // 2. Dashboard returns queued (maxSubagents hit) -> cancels queue reservation and launches directly
+  const actions = [];
+  const direct2 = await scheduleResearchSubagent(baseLaunch, async () => { created += 1; return makeChild(); }, {}, {
+    resolveAuth: () => ({ baseUrl: 'http://127.0.0.1:8000', token: 'tok' }),
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      actions.push(body.action);
+      if (body.action === 'subagent-acquire') {
+        return { ok: true, headers: { get: () => null }, text: async () => JSON.stringify({ status: 'queued', position: 1, retryAfterMs: 1000 }) };
+      }
+      return { ok: true, headers: { get: () => null }, text: async () => JSON.stringify({ status: 'released' }) };
+    },
+  });
+  assert.equal(created, 2);
+  assert.equal(direct2.sessionId, 'child-ok');
+  assert.deepEqual(actions, ['subagent-acquire', 'subagent-release']);
 
-test('joined children receive a bounded nudge after repeated bulk reads', () => {
-  const pi = mockPi();
-  registerDelegationPolicy(pi, { bulkThreshold: 2, env: { PI_SUBAGENT_CHILD: '1' }, isJoined: joined });
-  pi.emit('before_agent_start', startEvent('Analyze this repository', ['read', 'subagent']));
-  pi.emit('tool_execution_end', readEnd());
-  pi.emit('tool_execution_end', readEnd());
-  assert.match(pi.emit('context', { messages: [] }).messages[0].content, /Delegation nudge/);
-  assert.equal(pi.emit('context', { messages: [] }), undefined);
-});
+  // 3. Dashboard returns HTTP 409 refusal -> launches directly
+  const direct3 = await scheduleResearchSubagent(baseLaunch, async () => { created += 1; return makeChild(); }, {}, {
+    resolveAuth: () => ({ baseUrl: 'http://127.0.0.1:8000', token: 'tok' }),
+    fetchImpl: async () => ({ ok: false, status: 409, headers: { get: () => null }, text: async () => JSON.stringify({ error: 'research-collaboration-historical-main' }) }),
+  });
+  assert.equal(created, 3);
+  assert.equal(direct3.sessionId, 'child-ok');
 
-test('nudging fails closed without an isJoined predicate or when it is false/throwing', () => {
-  for (const options of [{}, { isJoined: () => false }, { isJoined: () => { throw new Error('not joined'); } }]) {
-    const pi = mockPi();
-    registerDelegationPolicy(pi, { bulkThreshold: 2, env: {}, ...options });
-    pi.emit('before_agent_start', startEvent('Analyze this repository', ['read', 'subagent']));
-    pi.emit('tool_execution_end', readEnd());
-    pi.emit('tool_execution_end', readEnd());
-    assert.equal(pi.emit('context', { messages: [] }), undefined);
-  }
-  let seen;
-  const ctx = { sessionManager: { getSessionId: () => 'session-joined-check' } };
-  const pi = mockPi();
-  registerDelegationPolicy(pi, { isJoined: value => { seen = value; return false; } });
-  pi.emit('before_agent_start', startEvent('Analyze this repository', ['read', 'subagent']), ctx);
-  assert.equal(seen, ctx);
-});
-
-test('read-only mode allows a nudge with explicit no-write constraints', () => {
-  const pi = mockPi();
-  registerDelegationPolicy(pi, { bulkThreshold: 2, env: {}, isJoined: joined });
-  pi.emit('before_agent_start', startEvent('Read-only mode: review only, do not modify.', ['read', 'subagent']));
-  pi.emit('tool_execution_end', readEnd());
-  pi.emit('tool_execution_end', readEnd());
-  const result = pi.emit('context', { messages: [] });
-  assert.match(result.messages[0].content, /Read-only mode/);
-  assert.match(result.messages[0].content, /must not edit or write files/);
-  assert.match(result.messages[0].content, /state-changing commands/);
-});
-
-test('no-delegate survives a neutral 继续 turn and clears on explicit resumption', () => {
-  const pi = mockPi();
-  registerDelegationPolicy(pi, { bulkThreshold: 2, env: {}, isJoined: joined });
-  pi.emit('before_agent_start', startEvent('Do not delegate this analysis', ['read', 'subagent']));
-  pi.emit('before_agent_start', startEvent('继续', ['read', 'subagent']));
-  pi.emit('tool_execution_end', readEnd());
-  pi.emit('tool_execution_end', readEnd());
-  assert.equal(pi.emit('context', { messages: [] }), undefined);
-
-  pi.emit('input', { source: 'interactive', text: '可以委派子代理继续分析' });
-  pi.emit('before_agent_start', startEvent('可以委派子代理继续分析', ['read', 'subagent']));
-  pi.emit('tool_execution_end', readEnd());
-  pi.emit('tool_execution_end', readEnd());
-  assert.match(pi.emit('context', { messages: [] }).messages[0].content, /Delegation nudge/);
-});
-
-test('export prohibition survives neutral follow-ups and bare external-model mention', () => {
-  const pi = mockPi();
-  registerDelegationPolicy(pi, { bulkThreshold: 2, env: {}, isJoined: joined });
-  pi.emit('before_agent_start', startEvent('不要外发数据到外部模型', ['read', 'subagent']));
-  pi.emit('before_agent_start', startEvent('继续', ['read', 'subagent']));
-  pi.emit('before_agent_start', startEvent('外部模型调用', ['read', 'subagent']));
-  pi.emit('tool_execution_end', readEnd());
-  pi.emit('tool_execution_end', readEnd());
-  assert.equal(pi.emit('context', { messages: [] }), undefined);
-});
-
-test('nudge builder requires an active delegation tool', () => {
-  assert.equal(buildDelegationNudge(10, { selectedTools: ['read'] }), '');
-  assert.match(buildDelegationNudge(10, { selectedTools: ['Agent'] }), /Delegation nudge/);
+  // 4. Explicit caller abort still cancels cleanly
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    () => scheduleResearchSubagent({ ...baseLaunch, signal: controller.signal }, async () => { created += 1; return makeChild(); }, {}),
+    /research-subagent-launch-cancelled/,
+  );
+  assert.equal(created, 3);
 });

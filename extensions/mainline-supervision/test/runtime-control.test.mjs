@@ -61,10 +61,17 @@ test('low memory permits durable plan registration while immediate computation r
     assert.ok(store.getState().materialRevision > before, 'persisted plan metadata is retained for the next genuine checkpoint');
   }
   for (const call of [event('research_session', { role: 'numerics', task: 'Compute now' }),
-    event('subagent', { agent: 'research-numerics', task: 'Compute now' }),
     event('bash', { command: 'python3 compute.py', timeout: 10 })]) {
     assert.equal(needsResource(call), true, call.toolName);
     assert.equal(operationDecision(store, state, call).allow, false, call.toolName);
+  }
+  for (const call of [
+    event('subagent', { agent: 'research-numerics', task: 'Compute now' }),
+    event('Agent', { subagent_type: 'Explore', prompt: 'Inspect' }),
+    event('SubagentWorkflow', { scriptPath: 'check.js' }),
+  ]) {
+    assert.equal(needsResource(call), false, call.toolName);
+    assert.equal(operationDecision(store, state, call).allow, true, call.toolName);
   }
   for (const action of ['pause', 'resume']) {
     assert.equal(needsResource(event('research_dispatch', { action })), false);

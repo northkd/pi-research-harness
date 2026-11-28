@@ -298,7 +298,7 @@ describe('recorded hierarchy, Plan L1 -> Multi-Agent L2 -> Subagent L3 topology 
 
     expect(screen.getByTestId('canvas-captain-plan-progress').textContent).toContain('Plan 进度 0/1');
     const planNode = screen.getByTestId('canvas-plan-node');
-    expect(planNode.textContent).toContain('exp-and-audit');
+    expect(planNode.textContent).toContain('文献与实验执行');
     expect(planNode.textContent).toContain('1:3 Multi-Agent');
     expect(screen.getByTestId('canvas-queued-task-node')).toBeTruthy();
     expect(screen.getAllByTestId('canvas-dependency-edge')).toHaveLength(2);
@@ -320,5 +320,57 @@ describe('recorded hierarchy, Plan L1 -> Multi-Agent L2 -> Subagent L3 topology 
     expect(screen.queryByTestId('canvas-queued-task-node')).toBeNull();
     fireEvent.click(screen.getByTestId('canvas-plan-node'));
     expect(screen.getByRole('button', { name: '收起 文献与实验执行 下属节点' })).toBeTruthy();
+  });
+
+  it('highlights blocked/unfinished plan tasks directly on L2 Multi-Agent session cards and opens the queue modal', () => {
+    const clusters = makeClusters(4);
+    clusters[0]!.title = '07-数据分析后处理';
+    clusters[1]!.title = 'Na4Sn3F10 验收';
+    clusters[1]!.sessionExec.parentExecutionId = 'p-0';
+    clusters[2]!.title = 'NaSbF4 验收';
+    clusters[2]!.sessionExec.parentExecutionId = 'p-0';
+    clusters[3]!.title = 'Na3Sb5F18 验收';
+    clusters[3]!.sessionExec.parentExecutionId = 'p-0';
+    const plans: CollaborationPlan[] = [
+      {
+        id: 'plan-fluorides',
+        clientPlanId: 'three-fluorides-check',
+        parentSessionId: 's-0',
+        status: 'blocked',
+        tasks: [
+          { id: 'sn', role: 'audit-sn', task: 'Check Sn', status: 'blocked', sessionId: 's-1', summary: '抽核脚本被宿主拦截' },
+          { id: 'sb', role: 'audit-sb', task: 'Check Sb', status: 'completed', sessionId: 's-2' },
+          { id: 'sb5', role: 'audit-sb-five', task: 'Check Sb5', status: 'completed', sessionId: 's-3' },
+        ],
+      },
+    ];
+    const onCollapse = vi.fn();
+    render(
+      <ResearchAgentCanvas
+        clusters={clusters}
+        plans={plans}
+        mainSessionId="s-0"
+        onCollapse={onCollapse}
+        stale={false}
+        onAgent={vi.fn()}
+        statusLabel={label}
+        roleLabel={label}
+      />,
+    );
+
+    const planNode = screen.getByTestId('canvas-plan-node');
+    expect(planNode.textContent).toContain('2/3 (67%)');
+    expect(planNode.textContent).toContain('受阻/未完成 1');
+    expect(screen.queryByTestId('canvas-plan-open-todo')).toBeNull();
+
+    const statusBadges = screen.getAllByTestId('canvas-session-plan-task-status');
+    expect(statusBadges).toHaveLength(3);
+    const blockedBadge = statusBadges.find(el => el.getAttribute('data-task-status') === 'blocked');
+    expect(blockedBadge?.textContent).toContain('受阻 · 未完成');
+    expect(blockedBadge?.closest('[data-testid="canvas-session-node"]')?.textContent).toContain('抽核脚本被宿主拦截');
+    expect(statusBadges.filter(el => el.getAttribute('data-task-status') === 'completed')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: '收起历史批次拓扑' }));
+    expect(onCollapse).toHaveBeenCalledOnce();
   });
 });

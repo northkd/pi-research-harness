@@ -83,70 +83,63 @@ test('only server-confirmed never-joined sessions bypass research admission', as
   assert.deepEqual(f.requests.map(row => row.action), ['subagent-acquire']);
 });
 
-test('live increase starts prepared work, decrease drains without killing active children', async () => {
+test('concurrency cap never blocks subagent launches; queued requests release cleanly and pass through', async () => {
   const f = fixture({ cap: 1 }), created = [];
   const create = id => () => { created.push(id); return fakeChild(id); };
   const first = await f.run('run-1', create('child-1'));
-  const secondPromise = f.run('run-2', create('child-2'));
-  const thirdPromise = f.run('run-3', create('child-3'));
-  await flush();
-  assert.deepEqual(created, ['child-1']); assert.equal(f.active(), 1);
-  f.setLimit(2); await f.tick();
-  const second = await secondPromise;
-  assert.deepEqual(created, ['child-1', 'child-2']); assert.equal(f.active(), 2);
-  f.setLimit(1); await f.tick();
-  assert.equal(first.disposals, 0); assert.equal(second.disposals, 0);
-  await first.dispose(); await f.tick();
-  assert.equal(f.active(), 1); assert.equal(created.length, 2);
-  await second.dispose(); await f.tick();
-  const third = await thirdPromise;
+  const second = await f.run('run-2', create('child-2'));
+  const third = await f.run('run-3', create('child-3'));
   assert.deepEqual(created, ['child-1', 'child-2', 'child-3']);
-  assert.equal(f.active(), 1); await third.dispose();
+  assert.equal(f.active(), 1);
+  assert.ok(f.errors.includes('research-subagent-admission-passthrough'));
+  await first.dispose();
   assert.equal(f.active(), 0);
+  await second.dispose();
+  await third.dispose();
 });
 
-test('queued cancellation does not create a child and removes its pending request', async () => {
+test('aborted launch does not create a child and rejects with launch-cancelled', async () => {
   const f = fixture({ cap: 1 });
   const live = await f.run('live', () => fakeChild('live'));
   const controller = new AbortController(); let creates = 0;
-  const pending = f.run('waiting', () => { creates++; return fakeChild('wrong'); }, controller);
-  await flush(); controller.abort();
-  await assert.rejects(pending, /launch-cancelled/);
+  controller.abort();
+  await assert.rejects(f.run('cancelled', () => { creates++; return fakeChild('wrong'); }, controller), /launch-cancelled/);
   assert.equal(creates, 0);
-  assert.equal([...f.rows.values()].find(row => row.role === 'research-theory' && row.attemptId === 'attempt-2').status, 'released');
   assert.equal(f.active(), 1); await live.dispose();
 });
 
-test('acquire outcome lost in transit recovers the same attempt before release', async () => {
+test('acquire outcome lost in transit recovers and releases the same attempt before passing through', async () => {
   const f = fixture(); let lost = false, creates = 0;
   const options = { ...f.options, fetchImpl: async (url, request) => {
     const response = await f.handler(url, request);
     if (!lost && JSON.parse(request.body).action === 'subagent-acquire') { lost = true; throw new Error('lost transport'); }
     return response;
   } };
-  await assert.rejects(scheduleResearchSubagent(launch(), () => ++creates, {}, options), /admission-unconfirmed/);
-  assert.equal(creates, 0); assert.equal(f.active(), 0);
+  const child = await scheduleResearchSubagent(launch(), () => { creates++; return fakeChild('direct'); }, {}, options);
+  assert.equal(child.sessionId, 'direct');
+  assert.equal(creates, 1); assert.equal(f.active(), 0);
   assert.equal(new Set(f.requests.map(row => row.attemptId)).size, 1);
 });
 
-test('detachment while waiting and at the final launch boundary denies new work', async () => {
+test('detachment releases any reservation and falls back to unrestricted direct launch', async () => {
   const f = fixture({ cap: 1 });
   const first = await f.run('first', () => fakeChild('child-1'));
-  let creates = 0;
-  const pending = f.run('waiting', () => { creates++; return fakeChild('wrong'); });
-  const rejected = assert.rejects(pending, /main-historical/);
-  await flush(); f.revoke(); await f.tick(); await rejected;
-  assert.equal(creates, 0); assert.equal(first.disposals, 0);
+  f.revoke();
+  const second = await f.run('after-detach', () => fakeChild('child-2'));
+  assert.equal(second.sessionId, 'child-2');
+  assert.equal(first.disposals, 0);
   await first.dispose();
 
   const boundary = fixture();
+  let boundaryCreates = 0;
   const options = { ...boundary.options, fetchImpl: async (url, request) => {
     const result = await boundary.handler(url, request);
     if (JSON.parse(request.body).action === 'subagent-acquire') boundary.revoke();
     return result;
   } };
-  await assert.rejects(scheduleResearchSubagent(launch(), () => ++creates, {}, options), /main-historical/);
-  assert.equal(creates, 0); assert.equal(boundary.active(), 0);
+  const direct = await scheduleResearchSubagent(launch(), () => { boundaryCreates++; return fakeChild('boundary-direct'); }, {}, options);
+  assert.equal(direct.sessionId, 'boundary-direct');
+  assert.equal(boundaryCreates, 1); assert.equal(boundary.active(), 0);
 });
 
 test('native disposal is idempotent and releases only after confirmed shutdown', async () => {
@@ -175,15 +168,23 @@ test('native startup failure releases before propagating the original error', as
   assert.equal(f.active(), 0);
 });
 
-test('invalid/missing identity and unavailable server never reach create or expose credentials', async () => {
+test('invalid/missing identity and unavailable server fall back cleanly without exposing credentials', async () => {
   let creates = 0;
-  await assert.rejects(scheduleResearchSubagent({ cwd: '/fixture', runtime: {} }, () => ++creates), /parent-unavailable/);
+  const missingParent = await scheduleResearchSubagent({ cwd: '/fixture', runtime: {} }, () => { creates++; return fakeChild('no-parent'); });
+  assert.equal(missingParent.sessionId, 'no-parent');
   const f = fixture();
+  const reported = [];
   const options = { ...f.options, resolveAuth: () => { throw new Error(fixtureCredential1); } };
-  await assert.rejects(scheduleResearchSubagent(launch(), () => ++creates, {}, options), error => {
-    assert.equal(error.message, 'research-subagent-dashboard-unavailable'); return true;
-  });
-  assert.equal(creates, 0);
+  const unavailable = await scheduleResearchSubagent(
+    { ...launch(), onExtensionError: event => reported.push(event.error.message) },
+    () => { creates++; return fakeChild('no-dashboard'); },
+    {},
+    options,
+  );
+  assert.equal(unavailable.sessionId, 'no-dashboard');
+  assert.ok(reported.includes('research-subagent-dashboard-unavailable'));
+  assert.equal(reported.some(msg => msg.includes(fixtureCredential1)), false);
+  assert.equal(creates, 2);
 });
 
 test('metadata is bounded and actual child model is reported without changing launch choice', async () => {

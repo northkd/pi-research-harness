@@ -28,6 +28,8 @@ import { ResWorkflowError } from "../res-workflow/adoption-service.js";
 import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import type { ArchivedSessionSummary } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
 import type { ResWorkflowConnection } from "@blackbelt-technology/pi-dashboard-shared/res-workflow.js";
+import type { Terminate } from "../spawn-process/session-terminator.js";
+import { createResearchChildAutoRetire } from "../res-workflow/research-child-auto-retire.js";
 import { createResearchServices, ResearchCollaborationError, ResearchSessionError } from "../../../../../research-host/services/index.mjs";
 
 export interface ResearchSessionInitialPromptRegistry {
@@ -48,6 +50,7 @@ export interface ResearchSessionRouteDeps {
   pendingPrincipalOwnerRegistry: Pick<PendingPrincipalOwnerRegistry, "file" | "remove">;
   initialPrompts: ResearchSessionInitialPromptRegistry;
   spawn(cwd: string, options: { spawnToken: string; strategy?: SpawnStrategy }): Promise<SpawnResult>;
+  resumeSession?(session: { id: string; cwd: string; sessionFile?: string }, options?: { spawnToken?: string }): Promise<SpawnResult>;
   spawnStrategy?(): SpawnStrategy;
   /** Called after a launch so the host can arm its watchdog/pid registry. */
   onSpawnResult?(cwd: string, result: SpawnResult): void;
@@ -56,6 +59,20 @@ export interface ResearchSessionRouteDeps {
   privateDir?: string;
   notifyParent?(sessionId: string, text: string, promptId: string): boolean | Promise<boolean>;
   subscribeReceiptAcks?(handler: (sessionId: string, promptId: string) => void): () => void;
+  /** Shared session terminator for auto-retiring finished Multi-Agent children. */
+  terminateSession?: Terminate;
+  /** Advisory graceful `{ type: "shutdown" }` hint sent before escalating to `terminateSession`. */
+  sendShutdownHint?(sessionId: string): boolean;
+  /** Mark a retiring child as intentionally closed (`live: false, closedReason: "manual"`). */
+  markManualClose?(sessionId: string): void;
+  /** Fallback unregister when process death is confirmed before bridge unregister lands. */
+  unregisterIfAlive?(sessionId: string): void;
+  hasPendingUiRequest?(sessionId: string): boolean;
+  hasPendingPromptRequests?(sessionId: string): boolean;
+  hasSubscriber?(sessionId: string): boolean;
+  /** Test/config overrides for auto-retirement timing windows. */
+  autoRetireSettleGraceMs?: number;
+  autoRetireShutdownGraceMs?: number;
 }
 
 function sameOwner(a: { iss: string; sub: string } | null | undefined, b: { iss: string; sub: string } | null | undefined): boolean {
@@ -136,6 +153,7 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
     pendingPrincipalOwnerRegistry: deps.pendingPrincipalOwnerRegistry,
     initialPrompts: deps.initialPrompts,
     spawn: deps.spawn,
+    resumeSession: deps.resumeSession,
     spawnStrategy: deps.spawnStrategy,
     onSpawnResult: deps.onSpawnResult,
     beforeLaunch: verifyLaunch,
@@ -145,11 +163,47 @@ export function registerResWorkflowResearchSessionRoutes(fastify: FastifyInstanc
     isLocalOperator: (principal: Parameters<typeof isLocalOperator>[0]) => isLocalOperator(principal),
   });
 
-  // Reconcile real registration, queue slots and durable receipts through one scheduler.
-  const tick = () => { void services.tick().catch(() => { /* Persisted jobs remain inspectable. */ }); };
+  const autoRetire = deps.terminateSession
+    ? createResearchChildAutoRetire({
+        listSessions: () => deps.sessionManager.listAll(),
+        getSession: (id) => deps.sessionManager.get(id),
+        isSessionCompleted: (token) =>
+          services.dispatch.isCompleted(token) || services.communication.isCompleted(token),
+        completedAt: (token) => {
+          const d = services.dispatch.completedAt?.(token) ?? null;
+          const c = services.communication.completedAt?.(token) ?? null;
+          if (d === null) return c;
+          if (c === null) return d;
+          return Math.max(d, c);
+        },
+        isCurrentMainSession: (id) => services.collaboration.isCurrentMainSession?.(id) === true,
+        hasActiveChildren: (id) =>
+          services.dispatch.isWaitingCoordinator(id)
+          || services.collaboration.hasActiveChildren?.(id) === true,
+        hasOpenRequests: (id) => services.communication.hasOpenRequests?.(id) === true,
+        hasReactivatedReservation: (token) =>
+          services.collaboration.hasReactivatedReservation?.(token) === true,
+        hasPendingUiRequest: (id) => deps.hasPendingUiRequest?.(id) ?? false,
+        hasPendingPromptRequests: (id) => deps.hasPendingPromptRequests?.(id) ?? false,
+        hasSubscriber: (id) => deps.hasSubscriber?.(id) ?? false,
+        sendShutdownHint: (id) => deps.sendShutdownHint?.(id) ?? false,
+        terminate: deps.terminateSession,
+        markManualClose: deps.markManualClose,
+        unregisterIfAlive: deps.unregisterIfAlive,
+        settleGraceMs: deps.autoRetireSettleGraceMs,
+        shutdownGraceMs: deps.autoRetireShutdownGraceMs,
+      })
+    : null;
+
+  // Reconcile real registration, queue slots, durable receipts, and finished child retirement through one scheduler.
+  const tick = () => {
+    void services.tick()
+      .catch(() => { /* Persisted jobs remain inspectable. */ })
+      .finally(() => { void autoRetire?.sweep().catch(() => {}); });
+  };
   const timer = setInterval(tick, 2_000);
   timer.unref?.();
-  fastify.addHook("onClose", async () => { clearInterval(timer); services.dispose(); });
+  fastify.addHook("onClose", async () => { clearInterval(timer); autoRetire?.dispose(); services.dispose(); });
   tick();
 
   const guarded = { preHandler: deps.networkGuard };

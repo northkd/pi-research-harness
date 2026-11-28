@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { registerWorkbenchDispatchTool } from '../src/workbench-dispatch-tool.mjs';
+import { createResearchDispatchClient, registerWorkbenchDispatchTool } from '../src/workbench-dispatch-tool.mjs';
 import { createResearchDispatchService, createResearchDispatchStore } from '../../research-host/services/research-dispatch-service.mjs';
 
 const scope = { cwd: '/synthetic/project', ownerKey: 'owner', adoptionId: 'adopt-' + 'a'.repeat(24), charterHash: 'sha256:' + 'b'.repeat(64) };
@@ -145,4 +145,67 @@ test('a persisted exact-scope host report remains authoritative after both servi
   assert.deepEqual(reloaded.queued, []);
   assert.equal(reloaded.calls.some(body => body.action === 'report'), false);
   assert.equal(launches, 1, 'no additional process is created on recovery');
+});
+
+test('lead completion guard prevents the Main Agent from unilaterally stopping when its latest plan ended blocked/failed', async () => {
+  const leadHooks = new Map(), queued = [];
+  const leadCtx = { cwd: scope.cwd, sessionManager: { getSessionId: () => 'lead' } };
+  const leadJoined = { ...scope, sessionId: 'lead' };
+  const leadSnapshot = {
+    status: 'ok', sessionId: 'lead', collaborator: false, assignment: null, childrenPending: false,
+    plans: [{
+      id: 'dispatch-1', clientPlanId: 'fluoride-reanalysis', status: 'blocked',
+      updatedAt: '2026-11-27T06:53:44.000Z',
+      tasks: [
+        { id: 'na4sn3f10', status: 'blocked' },
+        { id: 'nasbf4', status: 'blocked' },
+      ],
+    }],
+  };
+  registerWorkbenchDispatchTool(
+    { registerTool: () => {}, on: (name, fn) => leadHooks.set(name, fn), sendUserMessage: (...args) => queued.push(args) },
+    { readContext: async () => ({ ...leadJoined }), request: async () => structuredClone(leadSnapshot) },
+  );
+
+  // Plain prose exit without resolving or calling ask_user triggers bounded mandatory continuation (max 2).
+  await leadHooks.get('agent_end')({ messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: '不再重派，汇报结束。' }] }] }, leadCtx);
+  assert.equal(queued.length, 1);
+  assert.match(queued[0][0], /lead-completion-guard/);
+  await leadHooks.get('agent_end')({ messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: '仍不再重派。' }] }] }, leadCtx);
+  assert.equal(queued.length, 2);
+  await leadHooks.get('agent_end')({ messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: '第三次。' }] }] }, leadCtx);
+  assert.equal(queued.length, 2, 'bounded at 2 reminders per unresolved plan signature');
+
+  // New blocked plan where lead legitimately calls ask_user must NOT trigger guard.
+  leadSnapshot.plans[0].updatedAt = '2026-11-27T07:05:00.000Z';
+  await leadHooks.get('agent_end')({
+    messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'toolCall', name: 'ask_user', arguments: {} }] }],
+  }, leadCtx);
+  assert.equal(queued.length, 2, 'calling ask_user lets user decide without guard interruption');
+
+  // Explicit interactive user stop suppresses the guard.
+  await leadHooks.get('input')({ source: 'interactive', text: '先停下，不用重派了' }, leadCtx);
+  await leadHooks.get('agent_end')({
+    messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: '好的，已停止。' }] }],
+  }, leadCtx);
+  assert.equal(queued.length, 2, 'explicit user stop suppresses guard');
+});
+
+test('dispatch client automatically retries transient 503 unavailable errors before succeeding', async () => {
+  let attempts = 0;
+  const client = createResearchDispatchClient({
+    readContext: async () => ({ ...scope, sessionId: 'worker' }),
+    resolveAuth: () => ({ baseUrl: 'http://127.0.0.1:8000', token: 'tok' }),
+    retryDelaysMs: [1, 1],
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        return new Response(JSON.stringify({ status: 'error', code: 'research-dispatch-unavailable' }), { status: 503 });
+      }
+      return new Response(JSON.stringify({ status: 'ok', sessionId: 'worker', plans: [] }), { status: 200 });
+    },
+  });
+  const reply = await client({ cwd: scope.cwd, sessionManager: { getSessionId: () => 'worker' } }, { action: 'status' });
+  assert.equal(reply.status, 'ok');
+  assert.equal(attempts, 3);
 });

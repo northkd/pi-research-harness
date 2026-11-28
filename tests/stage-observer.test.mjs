@@ -248,7 +248,7 @@ test('SDK adapter registers the real hook names and unverified sessions write no
   });
   for (const name of ['before_agent_start', 'tool_call', 'tool_result', 'agent_settled', 'agent_end']) assert.ok(handlers.has(name), name);
   assert.deepEqual(tools.map(tool => tool.name).sort(), ['research_communication', 'research_dispatch', 'research_loop', 'research_session']);
-  for (const name of ['input', 'context', 'tool_execution_end']) assert.ok(handlers.has(name), name);
+  for (const name of ['input', 'session_start', 'session_shutdown']) assert.ok(handlers.has(name), name);
 
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'stage-hook-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

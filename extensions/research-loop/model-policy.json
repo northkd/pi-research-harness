@@ -1,8 +1,8 @@
 {
   "schema": "pi-research-loop.model-policy.v1",
-  "updatedAt": "2026-11-25",
+  "updatedAt": "2026-11-28",
   "provider": "cliproxy",
-  "principle": "三档模型分发原则：智力模型负责顶层理论突破，指挥模型负责宏观规划、监督与对抗审查，工人模型负责高并发工具执行与数值闭环。同档位内额度耗尽时自动找同类型其他模型平替。",
+  "principle": "三档模型分发原则：智力模型负责顶层理论突破，指挥模型负责宏观规划、监督与对抗审查，工人模型负责高并发工具执行与数值闭环。同档位内额度耗尽时自动找同类型其他模型平替。Claude 模型仅注册不分配角色。",
   "tiers": {
     "intelligence": {
       "name": "智力模型",
@@ -18,31 +18,27 @@
       "description": "任务拆解规划、多步方案把控、双盲对抗审查、独立复核与主线监督。额度不足时自动在同档内其余模型平替。",
       "models": [
         "cliproxy/gpt-6.2-sol(max)[1m]",
-        "cliproxy/bailian-glm-5.3[1m]",
-        "cliproxy/ark-glm-5.3[1m]",
-        "cliproxy/bailian-kimi-k3.1-pro[1m]",
-        "cliproxy/bailian-kimi-k3[1m]",
-        "cliproxy/bailian-qwen3.8-max-0902[1m]"
+        "cliproxy/gpt-6.1-sol(max)[1m]"
       ],
-      "fallbackNote": "6.2-sol (max) 额度耗尽后直接切换 GLM-5.3，再按顺序切换 Kimi、Qwen。"
+      "fallbackNote": "首选 6.2-sol (max)，额度耗尽后切换 6.1-sol (max)。"
     },
     "worker": {
       "name": "工人模型",
       "description": "日常工具执行、批量检索、数值调试、脚本编写、日志清洗与长文档扩写。额度不足时自动在同档内其余模型平替。",
       "models": [
-        "cliproxy/ark-deepseek-v4.1-flash[1m]",
-        "cliproxy/ark-glm-5.3-flash[1m]",
-        "cliproxy/bailian-qwen3.8-flash[1m]",
-        "cliproxy/bailian-deepseek-flash-1017[1m]",
+        "cliproxy/OC-deepseek-v4.1-flash[1m]",
+        "cliproxy/OC-glm-5.3-flash[1m]",
+        "cliproxy/OC-hy4-flash-free[1m]",
+        "cliproxy/OC-hungerg-free[1m]",
+        "cliproxy/OC-qwen3.8-flash[1m]",
         "cliproxy/sqface-deepseek-flash-1017[1m]",
         "cliproxy/deepseek-flash[1m]",
+        "cliproxy/coarena-deepseek-v4-1-flash-1017",
         "cliproxy/gpt-6.1-terra(max)[1m]",
         "cliproxy/gpt-6.1-terra-max[1m]"
       ],
-      "fallbackChain": [
-        "cliproxy/bailian-deepseek-pro-0813[1m]"
-      ],
-      "fallbackNote": "先按顺序用完 Flash 池，再切换 Terra 两个注册 ID，最后使用保留的 bailian-deepseek-pro-0813。"
+      "fallbackChain": [],
+      "fallbackNote": "先按顺序用完 OpenCode Go 工人池（OC-deepseek-v4.1-flash / OC-glm-5.3-flash / OC-hy4-flash-free / OC-hungerg-free / OC-qwen3.8-flash）与其余 Flash 池，再切换 Terra 两个注册 ID。OC-claude-haiku-5-5[1m] 仅注册，不分配角色。"
     },
     "heavy": {
       "description": "兼容历史 heavy 定义（包含 智力模型 与 指挥模型）",
@@ -50,38 +46,34 @@
         "cliproxy/gpt-6.2-astra(high)[1m]",
         "cliproxy/gpt-6.2-astra(xhigh)[1m]",
         "cliproxy/gpt-6.2-sol(max)[1m]",
-        "cliproxy/bailian-glm-5.3[1m]",
-        "cliproxy/ark-glm-5.3[1m]",
-        "cliproxy/bailian-kimi-k3.1-pro[1m]",
-        "cliproxy/bailian-kimi-k3[1m]",
-        "cliproxy/bailian-qwen3.8-max-0902[1m]"
+        "cliproxy/gpt-6.1-sol(max)[1m]"
       ],
-      "fallback": "cliproxy/bailian-glm-5.3[1m]"
+      "fallback": "cliproxy/gpt-6.1-sol(max)[1m]"
     },
     "light": {
       "description": "兼容历史 light 定义（对齐 工人模型）",
       "models": [
-        "cliproxy/ark-deepseek-v4.1-flash[1m]",
-        "cliproxy/ark-glm-5.3-flash[1m]",
-        "cliproxy/bailian-qwen3.8-flash[1m]",
-        "cliproxy/bailian-deepseek-flash-1017[1m]",
+        "cliproxy/OC-deepseek-v4.1-flash[1m]",
+        "cliproxy/OC-glm-5.3-flash[1m]",
+        "cliproxy/OC-hy4-flash-free[1m]",
+        "cliproxy/OC-hungerg-free[1m]",
+        "cliproxy/OC-qwen3.8-flash[1m]",
         "cliproxy/sqface-deepseek-flash-1017[1m]",
         "cliproxy/deepseek-flash[1m]",
+        "cliproxy/coarena-deepseek-v4-1-flash-1017",
         "cliproxy/gpt-6.1-terra(max)[1m]",
         "cliproxy/gpt-6.1-terra-max[1m]"
       ],
-      "fallbackChain": [
-        "cliproxy/bailian-deepseek-pro-0813[1m]"
-      ]
+      "fallbackChain": []
     },
     "vision": {
       "description": "Visual and aesthetic work: figure layout, poster, presentation.",
       "models": [
-        "cliproxy/ark-kimi-k2.8-preview[1m]",
-        "cliproxy/bailian-kimi-k3[1m]",
-        "cliproxy/bailian-kimi-k3.1-pro[1m]",
-        "cliproxy/bailian-qwen3.8-flash[1m]",
-        "cliproxy/bailian-qwen3.8-max-0902[1m]"
+        "cliproxy/OC-qwen3.8-flash[1m]",
+        "cliproxy/OC-glm-5.3-flash[1m]",
+        "cliproxy/OC-deepseek-v4.1-flash[1m]",
+        "cliproxy/OC-hy4-flash-free[1m]",
+        "cliproxy/OC-hungerg-free[1m]"
       ],
       "imageModels": [
         "cliproxy/gpt-image-2.6",
@@ -94,8 +86,8 @@
       "imageNote": "Prefer the logged-in web GPT-Pro for publication figures; gpt-image models are for illustration, not precise diagrams."
     },
     "literature": {
-      "description": "Literature retrieval uses agy with a Gemini flash model, not a Pi subagent model.",
-      "external": "agy --model gemini-3.8-flash-high",
+      "description": "Literature retrieval uses agy with Gemini 4 Neon (XHigh), not a Pi subagent model.",
+      "external": "agy --model gemini-4-neon-xhigh",
       "note": "Facts from agy still require first-party verification."
     }
   },
@@ -132,31 +124,31 @@
     },
     "research-literature": {
       "tier": "light",
-      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
-      "externalTool": "agy/gemini-3.8-flash-high"
+      "model": "cliproxy/OC-deepseek-v4.1-flash[1m]",
+      "externalTool": "agy/gemini-4-neon-xhigh"
     },
     "research-numerics": {
       "tier": "light",
-      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]"
+      "model": "cliproxy/OC-deepseek-v4.1-flash[1m]"
     },
     "research-ssh": {
       "tier": "light",
-      "model": "cliproxy/ark-glm-5.3-flash[1m]"
+      "model": "cliproxy/OC-glm-5.3-flash[1m]"
     },
     "research-web-oracle": {
       "tier": "light",
-      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
+      "model": "cliproxy/OC-deepseek-v4.1-flash[1m]",
       "note": "Operates the browser; the scientific answer comes from the web model the user selects."
     },
     "research-agy": {
       "tier": "light",
-      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
-      "externalTool": "agy/gemini-3.8-flash-high"
+      "model": "cliproxy/OC-deepseek-v4.1-flash[1m]",
+      "externalTool": "agy/gemini-4-neon-xhigh"
     },
     "research-agy-sci": {
       "tier": "light",
-      "model": "cliproxy/ark-deepseek-v4.1-flash[1m]",
-      "externalTool": "agy/gemini-4-argon-high"
+      "model": "cliproxy/OC-deepseek-v4.1-flash[1m]",
+      "externalTool": "agy/gemini-4-carbon-high"
     },
     "research-model-assessor": {
       "tier": "intelligence",

@@ -71,6 +71,13 @@ export function useResearchMainAgent({ cwd, visible, connectionGeneration, refre
     loading: !current.loaded || managed.pending, error: current.error ?? managed.error, select, available: available && !current.error };
 }
 
+function compactModelLabel(model?: string): string {
+  if (!model) return "默认模型";
+  const slash = model.lastIndexOf("/");
+  const base = slash >= 0 ? model.slice(slash + 1) : model;
+  return base.replace(/\[\d+m\]/gi, "").trim() || base;
+}
+
 export function ResearchMainAgentControls({ controller, cwd, visible, connectionGeneration, refreshSignal, onRebound, accessSlot, metaSlot, planSlot }: {
   controller: ReturnType<typeof useResearchMainAgent>;
   cwd: string;
@@ -147,7 +154,7 @@ export function ResearchMainAgentControls({ controller, cwd, visible, connection
     <div className="research-ribbon-meta">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
         <ResearchCharterBindingControls cwd={cwd} sessionId={selectedId} visible={visible} connectionGeneration={connectionGeneration} refreshSignal={refreshSignal} onRebound={onRebound} />
-        <p className="research-main-agent-caption !m-0">{error ? `状态未同步：${error}` : session?.status === "ended" ? "该会话已结束，请打开对话恢复后发送。" : selectedId && !session ? "当前会话不在活跃列表中，请重选。" : session ? `${session.model ?? "默认模型"}` : "选定主会话后可下发任务或打开对话。"}</p>
+        <p className="research-main-agent-caption !m-0" title={session?.model}>{error ? `状态未同步：${error}` : session?.status === "ended" ? "该会话已结束，请打开对话恢复后发送。" : selectedId && !session ? "当前会话不在活跃列表中，请重选。" : session ? compactModelLabel(session.model) : "选定主会话后可下发任务或打开对话。"}</p>
       </div>
       {metaSlot && (
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">{metaSlot}</div>

@@ -367,6 +367,9 @@ export function createResearchDispatchService(deps) {
     const ordered = [...plans.values()].filter(row => row.kind === 'plan').sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0));
     for (const saved of ordered) {
       if (disposed) return;
+      // Already-terminal and already-notified historical plans need no per-tick
+      // re-authorization; skipping them avoids O(history) synchronous disk stalls.
+      if (TERMINAL.has(saved.status) && (saved.notifiedAt || !deps.notifyParent)) continue;
       let plan = clone(plans.get(saved.id));
       const parent = deps.getSession(plan.parentSessionId);
       if (!parent && now().getTime() - startedAt < graceMs) continue;
@@ -417,8 +420,26 @@ export function createResearchDispatchService(deps) {
             }
             task.spawnToken = researchProvenanceOf(child).spawnToken; task.sessionId = child.id;
             task.registeredAt ??= now().toISOString();
-            if (ENDED.has(child.status)) { terminalize(task, 'failed', 'research-dispatch-worker-ended-without-report'); release.push(task.spawnToken); }
-            else { task.status = 'running'; task.lastSeenAt = now().toISOString(); delete task.error; }
+            if (ENDED.has(child.status)) {
+              const resumingRecently = task.reopenResuming === true && task.reopenedAt
+                && (now().getTime() - Date.parse(task.reopenedAt) < graceMs);
+              if (!resumingRecently) {
+                delete task.reopenResuming;
+                terminalize(task, 'failed', 'research-dispatch-worker-ended-without-report');
+                release.push(task.spawnToken);
+              }
+            } else {
+              task.status = 'running';
+              task.lastSeenAt = now().toISOString();
+              delete task.error;
+              delete task.reopenResuming;
+              if (task.pendingReopenPrompt && deps.notifyParent) {
+                const { promptId, text } = task.pendingReopenPrompt;
+                if (await deps.notifyParent(child.id, text, promptId)) {
+                  delete task.pendingReopenPrompt;
+                }
+              }
+            }
           } else if (pendingRegistration) {
             task.status = 'recovery-required'; task.error = 'research-dispatch-native-registration-unconfirmed';
           } else {
@@ -518,7 +539,9 @@ export function createResearchDispatchService(deps) {
           const promptId = 'research-dispatch-receipt-' + plan.id;
           plan.notificationId = promptId;
           persist(plan);
-          const message = `[research_dispatch receipt ${promptId}] Plan ${plan.id} is ${plan.status}. Call research_dispatch status for the durable task summaries, evidence and errors, then aggregate the findings or report the blocked/failed outcome. Do not repeat completed work.`;
+          const message = plan.status === 'completed'
+            ? `[research_dispatch receipt ${promptId}] Plan ${plan.id} is ${plan.status}. Call research_dispatch status for the durable task summaries, evidence and errors, then aggregate the findings or report the blocked/failed outcome. Do not repeat completed work.`
+            : `[research_dispatch receipt ${promptId}] Plan ${plan.id} is ${plan.status} with unresolved blocked/failed tasks. Call research_dispatch status to inspect the exact blocker causes. Do NOT unilaterally abandon unfinished user goals or stop in prose: resolve recoverable resource/coordination blockers within scope, or call ask_user for missing permissions/decisions before concluding.`;
           // Socket transmission is not delivery. Only the owning bridge's
           // prompt_received event settles this; status reads are not delivery.
           if (await deps.notifyParent(plan.parentSessionId, message, promptId)) { plan.notificationSentAt = now().toISOString(); persist(plan); }
@@ -527,16 +550,162 @@ export function createResearchDispatchService(deps) {
     }
   }
 
+  function findHistoricalSession(plan, task) {
+    const storedSessionId = ID.test(task.sessionId ?? '') ? task.sessionId : null;
+    const live = childFor(plan, task) ?? (storedSessionId ? deps.getSession(storedSessionId) : null);
+    if (live && !ENDED.has(live.status)) return { session: live, live: true };
+    const fromHistory = (deps.history?.() ?? []).find(row =>
+      (storedSessionId && row.id === storedSessionId) || matchesTask(plan, task, row),
+    );
+    const candidate = fromHistory ?? live ?? null;
+    if (candidate && matchesTask(plan, task, candidate)) return { session: candidate, live: !ENDED.has(candidate.status) };
+    return { session: null, live: false };
+  }
+
+  async function reopenOneTask(plan, task, { verified, reason, fromCommunication = false }) {
+    if (ACTIVE.has(task.status) && task.status !== 'recovery-required') return;
+    if (task.status === 'queued') return;
+    task.reopenCount = (task.reopenCount ?? 0) + 1;
+    task.reopenedAt = now().toISOString();
+    if (reason) task.reopenReason = reason;
+    task.previousOutcome = {
+      status: task.status,
+      ...(task.summary !== undefined ? { summary: task.summary } : {}),
+      ...(task.evidence !== undefined ? { evidence: task.evidence } : {}),
+      ...(task.error !== undefined ? { error: task.error } : {}),
+      ...(task.finishedAt !== undefined ? { finishedAt: task.finishedAt } : {}),
+    };
+    const priorToken = task.spawnToken;
+    delete task.finishedAt;
+    delete task.reportedAt;
+    delete task.error;
+    delete task.notificationId;
+    delete task.notificationSentAt;
+    delete task.notifiedAt;
+    delete task.waitingReason;
+    delete task.summary;
+    delete task.evidence;
+    if (priorToken) settledReservations.delete(priorToken);
+
+    plan.status = 'running';
+    plan.schedulingPaused = false;
+    delete plan.finishedAt;
+    delete plan.error;
+    delete plan.suspendedReason;
+    delete plan.cancelReason;
+    delete plan.notificationId;
+    delete plan.notificationSentAt;
+    delete plan.notifiedAt;
+
+    const { session, live } = findHistoricalSession(plan, task);
+    const reopenPromptId = 'research-dispatch-reopen-' + hash(JSON.stringify([plan.id, task.id, task.reopenCount, task.reopenedAt])).slice(0, 40);
+    const reopenText = `[research_dispatch reopen ${reopenPromptId}] Your assignment (${task.id} in plan ${plan.clientPlanId || plan.id}) has been reopened by your parent.${reason ? ` Instruction/reason: ${reason}` : ''} Continue in this existing session from your prior progress without repeating completed work. If you encounter missing permissions, coordination needs, or recoverable blockers, send research_communication (kind="request", to="parent") and wait for parent reply instead of prematurely reporting blocked. When finished, submit an updated report with verified evidence.`;
+
+    if (session && live) {
+      if (priorToken) await deps.activateSession?.(priorToken, { allowExited: false, session });
+      if (priorToken) deps.clearTerminalReport?.(priorToken, reopenPromptId);
+      task.status = 'running';
+      task.sessionId = session.id;
+      task.lastSeenAt = now().toISOString();
+      delete task.processUnconfirmed;
+      delete task.reopenResuming;
+      if (!fromCommunication) {
+        task.pendingReopenPrompt = { promptId: reopenPromptId, text: reopenText };
+      }
+      persist(plan);
+      if (task.pendingReopenPrompt && deps.notifyParent) {
+        if (await deps.notifyParent(session.id, task.pendingReopenPrompt.text, task.pendingReopenPrompt.promptId)) {
+          delete task.pendingReopenPrompt;
+          persist(plan);
+        }
+      }
+      return;
+    }
+
+    if (session && !live && session.sessionFile && deps.resumeSession) {
+      await deps.beforeLaunch?.({ parent: verified.parent, verified, planId: plan.id });
+      if (priorToken) await deps.activateSession?.(priorToken, { allowExited: true, session });
+      if (priorToken) deps.clearTerminalReport?.(priorToken, reopenPromptId);
+      task.status = 'launching';
+      task.sessionId = session.id;
+      task.launchedAt = now().toISOString();
+      task.reopenResuming = true;
+      delete task.lastSeenAt;
+      delete task.processUnconfirmed;
+      if (!fromCommunication) {
+        task.pendingReopenPrompt = { promptId: reopenPromptId, text: reopenText };
+      }
+      persist(plan);
+      const resumed = await deps.resumeSession(session, { spawnToken: priorToken });
+      if (!resumed || resumed.success === false) {
+        fail(502, 'research-dispatch-reopen-resume-failed');
+      }
+      return;
+    }
+
+    // No resumable session exists (e.g. blocked before spawn or no resume hook): re-queue cleanly.
+    if (priorToken) deps.clearTerminalReport?.(priorToken, reopenPromptId);
+    task.status = 'queued';
+    task.requestId = 'dispatch-' + hash(JSON.stringify([plan.id, task.id, 'reopen', task.reopenCount])).slice(0, 40);
+    delete task.spawnToken;
+    delete task.sessionId;
+    delete task.launchedAt;
+    delete task.registeredAt;
+    delete task.lastSeenAt;
+    delete task.processUnconfirmed;
+    delete task.reopenResuming;
+    delete task.pendingReopenPrompt;
+    persist(plan);
+  }
+
+  async function reopenAssignmentInternal({ spawnToken, childSessionId, reason, verified, fromCommunication = true }) {
+    assertOpen();
+    const matches = [...plans.values()].flatMap(saved => {
+      if (saved.kind !== 'plan' || saved.parentSessionId !== verified.parent.id || !scopeMatches(saved, verified)) return [];
+      return saved.tasks
+        .filter(task => (spawnToken && task.spawnToken === spawnToken) || (childSessionId && task.sessionId === childSessionId))
+        .map(task => ({ plan: saved, task }));
+    });
+    if (!matches.length) return { reopened: false };
+    const plan = clone(matches[0].plan);
+    const task = plan.tasks.find(row => row.id === matches[0].task.id);
+    if (!task) return { reopened: false };
+    if (ACTIVE.has(task.status) && task.status !== 'recovery-required') return { reopened: false, alreadyActive: true };
+    await deps.assertDispatchAllowed?.({ parent: verified.parent, verified });
+    await reopenOneTask(plan, task, { verified, reason, fromCommunication });
+    await advance();
+    return { reopened: true, planId: plan.id, taskId: task.id, status: plans.get(plan.id)?.tasks.find(r => r.id === task.id)?.status };
+  }
+
   async function handleInternal(input) {
     assertOpen();
     const verified = await authorize(input), body = input.body;
-    if (!['delegate', 'plan', 'status', 'atomic', 'report', 'cancel', 'pause', 'resume'].includes(body.action)) fail(400, 'research-dispatch-action-invalid');
-    const allowed = new Set(['sessionId', 'action', 'planId', 'task', 'stage', 'tasks', 'concurrency', 'readOnly', 'reason', 'status', 'summary', 'evidence']);
+    if (!['delegate', 'plan', 'status', 'atomic', 'report', 'cancel', 'pause', 'resume', 'reopen'].includes(body.action)) fail(400, 'research-dispatch-action-invalid');
+    const allowed = new Set(['sessionId', 'action', 'planId', 'taskId', 'task', 'stage', 'tasks', 'concurrency', 'readOnly', 'reason', 'status', 'summary', 'evidence']);
     if (Object.keys(body).some(key => !allowed.has(key))) fail(400, 'research-dispatch-unknown-field');
     if (body.readOnly !== undefined && body.readOnly !== true) fail(400, 'research-dispatch-read-only-invalid');
     await discoverAssignments();
     if (body.action === 'delegate') await createDelegatedObjective(verified, body);
     if (body.action === 'plan') await createPlan(verified, body.tasks, body.planId, body.concurrency ?? 2, 'tool', body.readOnly);
+    if (body.action === 'reopen') {
+      if (!ID.test(body.planId ?? '')) fail(400, 'research-dispatch-plan-id-invalid');
+      if (body.taskId !== undefined && !ID.test(body.taskId)) fail(400, 'research-dispatch-task-id-invalid');
+      const reason = body.reason ?? body.summary;
+      if (reason !== undefined && !string(reason, 4000)) fail(400, 'research-dispatch-reopen-reason-invalid');
+      await deps.assertDispatchAllowed?.({ parent: verified.parent, verified });
+      const found = [...plans.values()].find(plan => plan.kind === 'plan' && plan.parentSessionId === verified.parent.id && scopeMatches(plan, verified) && (plan.id === body.planId || plan.clientPlanId === body.planId));
+      if (!found) fail(404, 'research-dispatch-plan-not-found');
+      const policy = await readResearchSchedulingPolicy(deps, verified.parent, verified);
+      if (found.tenureId && policy?.tenureId !== found.tenureId) fail(409, 'research-dispatch-tenure-changed');
+      const plan = clone(found);
+      const targets = body.taskId
+        ? plan.tasks.filter(row => row.id === body.taskId)
+        : plan.tasks.filter(row => ['blocked', 'failed', 'recovery-required'].includes(row.status));
+      if (!targets.length) fail(body.taskId ? 404 : 409, body.taskId ? 'research-dispatch-task-not-found' : 'research-dispatch-nothing-to-reopen');
+      for (const task of targets) {
+        await reopenOneTask(plan, task, { verified, reason, fromCommunication: false });
+      }
+    }
     if (body.action === 'pause' || body.action === 'resume') {
       await deps.assertDispatchAllowed?.({ parent: verified.parent, verified });
       const policy = await readResearchSchedulingPolicy(deps, verified.parent, verified);
@@ -570,6 +739,7 @@ export function createResearchDispatchService(deps) {
       if (!TERMINAL.has(body.status) || !string(body.summary, 4000)) fail(400, 'research-dispatch-report-invalid');
       const evidence = body.evidence ?? [];
       if (!Array.isArray(evidence) || evidence.length > 16 || evidence.some(file => !string(file, 1024) || path.isAbsolute(file) || file.split(/[\\/]/).includes('..'))) fail(400, 'research-dispatch-evidence-invalid');
+      if (body.status === 'blocked' && deps.hasOpenParentRequest?.(verified.parent.id) === true) fail(409, 'research-dispatch-awaiting-parent-reply');
       if (activeFor(verified.parent.id, verified).length) fail(409, 'research-dispatch-children-pending');
       const ownPlans = [...plans.values()].filter(plan => plan.kind === 'plan' && plan.parentSessionId === verified.parent.id && scopeMatches(plan, verified));
       if (body.status === 'completed' && ownPlans.some(plan => plan.status !== 'completed')) fail(409, 'research-dispatch-child-failure-unresolved');
@@ -632,7 +802,7 @@ export function createResearchDispatchService(deps) {
     for (const plan of all) for (const task of plan.tasks) { historyCounts.total++; historyCounts[TERMINAL.has(task.status) || task.status === 'queued' ? task.status : 'active']++; }
     const peerContext = getPeerContext(verified.parent.id);
     const peers = peerContext && scopeMatches(peerContext.plan, verified) ? peerContext.peers : [];
-    return { status: 'ok', tool: 'research_dispatch', sessionId: verified.parent.id, peers: peers.slice(0, 32), omittedPeers: Math.max(0, peers.length - 32), plans: visible, planHistory: { total: all.length, shown: visible.length, counts: historyCounts }, atomicReason: atomic?.reason ?? null, collaborator: !!collaborator, brief, assignment: assignment[0] ?? null, declaredTasks: collaborator?.tasks?.length ?? 0, decisionRequired: !atomic && !all.length, childrenPending: all.some(plan => !TERMINAL.has(plan.status)) };
+    return { status: 'ok', tool: 'research_dispatch', sessionId: verified.parent.id, peers: peers.slice(0, 32), omittedPeers: Math.max(0, peers.length - 32), plans: visible, planHistory: { total: all.length, shown: visible.length, counts: historyCounts }, atomicReason: atomic?.reason ?? null, collaborator: !!collaborator, brief, assignment: assignment[0] ?? null, declaredTasks: collaborator?.tasks?.length ?? 0, decisionRequired: !atomic && !all.length, childrenPending: all.some(plan => !TERMINAL.has(plan.status)), awaitingParentReply: deps.hasOpenParentRequest?.(verified.parent.id) === true };
   }
 
   async function manageQueueInternal(input) {
@@ -674,6 +844,7 @@ export function createResearchDispatchService(deps) {
 
   return {
     handle: input => serial(() => handleInternal(input)), tick: () => serial(advance),
+    reopenAssignment: input => serial(() => reopenAssignmentInternal(input)),
     getPeerContext, getPeerTask,
     manageQueue: input => serial(() => manageQueueInternal(input)),
     listForScope: ({ cwd, ownerKey }) => [...plans.values()].filter(plan => plan.kind === 'plan' && plan.cwd === cwd && plan.ownerKey === ownerKey).map(plan => publicPlan(plan, true)),
@@ -685,6 +856,20 @@ export function createResearchDispatchService(deps) {
       for (const plan of plans.values()) if (plan.parentSessionId === sessionId && plan.kind === 'plan') acknowledge(plan, promptId);
     }),
     isCompleted: token => [...plans.values()].some(plan => plan.kind === 'plan' && plan.tasks.some(task => task.spawnToken === token && (task.reportedAt || task.error === 'research-dispatch-worker-ended-without-report'))),
+    isAssignmentNonActive: token => [...plans.values()].some(plan => plan.kind === 'plan' && plan.tasks.some(task => task.spawnToken === token && (TERMINAL.has(task.status) || task.status === 'recovery-required'))),
+    completedAt: token => {
+      let latest = null;
+      for (const plan of plans.values()) {
+        if (plan.kind !== 'plan') continue;
+        for (const task of plan.tasks) {
+          if (task.spawnToken !== token) continue;
+          if (!task.reportedAt && task.error !== 'research-dispatch-worker-ended-without-report') continue;
+          const ts = Date.parse(task.reportedAt ?? task.finishedAt ?? '');
+          if (Number.isFinite(ts) && (latest === null || ts > latest)) latest = ts;
+        }
+      }
+      return latest;
+    },
     isWaitingCoordinator: sessionId => activeFor(sessionId).length > 0,
     isRecoveringSession,
     unregisteredReservations: () => [...plans.values()].flatMap(plan => plan.kind === 'plan' ? plan.tasks.filter(task => (ACTIVE.has(task.status) || task.processUnconfirmed) && !childFor(plan, task)).map(task => ({ requestId: task.requestId, spawnToken: task.spawnToken, parentSessionId: plan.parentSessionId, rootSessionId: plan.rootSessionId })) : []),

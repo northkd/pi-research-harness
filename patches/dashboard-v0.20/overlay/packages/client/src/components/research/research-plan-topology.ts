@@ -16,6 +16,8 @@ export interface PlanTaskProgressSummary {
   waitingReason?: string;
   queueRank?: number;
   dependsOn?: string[];
+  error?: string;
+  summary?: string;
 }
 
 export interface PlanSummary {
@@ -23,9 +25,11 @@ export interface PlanSummary {
   label: string;
   parentSessionId: string;
   state: WorkTriState;
+  rawStatus?: string;
   total: number;
   ended: number;
   completed: number;
+  blocked: number;
   failed: number;
   inProgress: number;
   queued: number;
@@ -42,6 +46,7 @@ export interface PlansAggregateSummary {
   totalTasks: number;
   endedTasks: number;
   completedTasks: number;
+  blockedTasks: number;
   failedTasks: number;
   inProgressTasks: number;
   queuedTasks: number;
@@ -148,10 +153,43 @@ export interface TopologyScene {
 }
 
 const ENDED_STATUSES = new Set([
-  "ended", "completed", "complete", "failed", "error", "cancelled", "canceled", "stopped", "skipped", "released",
+  "ended", "completed", "complete", "failed", "error", "cancelled", "canceled", "stopped", "skipped", "released", "blocked",
 ]);
-const QUEUED_STATUSES = new Set(["queued", "pending", "waiting", "blocked"]);
+const QUEUED_STATUSES = new Set(["queued", "pending", "waiting"]);
+const BLOCKED_STATUSES = new Set(["blocked"]);
 const FAILED_STATUSES = new Set(["failed", "error", "cancelled", "canceled", "stopped"]);
+
+export type PlanTaskStatusTone = "completed" | "blocked" | "failed" | "queued" | "in_progress";
+
+export interface PlanTaskStatusMeta {
+  tone: PlanTaskStatusTone;
+  label: string;
+  shortLabel: string;
+  incomplete: boolean;
+}
+
+export function planTaskStatusMeta(rawStatus?: string): PlanTaskStatusMeta {
+  const normalized = (rawStatus ?? "").toLowerCase();
+  if (normalized === "completed" || normalized === "complete") {
+    return { tone: "completed", label: "已完成", shortLabel: "完成", incomplete: false };
+  }
+  if (BLOCKED_STATUSES.has(normalized)) {
+    return { tone: "blocked", label: "受阻 · 未完成", shortLabel: "受阻", incomplete: true };
+  }
+  if (FAILED_STATUSES.has(normalized)) {
+    return { tone: "failed", label: "失败 · 未完成", shortLabel: "失败", incomplete: true };
+  }
+  if (QUEUED_STATUSES.has(normalized)) {
+    return { tone: "queued", label: "排队中", shortLabel: "排队", incomplete: true };
+  }
+  if (normalized === "recovery-required") {
+    return { tone: "in_progress", label: "待恢复", shortLabel: "待恢复", incomplete: true };
+  }
+  if (ENDED_STATUSES.has(normalized)) {
+    return { tone: "completed", label: "已结束", shortLabel: "结束", incomplete: false };
+  }
+  return { tone: "in_progress", label: "执行中", shortLabel: "进行中", incomplete: true };
+}
 
 export function normalizeWorkState(status?: string): WorkTriState {
   const normalized = (status ?? "").toLowerCase();
@@ -168,12 +206,66 @@ export function triStateLabel(state: WorkTriState): string {
 
 export function shortPlanLabel(plan: Pick<CollaborationPlan, "id" | "clientPlanId">): string {
   const raw = (plan.clientPlanId || plan.id || "").trim();
-  if (!raw) return "Plan";
+  if (!raw) return "执行计划";
   const stripped = raw.startsWith("dispatch-") ? raw.slice(9, 17) : raw;
   return stripped.length > 22 ? `${stripped.slice(0, 19)}…` : stripped;
 }
 
-export function summarizePlan(plan: CollaborationPlan, defaultParentSessionId = ""): PlanSummary {
+function cleanTaskHeadline(task: CollaborationPlanTask, sessionTitles?: Readonly<Record<string, string>>): string {
+  const linked = task.sessionId ? sessionTitles?.[task.sessionId]?.trim() : "";
+  if (linked) return linked;
+  let text = (task.task || "").replace(/\s+/g, " ").trim();
+  text = text.replace(/^(?:任务名|会话名建议|目标|科研补缺|科研首次全程分析)\s*[：:]\s*/, "");
+  const first = text.split(/(?:[。！？\n]|(?:\.\s+))/)[0]?.trim() || text;
+  return first.replace(/[（(]mp-\d+[）)]/gi, "").trim();
+}
+
+function clipText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+}
+
+/**
+ * Derive a human-readable Plan title from its task headlines / linked session titles
+ * instead of exposing internal kebab-case `clientPlanId` slugs.
+ */
+export function humanPlanTitle(
+  plan: Pick<CollaborationPlan, "id" | "clientPlanId" | "tasks">,
+  sessionTitles?: Readonly<Record<string, string>>,
+): string {
+  const tasks = plan.tasks ?? [];
+  if (tasks.length === 0) return shortPlanLabel(plan);
+  const headlines = tasks.map(task => cleanTaskHeadline(task, sessionTitles)).filter(Boolean);
+  if (headlines.length === 0) return shortPlanLabel(plan);
+  if (headlines.length === 1) return clipText(headlines[0]!, 26);
+
+  const split = headlines.map(head => {
+    const sepIndex = head.search(/[｜|]/);
+    return sepIndex > 0
+      ? [head.slice(0, sepIndex).trim(), head.slice(sepIndex + 1).trim()] as const
+      : null;
+  });
+  if (split.every((pair): pair is readonly [string, string] => Boolean(pair && pair[0] && pair[1]))) {
+    const lefts = split.map(pair => pair[0]);
+    const rights = split.map(pair => pair[1]);
+    if (new Set(rights).size === 1) {
+      return clipText(`${rights[0]}（${lefts[0]} 等）`, 28);
+    }
+    if (new Set(lefts).size === 1) {
+      return clipText(`${lefts[0]}｜${rights[0]} 等`, 28);
+    }
+    const joined = lefts.slice(0, 3).join("/");
+    if (joined.length <= 20) {
+      return clipText(`${joined} 等分析`, 26);
+    }
+  }
+  return clipText(`${headlines[0]} 等`, 26);
+}
+
+export function summarizePlan(
+  plan: CollaborationPlan,
+  defaultParentSessionId = "",
+  sessionTitles?: Readonly<Record<string, string>>,
+): PlanSummary {
   const tasks: PlanTaskProgressSummary[] = (plan.tasks ?? []).map(task => ({
     id: task.id,
     role: task.role,
@@ -185,10 +277,13 @@ export function summarizePlan(plan: CollaborationPlan, defaultParentSessionId = 
     waitingReason: task.waitingReason,
     queueRank: task.queueRank ?? task.rank,
     dependsOn: task.dependsOn,
+    error: task.error,
+    summary: task.summary,
   }));
-  const completed = tasks.filter(task => task.state === "ended" && !FAILED_STATUSES.has((task.rawStatus ?? "").toLowerCase())).length;
-  const failed = tasks.filter(task => task.state === "ended" && FAILED_STATUSES.has((task.rawStatus ?? "").toLowerCase())).length;
-  const ended = completed + failed;
+  const blocked = tasks.filter(task => BLOCKED_STATUSES.has((task.rawStatus ?? "").toLowerCase())).length;
+  const failed = tasks.filter(task => FAILED_STATUSES.has((task.rawStatus ?? "").toLowerCase())).length;
+  const completed = tasks.filter(task => task.state === "ended" && !BLOCKED_STATUSES.has((task.rawStatus ?? "").toLowerCase()) && !FAILED_STATUSES.has((task.rawStatus ?? "").toLowerCase())).length;
+  const ended = completed + blocked + failed;
   const inProgress = tasks.filter(task => task.state === "in_progress").length;
   const queued = tasks.filter(task => task.state === "queued").length;
   const total = tasks.length;
@@ -204,23 +299,30 @@ export function summarizePlan(plan: CollaborationPlan, defaultParentSessionId = 
 
   return {
     id: plan.id,
-    label: shortPlanLabel(plan),
+    label: humanPlanTitle(plan, sessionTitles),
     parentSessionId: plan.parentSessionId || defaultParentSessionId,
     state,
+    rawStatus: plan.status,
     total,
     ended,
     completed,
+    blocked,
     failed,
     inProgress,
     queued,
-    progressPercent: total > 0 ? Math.round((ended / total) * 100) : state === "ended" ? 100 : 0,
+    progressPercent: total > 0 ? Math.round((completed / total) * 100) : state === "ended" ? 100 : 0,
     tasks,
   };
 }
 
 export function summarizePlansForScope(
   plans: ReadonlyArray<CollaborationPlan> | undefined,
-  options: { tenureId?: string | null; mainSessionId?: string | null; sessionIds?: ReadonlyArray<string> } = {},
+  options: {
+    tenureId?: string | null;
+    mainSessionId?: string | null;
+    sessionIds?: ReadonlyArray<string>;
+    sessionTitles?: Readonly<Record<string, string>>;
+  } = {},
 ): PlansAggregateSummary {
   const allowedSessions = new Set(options.sessionIds ?? []);
   if (options.mainSessionId) allowedSessions.add(options.mainSessionId);
@@ -230,7 +332,7 @@ export function summarizePlansForScope(
     return !options.tenureId;
   });
 
-  const summaries = relevant.map(plan => summarizePlan(plan, options.mainSessionId ?? ""));
+  const summaries = relevant.map(plan => summarizePlan(plan, options.mainSessionId ?? "", options.sessionTitles));
   const totalPlans = summaries.length;
   const endedPlans = summaries.filter(plan => plan.state === "ended").length;
   const inProgressPlans = summaries.filter(plan => plan.state === "in_progress").length;
@@ -238,6 +340,7 @@ export function summarizePlansForScope(
   const totalTasks = summaries.reduce((sum, plan) => sum + plan.total, 0);
   const endedTasks = summaries.reduce((sum, plan) => sum + plan.ended, 0);
   const completedTasks = summaries.reduce((sum, plan) => sum + plan.completed, 0);
+  const blockedTasks = summaries.reduce((sum, plan) => sum + plan.blocked, 0);
   const failedTasks = summaries.reduce((sum, plan) => sum + plan.failed, 0);
   const inProgressTasks = summaries.reduce((sum, plan) => sum + plan.inProgress, 0);
   const queuedTasks = summaries.reduce((sum, plan) => sum + plan.queued, 0);
@@ -252,10 +355,11 @@ export function summarizePlansForScope(
     totalTasks,
     endedTasks,
     completedTasks,
+    blockedTasks,
     failedTasks,
     inProgressTasks,
     queuedTasks,
-    progressPercent: totalTasks > 0 ? Math.round((endedTasks / totalTasks) * 100) : phase === "completed" ? 100 : 0,
+    progressPercent: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : phase === "completed" ? 100 : 0,
     plans: summaries,
   };
 }
@@ -311,7 +415,13 @@ export function buildTopologyGraph(params: {
   const sessionToTaskSummary = new Map<string, PlanTaskProgressSummary>();
   const taskNodeIdByPlanAndTask = new Map<string, string>();
 
-  const normalizedPlans = plans.map(plan => ({ rawPlan: plan, summary: summarizePlan(plan, mainSessionId ?? "") }));
+  const sessionTitles: Record<string, string> = {};
+  for (const cluster of clusters) {
+    if (cluster.sessionExec.sessionId && cluster.title) {
+      sessionTitles[cluster.sessionExec.sessionId] = cluster.title;
+    }
+  }
+  const normalizedPlans = plans.map(plan => ({ rawPlan: plan, summary: summarizePlan(plan, mainSessionId ?? "", sessionTitles) }));
   for (const { rawPlan, summary } of normalizedPlans) {
     const planNodeId = `plan:${rawPlan.id}`;
     for (const task of summary.tasks) {
@@ -458,20 +568,29 @@ export function buildTopologyGraph(params: {
 
 function nodeDimensions(item: TopologyItem): { width: number; height: number } {
   switch (item.kind) {
-    case "session":
-      return item.cluster.isCaptain ? { width: 256, height: 144 } : { width: 232, height: 118 };
+    case "session": {
+      if (item.cluster.isCaptain) return { width: 264, height: 118 };
+      const taskTone = item.planTask ? planTaskStatusMeta(item.planTask.rawStatus).tone : null;
+      const hasAlertOrDuty =
+        Boolean(item.cluster.workflowDuty) ||
+        Boolean(
+          (taskTone === "blocked" || taskTone === "failed") &&
+            (item.planTask?.error || item.planTask?.summary),
+        );
+      return hasAlertOrDuty ? { width: 240, height: 122 } : { width: 240, height: 106 };
+    }
     case "plan":
-      return { width: 248, height: 100 };
+      return { width: 256, height: 80 };
     case "plan-awaiting":
-      return { width: 224, height: 76 };
+      return { width: 228, height: 72 };
     case "plan-task":
-      return { width: 214, height: 86 };
+      return { width: 234, height: 92 };
     case "subagent-role":
-      return { width: 210, height: 92 };
+      return { width: 220, height: 92 };
     case "subagent-empty":
-      return { width: 210, height: 74 };
+      return { width: 210, height: 72 };
     case "subagent-run":
-      return { width: 210, height: 78 };
+      return { width: 216, height: 80 };
   }
 }
 

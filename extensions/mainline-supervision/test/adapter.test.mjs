@@ -36,7 +36,16 @@ function harness(t, options = {}) {
   });
   if (options.prepare) options.prepare(cwd);
   const Store = options.Store ?? MockStore;
-  createMainlineAdapter(pi, { Store, env: options.env ?? {}, autoApprove: options.autoApprove, readResearchAccessModeContext: options.readResearchAccessModeContext });
+  createMainlineAdapter(pi, {
+    Store,
+    env: options.env ?? {},
+    autoApprove: options.autoApprove,
+    readResearchAccessModeContext: options.readResearchAccessModeContext,
+    ...(options.resourceWaitTimeoutMs !== undefined ? { resourceWaitTimeoutMs: options.resourceWaitTimeoutMs } : {}),
+    ...(options.resourceWaitPollMs !== undefined ? { resourceWaitPollMs: options.resourceWaitPollMs } : {}),
+    ...(options.sleep ? { sleep: options.sleep } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
   const fire = (name, event = {}) => hooks.get(name)?.(event, ctx);
   if (!options.skipSessionStart) fire('session_start');
   const act = p => tool.execute('call', p, null, null, ctx);
@@ -322,4 +331,77 @@ test('DISK native unadopted workspace receives live mode guidance with dormant s
   updateResearchAccessMode({ cwd, storeDir, ownerKey, mode: 'default', expectedRevision: choice.revision, requestId: 'dormant-guidance-default' });
   assert.match(h.fire('before_agent_start', { prompt: 'Continue' }).systemPrompt, /Pi access mode: default/);
   assert.equal(h.get().enabled, false);
+});
+
+test('MOCK resource gate waits and automatically resumes once memory recovers instead of failing immediately', async t => {
+  let clock = 1_000;
+  let checks = 0;
+  let lowActive = false;
+  const original = MockStore.prototype.resourceGate;
+  MockStore.prototype.resourceGate = () => {
+    if (!lowActive) return { ok: true, memAvailableMiB: 2048 };
+    checks += 1;
+    return checks <= 3 ? { ok: false, memAvailableMiB: 512, reason: 'MemAvailable below 1024 MiB' } : { ok: true, memAvailableMiB: 2048 };
+  };
+  try {
+    const h = harness(t, {
+      readResearchAccessModeContext: () => ({ profile: { mode: 'full-access', cwd: '/', revision: 'saved-choice' } }),
+      resourceWaitTimeoutMs: 30_000,
+      resourceWaitPollMs: 1_000,
+      now: () => clock,
+      sleep: async ms => { clock += ms; },
+    });
+    await h.configure();
+    await flush();
+    lowActive = true;
+    const verdict = await h.fire('tool_call', {
+      toolName: 'bash',
+      toolCallId: 'wait-mem-1',
+      input: { command: "node -e 'console.log(1)'", timeout: 30 },
+    });
+    assert.equal(verdict, undefined, 'tool call succeeds automatically after memory recovers');
+    assert.ok(checks >= 4);
+    assert.ok(clock > 1_000, 'waited for memory recovery');
+    assert.ok(h.statuses.some(s => s.text.includes('等待内存恢复')));
+  } finally {
+    MockStore.prototype.resourceGate = original;
+  }
+});
+
+test('MOCK subagent tools are never blocked by limited state, low memory, branch restrictions, or failed supervision init', async t => {
+  const original = MockStore.prototype.resourceGate;
+  MockStore.prototype.resourceGate = () => ({ ok: false, memAvailableMiB: 256 });
+  try {
+    const h = harness(t, { hasUI: false });
+    await h.configure();
+    await flush();
+    const s = h.get();
+    s.pendingChanges = true;
+    s.branchRestrictions = [{ id: 'active-branch', active: true, coreRevision: s.coreRevision, paths: ['plan.md'] }];
+    new MockStore(h.cwd).save(s);
+    for (const toolName of ['subagent', 'Agent', 'SubagentWorkflow', 'subagent_supervisor', 'subagents_enable']) {
+      assert.equal(await h.fire('tool_call', {
+        toolName,
+        toolCallId: `unrestricted-${toolName}`,
+        input: { agent: 'scout', task: 'inspect plan.md' },
+      }), undefined, `${toolName} must not be blocked under limited/low-memory/branch-restricted state`);
+    }
+    const originalCwd = h.ctx.cwd;
+    const file = path.join(originalCwd, 'not-a-directory-subagent');
+    fs.writeFileSync(file, 'fixture');
+    h.ctx.cwd = file;
+    try {
+      for (const toolName of ['subagent', 'Agent', 'SubagentWorkflow']) {
+        assert.equal(await h.fire('tool_call', {
+          toolName,
+          toolCallId: `uninit-${toolName}`,
+          input: { agent: 'scout', task: 'inspect' },
+        }), undefined, `${toolName} must not be blocked when store fails to initialize`);
+      }
+    } finally {
+      h.ctx.cwd = originalCwd;
+    }
+  } finally {
+    MockStore.prototype.resourceGate = original;
+  }
 });
